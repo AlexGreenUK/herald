@@ -6,6 +6,7 @@ import dev.hermeskotlin.android.push.PushStore
 import dev.hermeskotlin.core.push.PushKeys
 import dev.hermeskotlin.core.push.PushSetup
 import dev.hermeskotlin.core.voice.VoiceKeepAlive
+import dev.hermeskotlin.core.wear.WatchRelay
 import org.koin.android.ext.koin.androidApplication
 import org.koin.android.ext.koin.androidContext
 import org.koin.dsl.bind
@@ -15,7 +16,7 @@ val notifyModule = module {
     single { AppVisibility(androidApplication()) }
     single { ChatNotifications(androidContext()) }
     single { VoiceCallKeeper(androidContext()) } bind VoiceKeepAlive::class
-    single { ChatNotifier(androidContext(), get(), get(), get(), get(), get(), get()) }
+    single { ChatNotifier(androidContext(), get(), get(), get(), get(), get(), get(), get<WatchRelay>().busy) }
     single { WatchNotifier(get(), get(), get(), get(), get(), get(), get(), get()) }
     single { BotNotifier(androidContext(), get(), get(), get(), get(), get(), get(), get(), get()) }
     single { RoomNotifier(get(), get(), get(), get(), get(), get()) }
