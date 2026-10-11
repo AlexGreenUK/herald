@@ -80,6 +80,9 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
+import dev.hermeskotlin.core.settings.SettingsStore
+import org.koin.compose.koinInject
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -261,6 +264,8 @@ fun SessionsSidebar(
     val statuses by viewModel.statuses.collectAsStateWithLifecycle()
     val attentionFilter by viewModel.attentionFilter.collectAsStateWithLifecycle()
     val drafts by viewModel.draftChats.collectAsStateWithLifecycle()
+    val settingsStore = koinInject<SettingsStore>()
+    val pinnedCollapsed = settingsStore.settings.collectAsStateWithLifecycle().value?.pinnedCollapsed ?: false
     var profilesOpen by remember { mutableStateOf(false) }
 
     var searchOpen by remember { mutableStateOf(false) }
@@ -506,6 +511,8 @@ fun SessionsSidebar(
                         statuses = statuses,
                         drafts = drafts,
                         sectioned = true,
+                        pinnedCollapsed = pinnedCollapsed,
+                        onTogglePinned = { settingsStore.update { it.copy(pinnedCollapsed = !it.pinnedCollapsed) } },
                         status = {
                             if (!state.loading && state.error == null && (state.projects.isNotEmpty() || state.canMakeProjects)) {
                                 item(key = "projects") {
@@ -688,6 +695,8 @@ internal fun SessionsSidebarSample(
     /** The gateway can make projects, so New project shows. */
     canMakeProjects: Boolean = false,
 ) {
+    // Folds for real in the gallery, kept only while the preview shows.
+    var pinnedCollapsed by remember { mutableStateOf(false) }
     Box(
         Modifier
             .fillMaxSize()
@@ -705,6 +714,8 @@ internal fun SessionsSidebarSample(
                     statuses = statuses,
                     drafts = drafts,
                     sectioned = true,
+                    pinnedCollapsed = pinnedCollapsed,
+                    onTogglePinned = { pinnedCollapsed = !pinnedCollapsed },
                     status = {
                         if (projects.isNotEmpty() || canMakeProjects) {
                             item(key = "projects") {
@@ -1174,6 +1185,10 @@ private fun SessionList(
     drafts: Set<String> = emptySet(),
     /** Pinned chats under a "PINNED" label, then [status] and the rest. */
     sectioned: Boolean = false,
+    /** The Pinned section is folded to the chats [visiblePinned] keeps. */
+    pinnedCollapsed: Boolean = false,
+    /** Folds or unfolds the Pinned section; null, its label is plain text. */
+    onTogglePinned: (() -> Unit)? = null,
     /** Filters and the loading, error or empty notices, shown above the unpinned chats. */
     status: LazyListScope.() -> Unit = {},
     header: LazyListScope.() -> Unit = {},
@@ -1210,8 +1225,10 @@ private fun SessionList(
         }
         if (sectioned) {
             if (pinned.isNotEmpty()) {
-                item(key = "label-pinned") { ListLabel("Pinned") }
-                items(pinned, key = { it.id }) { row(it) }
+                item(key = "label-pinned") {
+                    if (onTogglePinned != null) PinnedLabel(pinned.size, pinnedCollapsed, onTogglePinned) else ListLabel("Pinned")
+                }
+                items(visiblePinned(pinned, pinnedCollapsed, selectedId, statuses, drafts), key = { it.id }) { row(it) }
             }
             // The filter chips head the rest, with no label of their own.
             status()
@@ -1234,6 +1251,57 @@ private fun ListLabel(text: String) {
         modifier = Modifier.padding(start = 10.dp, top = 12.dp, bottom = 6.dp).semantics { heading() },
     )
 }
+
+/**
+ * The "PINNED · n" label as a toggle: a chevron points down while the section is open and right while
+ * it is folded.
+ */
+@Composable
+private fun PinnedLabel(count: Int, collapsed: Boolean, onToggle: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = MinTouchTarget)
+            .clip(RoundedCornerShape(Theme[radii][radiusSmall]))
+            .clickable(onClickLabel = if (collapsed) "Show pinned chats" else "Hide pinned chats", role = Role.Button, onClick = onToggle)
+            .semantics(mergeDescendants = true) {
+                heading()
+                stateDescription = if (collapsed) "Collapsed" else "Expanded"
+            }
+            .padding(start = 10.dp, end = 10.dp, top = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "PINNED · $count",
+            style = Theme[typography][eyebrow],
+            color = Theme[colors][textTertiary],
+            maxLines = 1,
+            modifier = Modifier.weight(1f),
+        )
+        UnstyledIcon(
+            Lucide.ChevronDown,
+            contentDescription = null,
+            tint = Theme[colors][textTertiary],
+            modifier = Modifier.size(14.dp).rotate(if (collapsed) -90f else 0f),
+        )
+    }
+}
+
+/**
+ * The [pinned] chats the Pinned section lists: all of them while it is open; folded, only the open chat
+ * and those with something going on (waiting on the user, running, an unread reply, a draft), so folding
+ * never hides what needs a look.
+ */
+internal fun visiblePinned(
+    pinned: List<SessionSummary>,
+    collapsed: Boolean,
+    selectedId: String?,
+    statuses: Map<String, RowStatus>,
+    drafts: Set<String>,
+): List<SessionSummary> =
+    if (!collapsed) pinned
+    else pinned.filter { it.id == selectedId || rowTone(statuses[it.id], it.id in drafts) != RowTone.Idle }
 
 /** What a row's disc shows, the most pressing first: waiting on the user, running, an unread reply, a draft. */
 internal enum class RowTone { Approval, Question, Running, Reply, Draft, Idle }

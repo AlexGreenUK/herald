@@ -88,6 +88,20 @@ class SettingsStoreTest {
     }
 
     @Test
+    fun pinnedStaysOpenUntilFoldedAndRemembersIt() = runTest {
+        val disk = InMemoryKeyValueStore()
+        // Settings saved before the option existed show every pinned chat.
+        disk.put("settings.v1", """{"theme":"Dark"}""")
+        val first = SettingsStore(disk, backgroundScope)
+        assertEquals(false, first.settings.filterNotNull().first().pinnedCollapsed)
+
+        first.update { it.copy(pinnedCollapsed = true) }
+        advanceUntilIdle()
+
+        assertEquals(true, SettingsStore(disk, backgroundScope).settings.filterNotNull().first().pinnedCollapsed)
+    }
+
+    @Test
     fun unreadableStoredSettingsFallBackToDefaults() = runTest {
         val disk = InMemoryKeyValueStore().apply { put("settings.v1", """{"theme":"Neon"}""") }
         assertEquals(AppSettings(), SettingsStore(disk, backgroundScope).settings.filterNotNull().first())
