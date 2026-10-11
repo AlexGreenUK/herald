@@ -107,6 +107,7 @@ import com.composables.icons.lucide.Copy
 import com.composables.icons.lucide.Download
 import com.composables.icons.lucide.Gauge
 import com.composables.icons.lucide.History
+import com.composables.icons.lucide.Target
 import com.composables.icons.lucide.LogOut
 import com.composables.icons.lucide.Ellipsis
 import com.composables.icons.lucide.FolderPlus
@@ -1551,6 +1552,8 @@ internal fun SessionActionsSheet(
     onUsage: ((SessionSummary) -> Unit)? = null,
     onProcesses: ((SessionSummary) -> Unit)? = null,
     onCheckpoints: ((SessionSummary) -> Unit)? = null,
+    /** The chat's goal and loops sheet; null when the chat has no goal, loop or heartbeat. */
+    onControl: ((SessionSummary) -> Unit)? = null,
     /** A bot's chat: archive it and begin an empty one. */
     onStartFresh: ((SessionSummary) -> Unit)? = null,
 ) {
@@ -1572,6 +1575,7 @@ internal fun SessionActionsSheet(
         onUsage?.let { SheetAction("Usage and cost", Lucide.Gauge, act(it)) }
         onProcesses?.let { SheetAction("Background processes", Lucide.SquareTerminal, act(it)) }
         onCheckpoints?.let { SheetAction("Checkpoints", Lucide.History, act(it)) }
+        onControl?.let { SheetAction("Goal and loops", Lucide.Target, act(it)) }
         onExport?.let { SheetAction("Export as Markdown", Lucide.Download, act(it)) }
         onCopyId?.let { SheetAction("Copy session ID", Lucide.Copy, act(it)) }
         onToggleArchived?.let {
