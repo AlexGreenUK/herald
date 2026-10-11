@@ -109,6 +109,8 @@ data class AppSettings(
     val starredModels: List<String> = emptyList(),
     /** Models last picked in the model picker (`provider/id`), newest first. */
     val recentModels: List<String> = emptyList(),
+    /** The sidebar's Pinned section is folded: only pinned chats that are open or have something going on show. */
+    val pinnedCollapsed: Boolean = false,
 )
 
 /**
