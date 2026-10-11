@@ -694,6 +694,8 @@ internal fun SessionsSidebarSample(
     /** The gateway can make projects, so New project shows. */
     canMakeProjects: Boolean = false,
 ) {
+    // Folds for real in the gallery, kept only while the preview shows.
+    var pinnedCollapsed by remember { mutableStateOf(false) }
     Box(
         Modifier
             .fillMaxSize()
@@ -711,7 +713,8 @@ internal fun SessionsSidebarSample(
                     statuses = statuses,
                     drafts = drafts,
                     sectioned = true,
-                    onTogglePinned = {},
+                    pinnedCollapsed = pinnedCollapsed,
+                    onTogglePinned = { pinnedCollapsed = !pinnedCollapsed },
                     status = {
                         if (projects.isNotEmpty() || canMakeProjects) {
                             item(key = "projects") {
