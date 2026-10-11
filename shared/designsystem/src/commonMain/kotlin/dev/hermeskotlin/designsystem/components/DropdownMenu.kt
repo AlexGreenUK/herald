@@ -7,10 +7,13 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -68,6 +71,8 @@ fun DropdownMenu(
             DropdownMenuPanel(
                 Modifier
                     .widthIn(min = 200.dp, max = 280.dp)
+                    // As wide as the widest row, so every row can fill it and take a tap anywhere across.
+                    .width(IntrinsicSize.Max)
                     .shadow(16.dp, shape, ambientColor = Color.Black.copy(alpha = 0.10f), spotColor = Color.Black.copy(alpha = 0.20f))
                     .clip(shape)
                     .background(Theme[colors][surfaceElevated])
@@ -86,7 +91,8 @@ fun DropdownMenu(
 fun DropdownMenuPanelScope.MenuAction(text: String, icon: ImageVector, onClick: () -> Unit) {
     MenuItem(
         onClick = onClick,
-        modifier = Modifier.heightIn(min = 48.dp),
+        // The panel lays rows out at their own width; filling it makes the whole row the target, not just the words.
+        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
         indication = rememberColoredIndication(Theme[colors][textColor]),
     ) {
         Row(
