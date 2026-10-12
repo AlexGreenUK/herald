@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import androidx.core.net.toUri
 import dev.hermeskotlin.core.phone.PhoneToolException
 import dev.hermeskotlin.core.phone.checkLink
 import dev.hermeskotlin.core.phone.forQuestion
@@ -42,7 +43,7 @@ internal class OpenTool(private val context: Context, private val confirmations:
         val link = checkLink(value)
         // The browser only: an app that claims the link (a bank, a shop) would open it signed in, which isn't what was asked.
         val browser = browser() ?: throw PhoneToolException("The phone has no browser.")
-        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(link.url)).addCategory(Intent.CATEGORY_BROWSABLE).setPackage(browser)
+        val intent = Intent(Intent.ACTION_VIEW, link.url.toUri()).addCategory(Intent.CATEGORY_BROWSABLE).setPackage(browser)
         val secure = if (link.secure) "" else " (not secure)"
         start(intent, "Open a link on ${link.site}$secure: ${shorten(link.url)}", "The phone has no browser.")
         return done("url", "The user allowed it and the link went to the browser.") { put("site", link.host) }
@@ -51,7 +52,7 @@ internal class OpenTool(private val context: Context, private val confirmations:
     /** The user's browser: what opens a link no app claims, else the first browser there is. */
     private fun browser(): String? {
         val manager = context.packageManager
-        val probe = Intent(Intent.ACTION_VIEW, Uri.parse(PROBE)).addCategory(Intent.CATEGORY_BROWSABLE)
+        val probe = Intent(Intent.ACTION_VIEW, PROBE.toUri()).addCategory(Intent.CATEGORY_BROWSABLE)
         val browsers = manager.queryIntentActivities(probe, PackageManager.MATCH_DEFAULT_ONLY).map { it.activityInfo.packageName }
         // With no default, this is Android's own "Open with" list, which isn't a browser.
         val chosen = manager.resolveActivity(probe, PackageManager.MATCH_DEFAULT_ONLY)?.activityInfo?.packageName
@@ -67,9 +68,9 @@ internal class OpenTool(private val context: Context, private val confirmations:
         if (place.codePointCount(0, place.length) > QUESTION) throw PhoneToolException("A place is at most $QUESTION characters.")
         val query = Uri.encode(place)
         // Directions need Google Maps' own link; other maps apps get the place, where they offer directions.
-        val directions = Intent(Intent.ACTION_VIEW, Uri.parse("google.navigation:q=$query"))
+        val directions = Intent(Intent.ACTION_VIEW, "google.navigation:q=$query".toUri())
         val navigating = navigate && directions.resolveActivity(context.packageManager) != null
-        val intent = if (navigating) directions else Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=$query"))
+        val intent = if (navigating) directions else Intent(Intent.ACTION_VIEW, "geo:0,0?q=$query".toUri())
         val what = if (navigating) "Start directions in the maps app to: ${forQuestion(place)}" else "Show in the maps app: ${forQuestion(place)}"
         start(intent, what, "The phone has no maps app.")
         return done("map", "The user allowed it and the place went to the maps app.") {
