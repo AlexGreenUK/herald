@@ -272,5 +272,6 @@ uses. The protocol itself is described in [hermes-protocol-research.md](hermes-p
 - [ ] Send prompts typed offline once the gateway is back (an outbox)
 - [ ] iOS app
 - [ ] Desktop (JVM) app
-- [ ] Wear OS companion
+- [x] Wear OS companion (`wearApp`, `shared/wearlink`): talk to Hermes from the watch through Herald on the phone (Data Layer relay, its own side chat); the watch's speech recognizer, or a recording the gateway transcribes; live progress, the reply and the chat's title; the gateway's voice played on the watch, the watch's own voice when there is none; pick, start or continue a chat; an "Ask Hermes" tile and complication
+- [ ] Wear OS direct mode: the watch talks to the gateway itself, without the phone
 - [ ] Localization (`i18n.catalog`)
