@@ -294,12 +294,6 @@ private fun TalkScreen(
 @Composable
 private fun CallScreen(call: WatchCallState, mood: OrbMood, onMute: () -> Unit, onEnd: () -> Unit) {
     val context = LocalContext.current
-    val now by produceState(SystemClock.elapsedRealtime(), call.liveSince) {
-        while (call.liveSince != null) {
-            value = SystemClock.elapsedRealtime()
-            delay(500)
-        }
-    }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val w = maxWidth
         val h = maxHeight
@@ -309,7 +303,7 @@ private fun CallScreen(call: WatchCallState, mood: OrbMood, onMute: () -> Unit, 
             style = geist(20, FontWeight.SemiBold),
             textAlign = TextAlign.Center,
             maxLines = 1,
-            modifier = Modifier.align(Alignment.TopCenter).offset(y = h * 0.25f - 14.dp),
+            modifier = Modifier.align(Alignment.TopCenter).offset(y = h * 0.21f - 14.dp),
         )
         CallButton(
             icon = if (call.muted) R.drawable.ic_mic_off else R.drawable.ic_mic,
@@ -324,7 +318,7 @@ private fun CallScreen(call: WatchCallState, mood: OrbMood, onMute: () -> Unit, 
             mood = mood,
             level = call.level,
             // Where the system shows the caller's picture: a little above the buttons, clear of the time.
-            modifier = Modifier.size(w * 0.26f).align(Alignment.Center).offset(y = -h * 0.08f),
+            modifier = Modifier.size(w * 0.24f).align(Alignment.Center).offset(y = -h * 0.06f),
         )
         CallButton(
             icon = R.drawable.ic_volume,
@@ -335,16 +329,15 @@ private fun CallScreen(call: WatchCallState, mood: OrbMood, onMute: () -> Unit, 
             onClick = { showCallVolume(context) },
             modifier = Modifier.size(side).align(Alignment.Center).offset(x = w * 0.354f),
         )
-        // The time on the call, unless there's more to say: muted, Hermes at work, connecting.
-        val timer = call.liveSince?.takeIf { call.stage == CallStage.Live && !call.muted && !call.thinking }?.let { callTimer(now - it) }
-        Text(
-            timer ?: callCaption(call),
-            style = geist(14, FontWeight.Medium, color = if (timer != null) Connected else Muted),
-            textAlign = TextAlign.Center,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.align(Alignment.TopCenter).widthIn(max = w * 0.6f).offset(y = h * 0.594f - 10.dp),
-        )
+        // The time on the call, unless there's more to say: muted, Hermes at work, connecting. Between the
+        // buttons, so a long line is cut short rather than running over them.
+        val since = call.liveSince?.takeIf { call.stage == CallStage.Live && !call.muted && !call.thinking }
+        val status = Modifier.align(Alignment.TopCenter).widthIn(max = w * 0.44f).offset(y = h * 0.61f - 10.dp)
+        if (since != null) {
+            CallTimer(since, status)
+        } else {
+            Text(callCaption(call), style = geist(14, FontWeight.Medium, color = Muted), textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = status)
+        }
         EdgeButton(
             onClick = onEnd,
             // The system's height: a larger one covers the buttons beside the orb.
@@ -355,6 +348,18 @@ private fun CallScreen(call: WatchCallState, mood: OrbMood, onMute: () -> Unit, 
             Icon(painterResource(R.drawable.ic_call_end), contentDescription = "End call", tint = OnEndCall)
         }
     }
+}
+
+/** The time on the call, counting: only this redraws each second, and only while it shows. */
+@Composable
+private fun CallTimer(since: Long, modifier: Modifier) {
+    val now by produceState(SystemClock.elapsedRealtime(), since) {
+        while (true) {
+            value = SystemClock.elapsedRealtime()
+            delay(1000 - (value - since) % 1000)
+        }
+    }
+    Text(callTimer(now - since), style = geist(14, FontWeight.Medium, color = Connected), textAlign = TextAlign.Center, maxLines = 1, modifier = modifier)
 }
 
 /** The system's own call volume, shown for the call's stream. */
@@ -402,7 +407,7 @@ internal fun callMood(call: WatchCallState): OrbMood = when (call.stage) {
 
 /** What a call is doing, under the orb. */
 internal fun callCaption(call: WatchCallState): String = when (call.stage) {
-    CallStage.Starting -> "Starting the call…"
+    CallStage.Starting -> "Starting…"
     CallStage.Connecting -> "Connecting…"
     CallStage.Live -> when {
         call.muted -> "Muted"
