@@ -264,7 +264,7 @@ Agent tools that run on the phone: a gateway plugin registers them, Herald answe
 - [x] Changes ask on the phone first; the page asks for what a tool needs (notifications, Do Not Disturb access) when it's switched on
 - [x] Set alarms and timers (in the phone's clock app, after Allow; the user sees and cancels them there)
 - [x] App screen time (Usage Access): per app, screen-on time and unlocks, today or up to a week by day
-- [ ] Open URLs, maps, apps or the share sheet
+- [x] Open URLs, maps, apps or the share sheet (after Allow; a link's real site is shown first, lookalike and hidden-character links refused)
 - [ ] Write to the clipboard
 - [ ] Location and geofences ("when I get home…")
 - [ ] Calendar (read, add, move events)
