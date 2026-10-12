@@ -50,6 +50,9 @@ import kotlin.test.assertTrue
 
 private const val URL = "https://a.example"
 
+/** The gateway's clock in these tests, epoch seconds: nowhere near the test's own (virtual) time. */
+private const val GATEWAY_NOW = 1_800_000_000L
+
 class PhoneToolsBridgeTest {
 
     /** A push identity, registered with [pinnedTo] when set. */
@@ -82,13 +85,16 @@ class PhoneToolsBridgeTest {
         /** How many `phone tools` reports to fail before taking one. */
         var failReports = 0
 
-        fun call(id: String, tool: String, args: JsonObject = JsonObject(emptyMap())) {
+        /** The gateway's clock, epoch seconds, told with `pending`; null as a plugin before 0.3.3, which doesn't say it. */
+        var now: Long? = GATEWAY_NOW
+
+        fun call(id: String, tool: String, args: JsonObject = JsonObject(emptyMap()), expires: Long = GATEWAY_NOW + 120) {
             waiting += buildJsonObject {
                 put("id", id)
                 put("tool", tool)
                 put("args", args)
                 put("session", "chat-1")
-                put("expires", 9_999_999_999L)
+                put("expires", expires)
             }
         }
 
@@ -185,6 +191,7 @@ class PhoneToolsBridgeTest {
                         "pending" -> buildJsonObject {
                             put("ok", true)
                             put("requests", JsonArray(waiting.filter { it["id"]!!.jsonPrimitive.content !in answers }))
+                            now?.let { put("now", it) }
                         }
                         else -> {
                             answers[body["id"]!!.jsonPrimitive.content] = body
@@ -204,8 +211,10 @@ class PhoneToolsBridgeTest {
     /** Answers each tool with its own name, except what [block] holds until cancelled. */
     private class Runner(val block: Set<PhoneTool> = emptySet()) : PhoneToolRunner {
         val cancelled = CompletableDeferred<PhoneTool>()
+        val runs = mutableListOf<PhoneTool>()
 
         override suspend fun run(tool: PhoneTool, args: JsonObject, session: String): JsonElement {
+            runs += tool
             if (tool in block) {
                 try {
                     awaitCancellation()
@@ -296,6 +305,69 @@ class PhoneToolsBridgeTest {
         delay(PhoneToolsBridge.POLL_MS * 2)
         assertTrue(plugin.answers.isEmpty())
         assertTrue(plugin.reports.isEmpty())
+    }
+
+    @Test
+    fun aCallStopsBeforeTheGatewaysDeadline() = runTest {
+        // A question still waiting when the gateway gives up must be gone: an Allow then would change the phone unheard.
+        val runner = Runner(block = setOf(PhoneTool.Battery))
+        val s = setup(runner, on = listOf(PhoneTool.Battery))
+        val plugin = Plugin()
+        plugin.call("a".repeat(32), PhoneTool.Battery.id, expires = GATEWAY_NOW + 30)
+        connect(s, plugin)
+        withTimeout(60_000) { runner.cancelled.await() }
+        // The whole 30 s less the margin, from when the phone saw it: not cut short, not let run past it.
+        val limit = 30_000 - PhoneToolsBridge.DEADLINE_MARGIN_MS
+        assertTrue(currentTime in limit..limit + PhoneToolsBridge.POLL_MS * 2, "stopped at $currentTime ms")
+        until { plugin.answers.isNotEmpty() }
+        assertEquals(PhoneToolsBridge.TOO_LONG, plugin.error("a".repeat(32)))
+    }
+
+    @Test
+    fun aCallPastItsDeadlineDoesNothing() = runTest {
+        // Seen too late (the phone was asleep): no question is shown, nothing changes.
+        val runner = Runner()
+        val s = setup(runner, on = listOf(PhoneTool.Battery))
+        val plugin = Plugin()
+        plugin.call("a".repeat(32), PhoneTool.Battery.id, expires = GATEWAY_NOW + 5)
+        connect(s, plugin)
+        until { plugin.answers.isNotEmpty() }
+        assertEquals(PhoneToolsBridge.TOO_LONG, plugin.error("a".repeat(32)))
+        assertTrue(runner.runs.isEmpty())
+    }
+
+    @Test
+    fun theDeadlineIsOnTheGatewaysClockNotThePhones() = runTest {
+        // The phone's clock (test time, near 1970) is far behind the gateway's: the call still gets its time.
+        val runner = Runner(block = setOf(PhoneTool.Battery))
+        val s = setup(runner, on = listOf(PhoneTool.Battery))
+        val plugin = Plugin()
+        plugin.call("a".repeat(32), PhoneTool.Battery.id, expires = GATEWAY_NOW + 120)
+        connect(s, plugin)
+        withTimeout(200_000) { runner.cancelled.await() }
+        assertTrue(currentTime >= 120_000 - PhoneToolsBridge.DEADLINE_MARGIN_MS, "stopped at $currentTime ms")
+    }
+
+    @Test
+    fun anOlderPluginThatDoesntSayItsTimeGetsThePlainLimit() = runTest {
+        val runner = Runner()
+        val s = setup(runner, on = listOf(PhoneTool.Battery))
+        val plugin = Plugin().apply { now = null }
+        // Long past by the phone's clock too; without the gateway's time it isn't compared.
+        plugin.call("a".repeat(32), PhoneTool.Battery.id, expires = 5)
+        connect(s, plugin)
+        until { plugin.answers.isNotEmpty() }
+        assertEquals(null, plugin.error("a".repeat(32)))
+    }
+
+    @Test
+    fun aToolThisVersionLacksIsSaidSo() = runTest {
+        val s = setup(Runner(), on = listOf(PhoneTool.Battery))
+        val plugin = Plugin()
+        plugin.call("a".repeat(32), "phone_teleport")
+        connect(s, plugin)
+        until { plugin.answers.isNotEmpty() }
+        assertEquals(PhoneToolsBridge.UNKNOWN_TOOL, plugin.error("a".repeat(32)))
     }
 
     @Test
