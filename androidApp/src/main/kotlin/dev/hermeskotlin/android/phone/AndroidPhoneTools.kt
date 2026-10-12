@@ -25,6 +25,7 @@ class AndroidPhoneTools(private val context: Context, confirmations: PhoneConfir
     private val alarms = AlarmTool(context, confirmations)
     private val screenTime = ScreenTimeTool(context)
     private val open = OpenTool(context, confirmations)
+    private val clipboard = ClipboardTool(confirmations)
 
     override suspend fun run(tool: PhoneTool, args: JsonObject, session: String): JsonElement = withContext(Dispatchers.IO) {
         when (tool) {
@@ -34,6 +35,7 @@ class AndroidPhoneTools(private val context: Context, confirmations: PhoneConfir
             PhoneTool.Alarms -> alarms.run(args)
             PhoneTool.ScreenTime -> screenTime.run(args)
             PhoneTool.Open -> open.run(args)
+            PhoneTool.Clipboard -> clipboard.run(args)
         }
     }
 
