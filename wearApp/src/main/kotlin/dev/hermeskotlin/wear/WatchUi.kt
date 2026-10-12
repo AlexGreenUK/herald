@@ -1,5 +1,8 @@
 package dev.hermeskotlin.wear
 
+import android.content.Context
+import android.media.AudioManager
+import android.os.SystemClock
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -8,6 +11,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -21,6 +26,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -29,6 +35,7 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -50,6 +57,8 @@ import androidx.wear.compose.material3.Button
 import androidx.wear.compose.material3.ButtonDefaults
 import androidx.wear.compose.material3.CircularProgressIndicator
 import androidx.wear.compose.material3.ColorScheme
+import androidx.wear.compose.material3.EdgeButton
+import androidx.wear.compose.material3.EdgeButtonSize
 import androidx.wear.compose.material3.FilledIconButton
 import androidx.wear.compose.material3.Icon
 import androidx.wear.compose.material3.IconButtonDefaults
@@ -65,6 +74,7 @@ import androidx.wear.compose.navigation.composable
 import androidx.wear.compose.navigation.rememberSwipeDismissableNavController
 import dev.hermeskotlin.wearlink.ReplyPhase
 import dev.hermeskotlin.wearlink.WatchChat
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
 
 /** Herald's typeface, as on the phone. */
@@ -221,9 +231,6 @@ private fun TalkScreen(
     }
     val onOrb = {
         when {
-            // In a call the orb mutes too; while it connects, it hangs up.
-            inCall && call.stage == CallStage.Live -> link.toggleMute()
-            inCall -> link.endCall()
             mic.recording -> onFinishRecording()
             running || speaking -> link.stop()
             else -> onMic()
@@ -233,31 +240,23 @@ private fun TalkScreen(
     // Each new ask starts at the top, where the orb shows it working.
     LaunchedEffect(current?.askId) { if (current != null) listState.scrollToItem(0) }
 
+    if (inCall) {
+        ScreenScaffold(modifier = Modifier.halo(mood)) {
+            CallScreen(call, mood, onMute = link::toggleMute, onEnd = link::endCall)
+        }
+        return
+    }
+
     val content: @Composable (PaddingValues) -> Unit = { contentPadding ->
         TransformingLazyColumn(state = listState, contentPadding = contentPadding, modifier = Modifier.fillMaxSize()) {
             item {
-                // Smaller once there's more to show: a turn, or a call with its End button.
+                // Smaller once there's more to show: a turn, or how a call ended.
                 val big = mic.recording || (call == null && current == null)
                 val orbSize by animateFloatAsState(if (big) 84f else 68f, tween(350), label = "orb")
-                // In a call, as on a phone: mute on the left, hang up on the right, the orb between them.
-                Row(
-                    Modifier.fillMaxWidth().padding(top = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    if (inCall) {
-                        CallButton(
-                            icon = if (call.muted) R.drawable.ic_mic_off else R.drawable.ic_mic,
-                            label = if (call.muted) "Unmute" else "Mute",
-                            color = if (call.muted) Text1 else Surface2,
-                            tint = if (call.muted) Color.Black else Color.White,
-                            enabled = call.stage == CallStage.Live,
-                            onClick = link::toggleMute,
-                        )
-                    }
+                Box(Modifier.fillMaxWidth().padding(top = 4.dp), contentAlignment = Alignment.Center) {
                     HeraldOrb(
                         mood = mood,
-                        level = call?.level ?: mic.level,
+                        level = mic.level,
                         context = chat.contextPercent?.let { it / 100f },
                         modifier = Modifier
                             .size(orbSize.dp)
@@ -265,25 +264,19 @@ private fun TalkScreen(
                             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, role = Role.Button, onClick = onOrb)
                             .semantics {
                                 contentDescription = when {
-                                    inCall && call.stage == CallStage.Live -> if (call.muted) "Unmute" else "Mute"
-                                    inCall -> "Hang up"
                                     mic.recording -> "Done talking"
                                     running || speaking -> "Stop"
                                     else -> "Talk to Hermes"
                                 } + chat.contextPercent?.let { ", context $it% full" }.orEmpty()
                             },
                     )
-                    if (inCall) CallButton(R.drawable.ic_call_end, "End call", Danger, Color.White, enabled = true, onClick = link::endCall)
                 }
             }
             item { ChatTitle(chat.title ?: if (chat.id == null) "New chat" else "Chat", onChats) }
             item { Caption(if (call != null) callCaption(call) else caption(mood, current, mic, phone), mood) }
             val micError = mic.error
             if (micError != null) item { Notice(micError, onClick = onDismissListeningError) }
-            if (call != null) {
-                // The latest words of the call: yours quoted, the voice's as the reply.
-                call.caption?.let { words -> item { if (call.captionIsVoice) Reply(words) else Said(words) } }
-            } else if (current != null && !mic.recording) {
+            if (call == null && current != null && !mic.recording) {
                 current.said?.let { said -> item { Said(said) } }
                 val update = current.update
                 if (update.text.isNotBlank()) item { Reply(update.text) }
@@ -293,16 +286,105 @@ private fun TalkScreen(
     ScreenScaffold(scrollState = listState, modifier = Modifier.halo(mood)) { contentPadding -> content(contentPadding) }
 }
 
+/**
+ * A call, laid out as the watch's own call screen: who's on the line at the top, mute and the volume either
+ * side of the orb, the time or what's happening under them, and hang up along the bottom edge. No captions:
+ * the voice is heard, and the words land in the chat. Placed by fractions of the screen, as the system's is.
+ */
+@Composable
+private fun CallScreen(call: WatchCallState, mood: OrbMood, onMute: () -> Unit, onEnd: () -> Unit) {
+    val context = LocalContext.current
+    val now by produceState(SystemClock.elapsedRealtime(), call.liveSince) {
+        while (call.liveSince != null) {
+            value = SystemClock.elapsedRealtime()
+            delay(500)
+        }
+    }
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val w = maxWidth
+        val h = maxHeight
+        val side = w * 0.27f
+        Text(
+            "Hermes",
+            style = geist(20, FontWeight.SemiBold),
+            textAlign = TextAlign.Center,
+            maxLines = 1,
+            modifier = Modifier.align(Alignment.TopCenter).offset(y = h * 0.25f - 14.dp),
+        )
+        CallButton(
+            icon = if (call.muted) R.drawable.ic_mic_off else R.drawable.ic_mic,
+            label = if (call.muted) "Unmute" else "Mute",
+            color = if (call.muted) Text1 else Surface2,
+            tint = if (call.muted) Color.Black else Text1,
+            enabled = call.stage == CallStage.Live,
+            onClick = onMute,
+            modifier = Modifier.size(side).align(Alignment.Center).offset(x = -w * 0.354f),
+        )
+        HeraldOrb(
+            mood = mood,
+            level = call.level,
+            // Where the system shows the caller's picture: a little above the buttons, clear of the time.
+            modifier = Modifier.size(w * 0.26f).align(Alignment.Center).offset(y = -h * 0.08f),
+        )
+        CallButton(
+            icon = R.drawable.ic_volume,
+            label = "Volume",
+            color = Surface2,
+            tint = Text1,
+            enabled = true,
+            onClick = { showCallVolume(context) },
+            modifier = Modifier.size(side).align(Alignment.Center).offset(x = w * 0.354f),
+        )
+        // The time on the call, unless there's more to say: muted, Hermes at work, connecting.
+        val timer = call.liveSince?.takeIf { call.stage == CallStage.Live && !call.muted && !call.thinking }?.let { callTimer(now - it) }
+        Text(
+            timer ?: callCaption(call),
+            style = geist(14, FontWeight.Medium, color = if (timer != null) Connected else Muted),
+            textAlign = TextAlign.Center,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.align(Alignment.TopCenter).widthIn(max = w * 0.6f).offset(y = h * 0.594f - 10.dp),
+        )
+        EdgeButton(
+            onClick = onEnd,
+            // The system's height: a larger one covers the buttons beside the orb.
+            buttonSize = EdgeButtonSize.Small,
+            colors = ButtonDefaults.buttonColors(containerColor = EndCall, contentColor = OnEndCall),
+            modifier = Modifier.align(Alignment.BottomCenter),
+        ) {
+            Icon(painterResource(R.drawable.ic_call_end), contentDescription = "End call", tint = OnEndCall)
+        }
+    }
+}
+
+/** The system's own call volume, shown for the call's stream. */
+private fun showCallVolume(context: Context) {
+    context.getSystemService(AudioManager::class.java)
+        ?.adjustStreamVolume(AudioManager.STREAM_VOICE_CALL, AudioManager.ADJUST_SAME, AudioManager.FLAG_SHOW_UI)
+}
+
+/** How long a call has been on, as a call screen shows it: 04:07, or 1:02:03 past an hour. */
+internal fun callTimer(ms: Long): String {
+    val s = (ms / 1000).coerceAtLeast(0)
+    fun two(n: Long) = n.toString().padStart(2, '0')
+    val clock = two(s % 3600 / 60) + ":" + two(s % 60)
+    return if (s >= 3600) "${s / 3600}:$clock" else clock
+}
+
+/** Hang up's colours on the watch's own call screen. */
+private val EndCall = Color(0xFFF2B8B5)
+private val OnEndCall = Color(0xFF601410)
+
 /** A round button beside the orb in a call. */
 @Composable
-private fun CallButton(icon: Int, label: String, color: Color, tint: Color, enabled: Boolean, onClick: () -> Unit) {
+private fun CallButton(icon: Int, label: String, color: Color, tint: Color, enabled: Boolean, onClick: () -> Unit, modifier: Modifier) {
     FilledIconButton(
         onClick = onClick,
         enabled = enabled,
-        modifier = Modifier.size(40.dp),
+        modifier = modifier,
         colors = IconButtonDefaults.filledIconButtonColors(containerColor = color, contentColor = tint),
     ) {
-        Icon(painterResource(icon), contentDescription = label, modifier = Modifier.size(20.dp), tint = tint)
+        Icon(painterResource(icon), contentDescription = label, modifier = Modifier.size(24.dp), tint = tint)
     }
 }
 

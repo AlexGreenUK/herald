@@ -61,6 +61,14 @@ class WatchTextTest {
     }
 
     @Test
+    fun theTimeOnACallReadsAsOnACallScreen() {
+        assertEquals("00:00", callTimer(0))
+        assertEquals("00:03", callTimer(3_400))
+        assertEquals("04:07", callTimer(247_000))
+        assertEquals("1:02:03", callTimer(3_723_000))
+    }
+
+    @Test
     fun aLongModelNameIsCutToFitBesideTheClock() {
         assertEquals("GPT-5", shortModel("GPT-5"))
         assertEquals("Claude Sonn…", shortModel("Claude Sonnet 4.5 Thinking"))

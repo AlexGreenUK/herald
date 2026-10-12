@@ -1,6 +1,7 @@
 package dev.hermeskotlin.wear
 
 import android.content.Context
+import android.os.SystemClock
 import androidx.wear.tiles.TileService
 import com.google.android.gms.wearable.CapabilityClient
 import com.google.android.gms.wearable.Wearable
@@ -74,6 +75,8 @@ data class WatchCallState(
     val muted: Boolean = false,
     val speaking: Boolean = false,
     val level: Float = 0f,
+    /** When it went live, on [android.os.SystemClock.elapsedRealtime], for the time on the call. */
+    val liveSince: Long? = null,
 ) {
     val active: Boolean get() = stage != CallStage.Ended
 }
@@ -328,6 +331,7 @@ class WatchLink(
             if (it?.id != now.id || !it.active) it
             else it.copy(
                 stage = if (update.phase == CallPhase.Live) CallStage.Live else it.stage,
+                liveSince = it.liveSince ?: SystemClock.elapsedRealtime().takeIf { update.phase == CallPhase.Live },
                 caption = update.caption ?: it.caption,
                 captionIsVoice = if (update.caption != null) update.captionIsVoice else it.captionIsVoice,
                 thinking = update.thinking,
