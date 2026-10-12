@@ -77,29 +77,31 @@ class AndroidPhoneTools(private val context: Context) : PhoneToolRunner {
                 put("connection", "offline")
                 return@buildJsonObject
             }
-            // Through a VPN the active network often names only the VPN: the link under it says Wi-Fi or mobile.
-            @Suppress("DEPRECATION") // allNetworks: the one way to see the link under a VPN without a callback.
-            val link = if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
-                manager.allNetworks.mapNotNull(manager::getNetworkCapabilities).firstOrNull {
+            // A VPN usually carries the transport of the link under it (VPN|WIFI). When it names only itself, the
+            // link is the one Android would pick: Wi-Fi before ethernet before mobile, a working one first.
+            val link = transportOf(caps) ?: run {
+                @Suppress("DEPRECATION") // allNetworks: the one way to see the link under a VPN without a callback.
+                val links = manager.allNetworks.mapNotNull(manager::getNetworkCapabilities).filter {
                     !it.hasTransport(NetworkCapabilities.TRANSPORT_VPN) && it.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-                } ?: caps
-            } else {
-                caps
+                }
+                links.sortedByDescending { it.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) }
+                    .firstNotNullOfOrNull(::transportOf)
             }
-            put(
-                "connection",
-                when {
-                    link.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
-                    link.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "mobile"
-                    link.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ethernet"
-                    link.hasTransport(NetworkCapabilities.TRANSPORT_BLUETOOTH) -> "bluetooth"
-                    else -> "other"
-                },
-            )
+            put("connection", link ?: "other")
             put("internet", caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED))
             put("metered", !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED))
             put("vpn", caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN))
             put("data_saver", manager.restrictBackgroundStatus == ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED)
         }
+    }
+
+    /** The physical link [caps] runs over, in the order Android prefers them; null for a VPN that hides it. */
+    private fun transportOf(caps: NetworkCapabilities): String? = when {
+        caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
+        caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ethernet"
+        caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "mobile"
+        caps.hasTransport(NetworkCapabilities.TRANSPORT_BLUETOOTH) -> "bluetooth"
+        caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) -> null
+        else -> "other"
     }
 }
