@@ -27,7 +27,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.composables.icons.lucide.BatteryMedium
 import com.composables.icons.lucide.ChevronRight
 import com.composables.icons.lucide.Lucide
+import com.composables.icons.lucide.ShieldCheck
 import com.composables.icons.lucide.Smartphone
+import com.composables.icons.lucide.Volume2
 import com.composables.icons.lucide.Wifi
 import com.composables.icons.lucide.Wrench
 import com.composeunstyled.Text
@@ -60,6 +62,7 @@ fun PhoneToolsScreen(onBack: () -> Unit, viewModel: PhoneToolsViewModel = koinVi
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val status by viewModel.status.collectAsStateWithLifecycle()
     val recent by viewModel.recent.collectAsStateWithLifecycle()
+    val access = rememberPhoneToolAccess()
     PlatformBackHandler(enabled = true, onBack = onBack)
     PhoneToolsView(
         settings = settings,
@@ -67,8 +70,14 @@ fun PhoneToolsScreen(onBack: () -> Unit, viewModel: PhoneToolsViewModel = koinVi
         recent = recent,
         onBack = onBack,
         onAll = viewModel::setAll,
-        onTool = viewModel::setTool,
+        onTool = { tool, on ->
+            viewModel.setTool(tool, on)
+            // Turning on a tool that can't work yet asks for what it needs straight away.
+            if (on && access.missing(tool) != null) access.request(tool)
+        },
         onSetUp = viewModel::setUp,
+        missing = access::missing,
+        onAllow = access::request,
     )
 }
 
@@ -82,6 +91,8 @@ internal fun PhoneToolsView(
     onAll: (Boolean) -> Unit,
     onTool: (PhoneTool, Boolean) -> Unit,
     onSetUp: () -> Unit,
+    missing: (PhoneTool) -> String? = { null },
+    onAllow: (PhoneTool) -> Unit = {},
     nowMillis: Long = Clock.System.now().toEpochMilliseconds(),
 ) {
     Box(
@@ -100,8 +111,8 @@ internal fun PhoneToolsView(
             ) {
                 Text(
                     "Let the agent use this phone: read how it is, or do something on it. Every tool is off until you " +
-                        "turn it on, and anything that changes the phone asks you here first. A tool you turn off is " +
-                        "taken away from new chats and refused in open ones at once.",
+                        "turn it on, and anything that changes the phone asks you first, in a notification. A tool you " +
+                        "turn off is taken away from the agent at once.",
                     style = Theme[typography][bodySmall],
                     color = Theme[colors][textTertiary],
                     modifier = Modifier.padding(horizontal = 6.dp),
@@ -123,13 +134,20 @@ internal fun PhoneToolsView(
                     Section("Tools") {
                         PhoneTool.entries.forEachIndexed { i, tool ->
                             if (i > 0) Divider()
+                            val on = tool.id in settings.phoneToolsOn
+                            // Only once it's on: a tool that's off needs nothing, and asking early would nag.
+                            val needs = if (on) missing(tool) else null
                             SwitchRow(
                                 title = tool.title,
-                                detail = tool.detail,
-                                checked = tool.id in settings.phoneToolsOn,
-                                onCheckedChange = { on -> onTool(tool, on) },
+                                detail = needs ?: tool.detail,
+                                checked = on,
+                                onCheckedChange = { onTool(tool, it) },
                                 icon = tool.icon,
                             )
+                            if (needs != null) {
+                                Divider()
+                                ActionRow("Allow on this phone", Lucide.ShieldCheck) { onAllow(tool) }
+                            }
                         }
                     }
                 }
@@ -203,4 +221,5 @@ internal val PhoneTool.icon: ImageVector
     get() = when (this) {
         PhoneTool.Battery -> Lucide.BatteryMedium
         PhoneTool.Network -> Lucide.Wifi
+        PhoneTool.Sound -> Lucide.Volume2
     }
