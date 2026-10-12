@@ -23,13 +23,15 @@ class AndroidPhoneTools(private val context: Context, confirmations: PhoneConfir
 
     private val sound = SoundTool(context, confirmations)
     private val alarms = AlarmTool(context, confirmations)
+    private val screenTime = ScreenTimeTool(context)
 
-    override suspend fun run(tool: PhoneTool, args: JsonObject, session: String): JsonElement = withContext(Dispatchers.Default) {
+    override suspend fun run(tool: PhoneTool, args: JsonObject, session: String): JsonElement = withContext(Dispatchers.IO) {
         when (tool) {
             PhoneTool.Battery -> battery()
             PhoneTool.Network -> network()
             PhoneTool.Sound -> sound.run(args)
             PhoneTool.Alarms -> alarms.run(args)
+            PhoneTool.ScreenTime -> screenTime.run(args)
         }
     }
 
