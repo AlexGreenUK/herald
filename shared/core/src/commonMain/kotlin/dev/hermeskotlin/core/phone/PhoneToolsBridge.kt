@@ -329,13 +329,26 @@ class PhoneToolsBridge(
 
     private suspend fun handle(request: PhoneRequest) {
         val tool = PhoneTool.byId(request.tool)
-        val (result, error) = if (tool == null || tool !in settings.settings.value?.enabledPhoneTools().orEmpty()) {
+        // Up to the gateway's own deadline, less a margin: the phone may look late (a poll, Doze), and an Allow
+        // the agent would never hear of must not change the phone. Measured on the gateway's clock, so a phone
+        // clock that's off doesn't matter; an older plugin doesn't say its time, and gets the plain limit.
+        val limit = if (request.expires > 0 && request.gatewayNow > 0) {
+            ((request.expires - request.gatewayNow) * 1_000 - DEADLINE_MARGIN_MS).coerceAtMost(RUN_LIMIT_MS)
+        } else {
+            RUN_LIMIT_MS
+        }
+        val (result, error) = if (tool == null) {
+            null to UNKNOWN_TOOL
+        } else if (tool !in settings.settings.value?.enabledPhoneTools().orEmpty()) {
             null to SWITCHED_OFF
+        } else if (limit <= 0) {
+            // Too late to ask or do anything the agent would still hear of: nothing runs.
+            null to TOO_LONG
         } else {
             try {
-                withTimeout(RUN_LIMIT_MS) { runner.run(tool, request.args, request.session) } to null
+                withTimeout(limit) { runner.run(tool, request.args, request.session) } to null
             } catch (e: TimeoutCancellationException) {
-                null to "The phone took too long."
+                null to TOO_LONG
             } catch (e: CancellationException) {
                 // Switched off meanwhile: refuseSwitchedOff answers it.
                 throw e
@@ -427,8 +440,13 @@ class PhoneToolsBridge(
 
         /** A change waits for the user; the gateway gives up after two minutes. */
         const val RUN_LIMIT_MS = 125_000L
+
+        /** Stopped this long before the gateway's deadline, for the answer to get there. */
+        const val DEADLINE_MARGIN_MS = 8_000L
         const val MAX_RECENT = 20
+        const val TOO_LONG = "The phone took too long."
         const val SWITCHED_OFF = "The user turned this tool off on the phone."
+        const val UNKNOWN_TOOL = "This version of Herald doesn't have that tool; the user can update Herald."
         private val WAITS_FOR_USER = setOf(State.NotInstalled, State.Outdated)
         private const val MAX_ANSWERED = 200
         private const val ID_BYTES = 16
