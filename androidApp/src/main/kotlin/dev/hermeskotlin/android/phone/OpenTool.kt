@@ -3,6 +3,7 @@ package dev.hermeskotlin.android.phone
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import dev.hermeskotlin.core.phone.PhoneToolException
 import dev.hermeskotlin.core.phone.checkLink
@@ -39,19 +40,37 @@ internal class OpenTool(private val context: Context, private val confirmations:
 
     private suspend fun url(value: String): JsonObject {
         val link = checkLink(value)
-        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(link.url)).addCategory(Intent.CATEGORY_BROWSABLE)
+        // The browser only: an app that claims the link (a bank, a shop) would open it signed in, which isn't what was asked.
+        val browser = browser() ?: throw PhoneToolException("The phone has no browser.")
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(link.url)).addCategory(Intent.CATEGORY_BROWSABLE).setPackage(browser)
         val secure = if (link.secure) "" else " (not secure)"
         start(intent, "Open a link on ${link.site}$secure: ${shorten(link.url)}", "The phone has no browser.")
         return done("url", "The user allowed it and the link went to the browser.") { put("site", link.host) }
     }
 
+    /** The user's browser: what opens a link no app claims, else the first browser there is. */
+    private fun browser(): String? {
+        val manager = context.packageManager
+        val probe = Intent(Intent.ACTION_VIEW, Uri.parse(PROBE)).addCategory(Intent.CATEGORY_BROWSABLE)
+        val browsers = manager.queryIntentActivities(probe, PackageManager.MATCH_DEFAULT_ONLY).map { it.activityInfo.packageName }
+        // With no default, this is Android's own "Open with" list, which isn't a browser.
+        val chosen = manager.resolveActivity(probe, PackageManager.MATCH_DEFAULT_ONLY)?.activityInfo?.packageName
+        if (chosen != null && chosen in browsers) return chosen
+        // Else one that calls itself a browser: any app may take every link, and it shouldn't get them unasked.
+        val real = manager.queryIntentActivities(Intent.makeMainSelectorActivity(Intent.ACTION_MAIN, Intent.CATEGORY_APP_BROWSER), 0)
+            .map { it.activityInfo.packageName }
+        return browsers.firstOrNull { it in real }
+    }
+
     private suspend fun map(place: String, navigate: Boolean): JsonObject {
+        // All of it in the question: what the maps app searches is what the user reads.
+        if (place.codePointCount(0, place.length) > QUESTION) throw PhoneToolException("A place is at most $QUESTION characters.")
         val query = Uri.encode(place)
         // Directions need Google Maps' own link; other maps apps get the place, where they offer directions.
         val directions = Intent(Intent.ACTION_VIEW, Uri.parse("google.navigation:q=$query"))
         val navigating = navigate && directions.resolveActivity(context.packageManager) != null
         val intent = if (navigating) directions else Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=$query"))
-        val what = if (navigating) "Start directions to “${shorten(place)}”." else "Show “${shorten(place)}” in the maps app."
+        val what = if (navigating) "Start directions in the maps app to: ${forQuestion(place)}" else "Show in the maps app: ${forQuestion(place)}"
         start(intent, what, "The phone has no maps app.")
         return done("map", "The user allowed it and the place went to the maps app.") {
             put("place", place)
@@ -72,9 +91,11 @@ internal class OpenTool(private val context: Context, private val confirmations:
         // Never other apps' names back: the agent mustn't learn what's installed by guessing.
         val (label, component) = matches.singleOrNull()
             ?: throw PhoneToolException("No one app on the phone goes by that name. Give the name exactly as under its icon.")
+        // An app names itself: one with hidden characters in its name could make the question read otherwise.
+        if (hidden(label, newlines = false)) throw PhoneToolException("That app's name has hidden characters in it, so it isn't opened.")
         val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER).setComponent(component)
             .addFlags(Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
-        start(intent, "Open $label.", "$label can't be opened.")
+        start(intent, "Open the app: $label", "$label can't be opened.")
         return done("app", "The user allowed it and $label was opened.") { put("app", label) }
     }
 
@@ -83,7 +104,7 @@ internal class OpenTool(private val context: Context, private val confirmations:
         if (text.codePointCount(0, text.length) > QUESTION) throw PhoneToolException("Text to share is at most $QUESTION characters.")
         val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text)
         if (send.resolveActivity(context.packageManager) == null) throw PhoneToolException("Nothing on the phone can share text.")
-        start(Intent.createChooser(send, null), "Share this text: “${forQuestion(text)}”", "Nothing on the phone can share text.")
+        start(Intent.createChooser(send, null), "Share this text: ${forQuestion(text)}", "Nothing on the phone can share text.")
         return done("share", "The user allowed it and the share sheet opened; they pick where it goes, or close it.") {}
     }
 
@@ -108,6 +129,9 @@ internal class OpenTool(private val context: Context, private val confirmations:
 
     private companion object {
         const val MAX_VALUE = 2000
+
+        /** A link no app claims (example.com is kept for examples), to find the browser by. */
+        const val PROBE = "https://example.com/"
         const val QUESTION = 300
         const val TITLE = "The agent wants to open something on your phone"
     }
