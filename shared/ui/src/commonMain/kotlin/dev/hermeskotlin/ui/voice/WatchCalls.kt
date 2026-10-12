@@ -8,7 +8,6 @@ import dev.hermeskotlin.core.wear.WatchOutbox
 import dev.hermeskotlin.core.wear.WatchRelay
 import dev.hermeskotlin.core.wear.contextPercentOf
 import dev.hermeskotlin.core.wear.modelOf
-import dev.hermeskotlin.wearlink.CALL_GAP_MS
 import dev.hermeskotlin.wearlink.CallEnd
 import dev.hermeskotlin.wearlink.CallEvents
 import dev.hermeskotlin.wearlink.CallPhase
@@ -235,12 +234,7 @@ class WatchCalls(
             heardAt = TimeSource.Monotonic.markNow()
             if (batch.events.isNotEmpty()) heard = true
             order.add(batch.seq, batch)
-            if (order.waiting && gap?.isActive != true) {
-                gap = scope.launch {
-                    delay(CALL_GAP_MS)
-                    order.skipGap()
-                }
-            }
+            if (order.waiting && gap?.isActive != true) gap = scope.launch { order.skipGaps() }
         }
 
         fun hungUp() {
