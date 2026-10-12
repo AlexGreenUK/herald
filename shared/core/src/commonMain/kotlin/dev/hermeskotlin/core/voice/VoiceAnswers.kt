@@ -60,6 +60,22 @@ object VoiceAnswers {
     }
 
     /**
+     * Whether [transcript], said once [request] was asked, is its answer as it stands, to take without the voice
+     * handing it over: a clear approval, or anything said to a question but a question back or a hedge ("which one is
+     * faster", "hmm, wait"). The rest is left to the voice, which talks it through and hands the answer over.
+     */
+    fun takesAsAnswer(request: InputRequest, transcript: String): Boolean {
+        val words = words(transcript)
+        if (words.isEmpty()) return false
+        return when (request) {
+            is InputRequest.Approval -> approval(request, transcript) != null
+            is InputRequest.Clarify -> request.questions.size == 1 && '?' !in transcript &&
+                words.first() !in QUESTION_STARTS && words.first() !in ASKS_BACK && words.none { it in HOLD_ON }
+            else -> false
+        }
+    }
+
+    /**
      * The answer to [question] said in [transcript]: the choices picked by their number or their words, or
      * what was said as it is when it names none of them. Empty when nothing was said.
      */
@@ -110,6 +126,12 @@ object VoiceAnswers {
     /** Doubt or a question: asked again rather than taken as an answer. */
     private val HEDGES = setOf("but", "if", "what", "why", "how", "which", "when", "where", "who", "wait", "maybe", "unless", "first", "hold")
     private val QUESTION_STARTS = setOf("is", "can", "could", "would", "will", "should", "does", "are", "did", "shall", "may")
+
+    /** First words that ask back rather than answer. */
+    private val ASKS_BACK = setOf("what", "why", "how", "which", "when", "where", "who", "sorry", "pardon", "repeat", "huh", "tell", "explain")
+
+    /** Words that put the answer off. */
+    private val HOLD_ON = setOf("wait", "hold", "hmm", "um", "uh", "erm", "moment")
     private val ALWAYS_WORDS =setOf("always", "permanently", "forever")
     private val SESSION_WORDS = setOf("chat", "session")
     /** Words that grant it, once unless they say how far. */

@@ -128,4 +128,22 @@ class VoiceAnswersTest {
         val keep = ClarifyQuestion(null, "What now?", listOf("Delete it", "Keep it"))
         assertEquals(listOf("keep it, don't delete it"), VoiceAnswers.clarify(keep, "keep it, don't delete it"))
     }
+
+    @Test
+    fun whatsTakenAsTheAnswerWithoutTheVoiceHandingItOver() {
+        val color = InputRequest.Clarify("srq-2", listOf(ClarifyQuestion(null, "Which color?", listOf("Red", "Blue"))))
+        // Anything that answers, a choice or not.
+        listOf("Green", "Blue please", "the second one", "I think red").forEach { assertTrue(VoiceAnswers.takesAsAnswer(color, it), it) }
+        // A question back or a hedge is the voice's to talk through.
+        listOf("Which one is brighter", "what are the options", "is red darker", "hmm, wait", "sorry?", "", "  ")
+            .forEach { assertFalse(VoiceAnswers.takesAsAnswer(color, it), it) }
+        // Several questions are never asked aloud.
+        val two = color.copy(questions = color.questions + ClarifyQuestion(null, "Why?"))
+        assertFalse(VoiceAnswers.takesAsAnswer(two, "Green"))
+        // An approval only when it's clear.
+        assertTrue(VoiceAnswers.takesAsAnswer(onceOnly, "yes"))
+        assertTrue(VoiceAnswers.takesAsAnswer(onceOnly, "no, don't"))
+        assertFalse(VoiceAnswers.takesAsAnswer(onceOnly, "okay, let me think"))
+        assertFalse(VoiceAnswers.takesAsAnswer(onceOnly, "what does it delete"))
+    }
 }

@@ -66,6 +66,8 @@ internal class LiveConversation(
     private var userPieces = 0
     /** The request an answer is going out for: another handover meanwhile isn't a second answer. */
     private var answering: String? = null
+    /** Taking what the person said as the answer, the voice not having handed it over (yet). */
+    private var taking: Job? = null
     /**
      * Where the person's last answer ended in the call (0 when its pieces had no times), while they haven't said
      * anything new since: a handover then is that answer again, not a new request.
@@ -147,7 +149,16 @@ internal class LiveConversation(
                             delay(UTTERANCE_SETTLE_MS)
                             val said = utterance.toString()
                             utterance = StringBuilder()
-                            if (isVoiceStopCommand(said)) ended.complete(null)
+                            if (isVoiceStopCommand(said)) {
+                                ended.complete(null)
+                                return@launch
+                            }
+                            // The voice may well talk on instead of handing the answer over: a clear one is taken
+                            // as it is.
+                            val asked = asking ?: return@launch
+                            if (taking?.isActive != true && answering != asked.id && VoiceAnswers.takesAsAnswer(asked, lastWords())) {
+                                taking = this@coroutineScope.launch { answerAsked(null, asked) }
+                            }
                         }
                     }
                     is LiveEvent.Delegation -> {
@@ -156,7 +167,11 @@ internal class LiveConversation(
                         when {
                             ask.prompt.isNotEmpty() && isVoiceStopCommand(ask.prompt) -> ended.complete(null)
                             // The answer to what Hermes asked, not a new request: the turn waiting on it goes on.
-                            asked != null -> launch { answerAsked(event.id, asked) }
+                            // Once one taken meanwhile is through, it's that one.
+                            asked != null -> launch {
+                                taking?.join()
+                                answerAsked(event.id, asked)
+                            }
                             // Nothing said since the answer, yet: the same answer handed over again, unless new words
                             // come in late.
                             answeredUpTo != null -> launch {
@@ -208,6 +223,7 @@ internal class LiveConversation(
             asker.cancel()
             poll.cancel()
             reader.cancel()
+            taking?.cancel()
             delegation?.cancel()
             call.send(LiveCommands.close())
             call.close()
@@ -281,7 +297,7 @@ internal class LiveConversation(
      * Feeds the voice the replies to the prompt [askedKey] as they stream, until its turn ends. [alreadySaid] is
      * what of each reply was there before, not to be said again.
      */
-    private suspend fun relayTurn(id: String, askedKey: String?, alreadySaid: List<String> = emptyList()) {
+    private suspend fun relayTurn(id: String?, askedKey: String?, alreadySaid: List<String> = emptyList()) {
         fun asked(chat: ChatState) = chat.messages.indexOfFirst { it.key == askedKey }.takeIf { it >= 0 }
             ?: chat.messages.indexOfLast { it is ChatMessage.User }
         // The markdown spoken so far of each reply of the turn, in order. A reply reloaded from history that
@@ -359,10 +375,14 @@ internal class LiveConversation(
      * person's own words: never the voice's paraphrase, which may restate an earlier request as if it were the
      * answer. Their words may still be on the way when the voice hands over; with none, or none that are clear, it's
      * asked again. Never a new request either: one handed over twice, or after the answer came from the screen,
-     * would stop the turn that just got its answer.
+     * would stop the turn that just got its answer. With no [id] the voice didn't hand anything over: what the person
+     * said is taken as it is ([VoiceAnswers.takesAsAnswer]), and nothing is said when it's already in.
      */
-    private suspend fun answerAsked(id: String, request: InputRequest) {
-        if (!waiting(request) || answering == request.id) return send(LiveCommands.commentary(nextId("say"), id, ALREADY_ANSWERED))
+    private suspend fun answerAsked(id: String?, request: InputRequest) {
+        fun alreadyAnswered() {
+            if (id != null) send(LiveCommands.commentary(nextId("say"), id, ALREADY_ANSWERED))
+        }
+        if (!waiting(request) || answering == request.id) return alreadyAnswered()
         withTimeoutOrNull(WORDS_WAIT_MS) { while (lastWords().isBlank()) delay(POLL_MS) }
         // Not a word before they stop: "yes… but not on prod" isn't a yes.
         withTimeoutOrNull(MAX_ANSWER_MS) {
@@ -371,9 +391,7 @@ internal class LiveConversation(
                 delay(UTTERANCE_SETTLE_MS)
             } while (userPieces != pieces)
         }
-        if (asking?.id != request.id || !waiting(request) || answering == request.id) {
-            return send(LiveCommands.commentary(nextId("say"), id, ALREADY_ANSWERED))
-        }
+        if (asking?.id != request.id || !waiting(request) || answering == request.id) return alreadyAnswered()
         if (request is InputRequest.Approval && lock.locked()) {
             return send(LiveCommands.commentary(nextId("say"), id, "The phone locked. Ask the user to unlock it, then to say it again."))
         }
@@ -435,7 +453,7 @@ internal class LiveConversation(
     private fun speakAside(content: String) = send(LiveCommands.commentary(nextId("say"), delegationId, content))
 
     /** Hands [markdown] to the voice as it should sound; false when none of it is speakable. */
-    private fun speak(delegationId: String, markdown: String): Boolean {
+    private fun speak(delegationId: String?, markdown: String): Boolean {
         val chunks = commentaryChunks(speakableText(markdown))
         for (chunk in chunks) send(LiveCommands.commentary(nextId("say"), delegationId, chunk))
         return chunks.isNotEmpty()
