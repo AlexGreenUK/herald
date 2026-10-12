@@ -20,6 +20,13 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.em
 import com.composables.icons.lucide.ChevronDown
+import com.composables.icons.lucide.ChevronUp
+import com.composables.icons.lucide.Folder
+import com.composables.icons.lucide.Folders
+import com.composables.icons.lucide.House
+import com.composeunstyled.AnchorAlignment
+import dev.hermeskotlin.designsystem.components.DropdownMenu
+import dev.hermeskotlin.designsystem.components.MenuChoice
 import com.composables.icons.lucide.MessageCircle
 import com.composables.icons.lucide.MessageCircleQuestion
 import com.composables.icons.lucide.MessageSquare
@@ -267,6 +274,7 @@ fun SessionsSidebar(
     val drafts by viewModel.draftChats.collectAsStateWithLifecycle()
     val settingsStore = koinInject<SettingsStore>()
     val pinnedCollapsed = settingsStore.settings.collectAsStateWithLifecycle().value?.pinnedCollapsed ?: false
+    val projectsAsDropdown = settingsStore.settings.collectAsStateWithLifecycle().value?.projectsAsDropdown ?: false
     var profilesOpen by remember { mutableStateOf(false) }
 
     var searchOpen by remember { mutableStateOf(false) }
@@ -524,12 +532,27 @@ fun SessionsSidebar(
                         sectioned = true,
                         pinnedCollapsed = pinnedCollapsed,
                         onTogglePinned = { settingsStore.update { it.copy(pinnedCollapsed = !it.pinnedCollapsed) } },
-                        status = {
-                            if (!state.loading && state.error == null && (state.projects.isNotEmpty() || state.canMakeProjects)) {
+                        top = {
+                            if (projectsAsDropdown && !state.loading && state.error == null && (state.projects.isNotEmpty() || state.canMakeProjects)) {
                                 item(key = "projects") {
                                     ProjectFilters(
                                         state.projects,
                                         state.project,
+                                        asDropdown = true,
+                                        onSelect = viewModel::selectProject,
+                                        onNew = if (state.canMakeProjects) ({ newProject = ProjectDraft() }) else null,
+                                        onOptions = { projectActions = it },
+                                    )
+                                }
+                            }
+                        },
+                        status = {
+                            if (!projectsAsDropdown && !state.loading && state.error == null && (state.projects.isNotEmpty() || state.canMakeProjects)) {
+                                item(key = "projects") {
+                                    ProjectFilters(
+                                        state.projects,
+                                        state.project,
+                                        asDropdown = false,
                                         onSelect = viewModel::selectProject,
                                         onNew = if (state.canMakeProjects) ({ newProject = ProjectDraft() }) else null,
                                         onOptions = { projectActions = it },
@@ -706,6 +729,8 @@ internal fun SessionsSidebarSample(
     selectedProject: Project? = null,
     /** The gateway can make projects, so New project shows. */
     canMakeProjects: Boolean = false,
+    /** The projects as one button that opens a list, not chips. */
+    projectsAsDropdown: Boolean = false,
 ) {
     // Folds for real in the gallery, kept only while the preview shows.
     var pinnedCollapsed by remember { mutableStateOf(false) }
@@ -728,10 +753,17 @@ internal fun SessionsSidebarSample(
                     sectioned = true,
                     pinnedCollapsed = pinnedCollapsed,
                     onTogglePinned = { pinnedCollapsed = !pinnedCollapsed },
-                    status = {
-                        if (projects.isNotEmpty() || canMakeProjects) {
+                    top = {
+                        if (projectsAsDropdown && (projects.isNotEmpty() || canMakeProjects)) {
                             item(key = "projects") {
-                                ProjectFilters(projects, selected = selectedProject, onSelect = {}, onNew = if (canMakeProjects) ({}) else null)
+                                ProjectFilters(projects, selected = selectedProject, asDropdown = true, onSelect = {}, onNew = if (canMakeProjects) ({}) else null)
+                            }
+                        }
+                    },
+                    status = {
+                        if (!projectsAsDropdown && (projects.isNotEmpty() || canMakeProjects)) {
+                            item(key = "projects") {
+                                ProjectFilters(projects, selected = selectedProject, asDropdown = false, onSelect = {}, onNew = if (canMakeProjects) ({}) else null)
                             }
                         }
                         item(key = "filters") {
@@ -1201,6 +1233,8 @@ private fun SessionList(
     pinnedCollapsed: Boolean = false,
     /** Folds or unfolds the Pinned section; null, its label is plain text. */
     onTogglePinned: (() -> Unit)? = null,
+    /** Shown above the Pinned section, below [header]; the projects button when it is a dropdown. */
+    top: LazyListScope.() -> Unit = {},
     /** Filters and the loading, error or empty notices, shown above the unpinned chats. */
     status: LazyListScope.() -> Unit = {},
     header: LazyListScope.() -> Unit = {},
@@ -1222,6 +1256,7 @@ private fun SessionList(
         contentPadding = PaddingValues(start = 8.dp, end = 8.dp, bottom = 96.dp),
     ) {
         header()
+        if (sectioned) top()
         // Pinned chats stay on top, marked with a pin.
         val (pinned, rest) = sessions.partition { it.pinned }
         val row: @Composable (SessionSummary) -> Unit = { session ->
@@ -1484,12 +1519,27 @@ private fun AttentionFilters(selected: AttentionFilter, running: Int, needsAtten
     }
 }
 
+/** The projects as [ProjectDropdown] when the "Projects as a list" setting is on, else as [ProjectChips]. */
+@Composable
+private fun ProjectFilters(
+    projects: List<Project>,
+    selected: Project?,
+    asDropdown: Boolean,
+    onSelect: (Project?) -> Unit,
+    /** Null when the gateway can't make projects. */
+    onNew: (() -> Unit)? = null,
+    onOptions: (Project) -> Unit = {},
+) {
+    if (asDropdown) ProjectDropdown(projects, selected, onSelect, onNew, onOptions)
+    else ProjectChips(projects, selected, onSelect, onNew, onOptions)
+}
+
 /**
  * The gateway's projects as chips, as Desktop's sidebar groups chats: "All", then each project with its chat
  * count, Home last. A new chat started under a project runs in its folder.
  */
 @Composable
-private fun ProjectFilters(
+private fun ProjectChips(
     projects: List<Project>,
     selected: Project?,
     onSelect: (Project?) -> Unit,
@@ -1538,6 +1588,105 @@ private fun ProjectFilters(
             IconButton(Lucide.Ellipsis, contentDescription = "${selected.label} options", onClick = { onOptions(selected) })
         }
         if (onNew != null && projects.isNotEmpty()) IconButton(Lucide.FolderPlus, contentDescription = "New project", onClick = onNew)
+    }
+}
+
+/**
+ * The gateway's projects behind one button, as Desktop's sidebar groups chats: the button names the picked
+ * project (or "All projects") and opens a menu of "All projects", then each project with its chat count, Home
+ * last. However many projects there are, they stay in reach and the sidebar stays one row tall. A new chat
+ * started under a project runs in its folder.
+ */
+@Composable
+private fun ProjectDropdown(
+    projects: List<Project>,
+    selected: Project?,
+    onSelect: (Project?) -> Unit,
+    /** Null when the gateway can't make projects. */
+    onNew: (() -> Unit)? = null,
+    onOptions: (Project) -> Unit = {},
+) {
+    Row(Modifier.fillMaxWidth().padding(start = 6.dp, end = 4.dp, top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (projects.isEmpty()) {
+            if (onNew != null) Chip(text = "New project", selected = false, onClick = onNew)
+            return@Row
+        }
+        var open by remember { mutableStateOf(false) }
+        val shape = CircleShape
+        val shown = selected?.label ?: "All projects"
+        // Takes all the room the buttons beside it leave, with the pill hugging the start: a long name gets that
+        // room before it is cut short, and the buttons stay at the end.
+        Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+            DropdownMenu(
+                expanded = open,
+                onExpandedChange = { open = it },
+                alignment = AnchorAlignment.Start,
+                items = {
+                    MenuChoice("All projects", Lucide.Folders, selected = selected == null, onClick = { onSelect(null) })
+                    projects.forEach { project ->
+                        MenuChoice(
+                            project.label,
+                            if (project.isNoProject) Lucide.House else Lucide.Folder,
+                            selected = project.id == selected?.id,
+                            onClick = { onSelect(project) },
+                            count = project.sessionCount,
+                        )
+                    }
+                },
+            ) {
+                val interaction = remember { MutableInteractionSource() }
+                val content = Theme[colors][textSecondary]
+                // A 32dp pill drawn inside a full-height touch target, as a Chip is.
+                Box(
+                    Modifier
+                        .heightIn(min = MinTouchTarget)
+                        .clickable(interaction, indication = null, role = Role.DropdownList, onClickLabel = "Choose a project") { open = !open }
+                        .semantics { stateDescription = shown },
+                    contentAlignment = Alignment.CenterStart,
+                ) {
+                    Row(
+                        Modifier
+                            .heightIn(min = 32.dp)
+                            .clip(shape)
+                            .border(1.dp, Theme[colors][stroke], shape)
+                            .background(Theme[colors][surface2], shape)
+                            .indication(interaction, rememberColoredIndication(content))
+                            .padding(start = 12.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        UnstyledIcon(Lucide.Folder, contentDescription = null, tint = content, modifier = Modifier.size(14.dp))
+                        Text(
+                            shown,
+                            style = Theme[typography][label].copy(fontWeight = FontWeight.Medium),
+                            color = content,
+                            singleLine = true,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                        selected?.let {
+                            Text(
+                                it.sessionCount.toString(),
+                                style = Theme[typography][code].copy(fontSize = 12.sp),
+                                color = Theme[colors][textTertiary],
+                                singleLine = true,
+                            )
+                        }
+                        UnstyledIcon(
+                            if (open) Lucide.ChevronUp else Lucide.ChevronDown,
+                            contentDescription = null,
+                            tint = Theme[colors][textTertiary],
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
+                }
+            }
+        }
+        // The picked project's actions sit beside the button, so they stay in reach.
+        if (selected != null && !selected.isNoProject && (selected.isUserMade || (selected.path != null && onNew != null))) {
+            IconButton(Lucide.Ellipsis, contentDescription = "${selected.label} options", onClick = { onOptions(selected) })
+        }
+        if (onNew != null) IconButton(Lucide.FolderPlus, contentDescription = "New project", onClick = onNew)
     }
 }
 
