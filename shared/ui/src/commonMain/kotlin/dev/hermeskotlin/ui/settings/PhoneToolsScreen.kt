@@ -37,6 +37,7 @@ import com.composables.icons.lucide.ClipboardCopy
 import com.composables.icons.lucide.ExternalLink
 import com.composables.icons.lucide.Hourglass
 import com.composables.icons.lucide.Lucide
+import com.composables.icons.lucide.MapPin
 import com.composables.icons.lucide.ShieldCheck
 import com.composables.icons.lucide.Smartphone
 import com.composables.icons.lucide.Trash2
@@ -102,6 +103,8 @@ fun PhoneToolsScreen(onBack: () -> Unit, viewModel: PhoneToolsViewModel = koinVi
         onUpdatePlugin = viewModel::updatePlugin,
         missing = access::missing,
         onAllow = access::request,
+        optional = access::optional,
+        onAllowOptional = access::requestOptional,
     )
 }
 
@@ -121,6 +124,8 @@ internal fun PhoneToolsView(
     onUpdatePlugin: () -> Unit = {},
     missing: (PhoneTool) -> String? = { null },
     onAllow: (PhoneTool) -> Unit = {},
+    optional: (PhoneTool) -> String? = { null },
+    onAllowOptional: (PhoneTool) -> Unit = {},
     nowMillis: Long = Clock.System.now().toEpochMilliseconds(),
 ) {
     var removing by remember { mutableStateOf<KnownPhone?>(null) }
@@ -197,6 +202,12 @@ internal fun PhoneToolsView(
                             if (needs != null) {
                                 Divider()
                                 ActionRow("Allow on this phone", Lucide.ShieldCheck) { onAllow(tool) }
+                            }
+                            // Offered, never asked: only a tap on this row asks Android for it.
+                            val more = if (on && needs == null) optional(tool) else null
+                            if (more != null) {
+                                Divider()
+                                ActionRow(more, Lucide.ShieldCheck) { onAllowOptional(tool) }
                             }
                         }
                     }
@@ -371,4 +382,5 @@ internal val PhoneTool.icon: ImageVector
         PhoneTool.ScreenTime -> Lucide.Hourglass
         PhoneTool.Open -> Lucide.ExternalLink
         PhoneTool.Clipboard -> Lucide.ClipboardCopy
+        PhoneTool.Location -> Lucide.MapPin
     }
