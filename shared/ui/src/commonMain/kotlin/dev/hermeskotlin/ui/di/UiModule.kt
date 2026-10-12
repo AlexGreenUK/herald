@@ -15,6 +15,9 @@ import dev.hermeskotlin.ui.sessions.SessionsViewModel
 import dev.hermeskotlin.ui.settings.PhoneToolsViewModel
 import dev.hermeskotlin.ui.settings.SettingsViewModel
 import dev.hermeskotlin.ui.signin.SignInViewModel
+import dev.hermeskotlin.core.phone.NoWatchedPlaces
+import dev.hermeskotlin.core.phone.WatchedPlaces
+import org.koin.core.module.dsl.viewModel
 import org.koin.core.module.dsl.viewModelOf
 import org.koin.dsl.module
 
@@ -31,7 +34,8 @@ val uiModule = module {
     viewModelOf(::InsightsViewModel)
     viewModelOf(::ChatViewModel)
     viewModelOf(::SettingsViewModel)
-    viewModelOf(::PhoneToolsViewModel)
+    // Watched places are the platform's; one without them shows none.
+    viewModel { PhoneToolsViewModel(get(), get(), getOrNull<WatchedPlaces>() ?: NoWatchedPlaces) }
 }
 
 /** Every shared module, in dependency order. */

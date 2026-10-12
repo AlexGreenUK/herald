@@ -176,6 +176,11 @@
             android:name=".notify.NotificationActionReceiver"
             android:exported="false" />
 
+        <!-- Android's proximity alert for a place the agent watches (the Watched places phone tool). -->
+        <receiver
+            android:name=".phone.GeofenceReceiver"
+            android:exported="false" />
+
         <service
             android:name=".notify.VoiceCallService"
             android:exported="false"

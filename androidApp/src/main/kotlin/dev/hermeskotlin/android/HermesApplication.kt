@@ -7,6 +7,7 @@ import dev.hermeskotlin.android.notify.ChatNotifier
 import dev.hermeskotlin.android.notify.RoomNotifier
 import dev.hermeskotlin.android.notify.WatchNotifier
 import dev.hermeskotlin.android.notify.notifyModule
+import dev.hermeskotlin.android.phone.Geofences
 import dev.hermeskotlin.android.push.PushListener
 import dev.hermeskotlin.core.phone.PhoneToolsBridge
 import dev.hermeskotlin.core.push.PushSetup
@@ -39,5 +40,7 @@ class HermesApplication : Application() {
         koin.get<PushSetup>().start()
         koin.get<PushListener>().start()
         koin.get<PhoneToolsBridge>().start()
+        // Android forgets proximity alerts on a restart; a restart or an update wakes Herald to arm them again.
+        koin.get<Geofences>().start()
     }
 }

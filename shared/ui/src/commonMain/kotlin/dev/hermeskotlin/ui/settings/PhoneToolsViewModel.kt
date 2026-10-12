@@ -2,7 +2,10 @@ package dev.hermeskotlin.ui.settings
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import dev.hermeskotlin.core.phone.NoWatchedPlaces
 import dev.hermeskotlin.core.phone.PhoneTool
+import dev.hermeskotlin.core.phone.WatchedPlace
+import dev.hermeskotlin.core.phone.WatchedPlaces
 import dev.hermeskotlin.core.phone.PhoneToolUse
 import dev.hermeskotlin.core.phone.PhoneToolsBridge
 import dev.hermeskotlin.core.phone.PhoneToolsStatus
@@ -18,7 +21,15 @@ import kotlinx.coroutines.flow.stateIn
 class PhoneToolsViewModel(
     private val store: SettingsStore,
     private val bridge: PhoneToolsBridge,
+    private val watched: WatchedPlaces = NoWatchedPlaces,
 ) : ViewModel() {
+
+    /** The places the phone watches for the agent. */
+    val places: StateFlow<List<WatchedPlace>> = watched.places
+
+    fun removePlace(id: String) = watched.remove(id)
+
+    fun refreshPlaces() = watched.refresh()
 
     val settings: StateFlow<AppSettings> =
         store.settings.filterNotNull().stateIn(viewModelScope, SharingStarted.Eagerly, store.settings.value ?: AppSettings())

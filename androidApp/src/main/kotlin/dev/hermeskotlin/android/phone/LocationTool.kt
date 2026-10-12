@@ -34,7 +34,26 @@ import kotlin.math.roundToInt
 internal class LocationTool(private val context: Context) {
 
     suspend fun run(args: JsonObject): JsonObject {
-        val fresh = args.boolean("fresh") ?: false
+        val precise = granted(Manifest.permission.ACCESS_FINE_LOCATION)
+        val location = locate(fresh = args.boolean("fresh") ?: false)
+        val address = address(location, approximate = !precise)
+        return buildJsonObject {
+            put("latitude", round(location.latitude))
+            put("longitude", round(location.longitude))
+            if (location.hasAccuracy()) put("accuracy_m", location.accuracy.roundToInt())
+            put("measured_at", Instant.ofEpochMilli(location.time).toString())
+            put("minutes_ago", (ageMillis(location) / 60_000).toInt())
+            // Approximate access: Android blurs it to about 2 km, on purpose.
+            put("approximate", !precise)
+            if (address != null) put("address", address)
+        }
+    }
+
+    /**
+     * Where the phone is, as precisely as the user allowed; throws what the agent should be told when it can't say.
+     * With [old] false, a last known place older than a couple of minutes is never the answer.
+     */
+    suspend fun locate(fresh: Boolean, old: Boolean = true): Location {
         val precise = granted(Manifest.permission.ACCESS_FINE_LOCATION)
         if (!precise && !granted(Manifest.permission.ACCESS_COARSE_LOCATION)) {
             throw PhoneToolException("Herald isn't allowed to use the phone's location. The user can allow it in Herald: Settings → Phone tools.")
@@ -49,21 +68,10 @@ internal class LocationTool(private val context: Context) {
         val manager = context.getSystemService(LocationManager::class.java) ?: throw PhoneToolException("The phone has no location service.")
         if (!LocationManagerCompat.isLocationEnabled(manager)) throw PhoneToolException("Location is turned off on the phone.")
         val known = lastKnown(manager)
-        val location = known?.takeIf { !fresh && ageMillis(it) <= RECENT_MS }
+        return known?.takeIf { !fresh && ageMillis(it) <= RECENT_MS }
             ?: measure(manager, precise)
-            ?: known
+            ?: known?.takeIf { old || ageMillis(it) <= RECENT_MS }
             ?: throw PhoneToolException("The phone couldn't tell where it is just now.")
-        val address = address(location, approximate = !precise)
-        return buildJsonObject {
-            put("latitude", round(location.latitude))
-            put("longitude", round(location.longitude))
-            if (location.hasAccuracy()) put("accuracy_m", location.accuracy.roundToInt())
-            put("measured_at", Instant.ofEpochMilli(location.time).toString())
-            put("minutes_ago", (ageMillis(location) / 60_000).toInt())
-            // Approximate access: Android blurs it to about 2 km, on purpose.
-            put("approximate", !precise)
-            if (address != null) put("address", address)
-        }
     }
 
     private fun granted(permission: String) = ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
