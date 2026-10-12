@@ -11,6 +11,7 @@ import kotlinx.serialization.json.JsonObject
 enum class PhoneTool(val id: String, val title: String, val detail: String) {
     Battery("phone_battery", "Battery", "The level, whether it's charging, and the time until full."),
     Network("phone_network", "Network", "Wi-Fi, mobile data or offline, whether it's metered, and a VPN."),
+    Sound("phone_sound", "Sound", "Do Not Disturb, the ringer and volumes. A change asks you first."),
     ;
 
     companion object {

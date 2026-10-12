@@ -2,6 +2,7 @@ package dev.hermeskotlin.android.notify
 
 import android.os.Build
 import dev.hermeskotlin.android.phone.AndroidPhoneTools
+import dev.hermeskotlin.android.phone.PhoneConfirmations
 import dev.hermeskotlin.android.push.PushListener
 import dev.hermeskotlin.core.phone.PhoneToolRunner
 import dev.hermeskotlin.core.phone.PhoneToolsBridge
@@ -26,6 +27,7 @@ val notifyModule = module {
     single { PushStore(androidContext()) } bind PushKeys::class
     single { PushListener(get(), get(), get(), get(), get(), get(), get(), get(), get()) }
     single { PushSetup(get(), get(), get(), get(), get(), get(), deviceName = { Build.MODEL ?: "Android phone" }) }
-    single { AndroidPhoneTools(androidContext()) } bind PhoneToolRunner::class
+    single { PhoneConfirmations(androidContext()) }
+    single { AndroidPhoneTools(androidContext(), get()) } bind PhoneToolRunner::class
     single { PhoneToolsBridge(get(), get(), get(), get(), get(), get(), get(), get(), deviceName = { Build.MODEL ?: "Android phone" }) }
 }
