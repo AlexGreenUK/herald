@@ -28,6 +28,8 @@ kotlin {
         androidMain.dependencies {
             implementation(libs.androidx.activity.compose)
             implementation(libs.androidx.core.ktx)
+            // The Health switch asks for Health Connect's permissions through its own screen.
+            implementation(libs.androidx.health.connect)
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)

@@ -110,5 +110,6 @@ dependencies {
     implementation(libs.androidx.biometric)
     implementation(libs.androidx.fragment)
     implementation(libs.koin.android)
+    implementation(libs.androidx.health.connect)
     debugImplementation(libs.compose.ui.tooling)
 }
