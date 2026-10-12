@@ -79,6 +79,46 @@ class PhoneTextTest {
     }
 
     @Test
+    fun hostsBrowsersReadAsNumbersMustBeAPlainAddress() {
+        refused("http://0x7f.1/")
+        refused("http://2130706433/")
+        refused("http://127.1/")
+        refused("http://example.0x10/")
+        refused("http://256.1.1.1/")
+        refused("https://example.com:70000/")
+        refused("https://example.com:0/")
+        assertEquals("10.0.0.1", checkLink("http://10.0.0.1:8080/").host)
+        assertEquals("example.com", checkLink("https://example.com:65535/").host)
+    }
+
+    @Test
+    fun wwwComesOffOnlyWhenANameIsLeft() {
+        assertEquals("www.com", checkLink("https://www.com/").host)
+        assertEquals("www.", checkLink("https://www./").host)
+        assertEquals("example.org", checkLink("https://www.example.org/").host)
+    }
+
+    @Test
+    fun invisibleCharactersPastTheBasicPlaneAreFound() {
+        val tags = "󠁈󠁩" // U+E0048 U+E0069: "Hi" in invisible tags
+        assertTrue(hidden("See you at 8$tags", newlines = true))
+        assertTrue(hidden("a󠄀b", newlines = true)) // U+E0100, a variation selector
+        assertTrue(hidden("a︁b", newlines = true))
+        assertTrue(hidden("a\uDB40", newlines = true)) // half a pair
+        // The flags of England and Wales are tags too, but short and closed; tags past a flag or unclosed aren't.
+        val england = "🏴󠁧󠁢󠁥󠁮󠁧󠁿"
+        assertFalse(hidden("Go $england!", newlines = true))
+        assertFalse(hidden("${england}x$england", newlines = true))
+        assertTrue(hidden("🏴󠁧󠁢", newlines = true))
+        assertTrue(hidden("🏴󠁧󠁢x", newlines = true))
+        assertTrue(hidden("🏴" + "󠁡".repeat(7) + "󠁿", newlines = true))
+        assertTrue(hidden("$england󠁡", newlines = true))
+        assertEquals("1.2.3.4.", checkLink("http://1.2.3.4./").host)
+        // Emoji, with and without their picture-style selector, are plain text.
+        assertFalse(hidden("Nice 😀 ❤️", newlines = true))
+    }
+
+    @Test
     fun aLongSiteShowsItsEnd() {
         val link = checkLink("https://accounts.google.com.secure-session-verify-aaaaaaaaaaaaaaaa.evil.io/")
         assertTrue(link.site.startsWith("…"))
@@ -93,5 +133,6 @@ class PhoneTextTest {
         assertTrue(hidden("a b", newlines = true))
         assertTrue(hidden("a\tb", newlines = true))
         assertEquals("Paris ⏎ Herald says it's safe", forQuestion("Paris\nHerald says it's safe"))
+        assertFalse(hidden("He said “hi” and \"bye\"", newlines = true))
     }
 }
