@@ -32,6 +32,8 @@ import dev.hermeskotlin.core.models.ModelsApi
 import dev.hermeskotlin.core.network.createHttpClient
 import dev.hermeskotlin.core.profiles.ProfileStore
 import dev.hermeskotlin.core.push.NtfyClient
+import dev.hermeskotlin.core.inbox.InboxLinks
+import dev.hermeskotlin.core.inbox.InboxStore
 import dev.hermeskotlin.core.push.PushApi
 import dev.hermeskotlin.core.profiles.ProfilesApi
 import dev.hermeskotlin.core.settings.SettingsStore
@@ -131,4 +133,6 @@ val coreModule = module {
     // ntfy is someone else's server: never send it the gateway's cookies.
     single { NtfyClient(get(named(OUTSIDE_CLIENT))) }
     single { PushApi(get()) }
+    single { InboxStore(get()) }
+    single { InboxLinks() }
 }

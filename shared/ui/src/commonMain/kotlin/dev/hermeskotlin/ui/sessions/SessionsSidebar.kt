@@ -91,6 +91,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import dev.hermeskotlin.core.settings.SettingsStore
 import org.koin.compose.koinInject
+import com.composables.icons.lucide.Inbox
+import dev.hermeskotlin.core.inbox.InboxLinks
+import dev.hermeskotlin.core.inbox.InboxStore
+import dev.hermeskotlin.ui.inbox.InboxPage
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -283,6 +287,18 @@ fun SessionsSidebar(
 
     var searchOpen by remember { mutableStateOf(false) }
     var scheduledOpen by remember { mutableStateOf(false) }
+    var inboxOpen by remember { mutableStateOf(false) }
+    // A tapped Inbox notification: the Inbox, at that run. The page takes the key and opens the run itself.
+    val inboxLinks = koinInject<InboxLinks>()
+    val inboxLink by inboxLinks.pending.collectAsStateWithLifecycle()
+    var inboxOpenKey by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(inboxLink) {
+        val link = inboxLink ?: return@LaunchedEffect
+        inboxOpen = true
+        inboxOpenKey = link.key
+        inboxLinks.consume(link)
+    }
+    val inboxUnread = koinInject<InboxStore>().state.collectAsStateWithLifecycle().value.unread
     var capabilitiesOpen by remember { mutableStateOf(false) }
     var configOpen by remember { mutableStateOf(false) }
     var pluginsOpen by remember { mutableStateOf(false) }
@@ -307,10 +323,11 @@ fun SessionsSidebar(
     }
 
     // Back steps out of search or the Scheduled / Archived pages before it closes the drawer.
-    PlatformBackHandler(enabled = visible && (searchOpen || scheduledOpen || routinesOf != null || capabilitiesOpen || configOpen || insightsOpen || state.filter != SessionListFilter.Recent)) {
+    PlatformBackHandler(enabled = visible && (searchOpen || scheduledOpen || inboxOpen || routinesOf != null || capabilitiesOpen || configOpen || insightsOpen || state.filter != SessionListFilter.Recent)) {
         when {
             searchOpen -> closeSearch()
             scheduledOpen -> scheduledOpen = false
+            inboxOpen -> inboxOpen = false
             routinesOf != null -> {
                 routinesOf = null
                 bots.refreshRoutines()
@@ -365,7 +382,16 @@ fun SessionsSidebar(
             .halo()
             .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Vertical + WindowInsetsSides.Start)),
     ) {
-        if (scheduledOpen && !searchOpen) {
+        if (inboxOpen && !searchOpen) {
+            InboxPage(
+                gateway = gateway,
+                visible = visible,
+                onBack = { inboxOpen = false },
+                onOpenSettings = onOpenSettings,
+                openKey = inboxOpenKey,
+                onOpenedKey = { inboxOpenKey = null },
+            )
+        } else if (scheduledOpen && !searchOpen) {
             ScheduledPage(
                 gateway = gateway,
                 visible = visible,
@@ -589,6 +615,7 @@ fun SessionsSidebar(
                         item(key = "nav") {
                             NavGrid(
                                 listOf(
+                                    NavLink(Lucide.Inbox, "Inbox", badge = inboxUnread) { inboxOpen = true },
                                     NavLink(Lucide.CalendarClock, "Scheduled") { scheduledOpen = true },
                                     NavLink(Lucide.ChartColumn, "Insights") { insightsOpen = true },
                                     NavLink(Lucide.Blocks, "Capabilities") { capabilitiesOpen = true },
@@ -769,6 +796,7 @@ internal fun SessionsSidebarSample(
                     item(key = "nav") {
                         NavGrid(
                             listOf(
+                                NavLink(Lucide.Inbox, "Inbox", badge = 2) {},
                                 NavLink(Lucide.CalendarClock, "Scheduled") {},
                                 NavLink(Lucide.ChartColumn, "Insights") {},
                                 NavLink(Lucide.Blocks, "Capabilities") {},
@@ -1034,7 +1062,7 @@ private fun SearchHeader(viewModel: SessionsViewModel, onClose: () -> Unit) {
 }
 
 /** One of the sidebar's pages, as a tile in [NavGrid]. */
-internal class NavLink(val icon: ImageVector, val label: String, val onClick: () -> Unit)
+internal class NavLink(val icon: ImageVector, val label: String, val badge: Int = 0, val onClick: () -> Unit)
 
 /** The sidebar's pages as tiles, two to a row. */
 @Composable
@@ -1080,7 +1108,19 @@ private fun NavTile(link: NavLink, modifier: Modifier = Modifier) {
                 // Large text wraps rather than cutting the name off; the tile grows.
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
             )
+            if (link.badge > 0) {
+                Text(
+                    if (link.badge > 99) "99+" else link.badge.toString(),
+                    style = Theme[typography][code].copy(fontSize = 11.sp, fontWeight = FontWeight.SemiBold),
+                    color = Theme[colors][onAccent],
+                    modifier = Modifier
+                        .background(Theme[colors][accent], CircleShape)
+                        .padding(horizontal = 6.dp, vertical = 1.dp)
+                        .semantics { contentDescription = "${link.badge} unread" },
+                )
+            }
         }
     }
 }
