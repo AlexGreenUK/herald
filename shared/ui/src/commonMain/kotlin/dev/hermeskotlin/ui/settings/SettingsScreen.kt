@@ -191,6 +191,7 @@ fun SettingsScreen(
         pushTest = pushTest,
         onPushAnywhere = viewModel::setPushAnywhere,
         onPushTest = viewModel::sendPushTest,
+        onPushUpdate = viewModel::updatePushPlugin,
         wallpaper = rememberWallpaperBitmap(wallpaper),
         hasWallpaper = wallpaper != null,
         wallpaperError = wallpaperError,
@@ -270,6 +271,7 @@ internal fun SettingsView(
     pushTest: Boolean? = null,
     onPushAnywhere: (Boolean) -> Unit = {},
     onPushTest: () -> Unit = {},
+    onPushUpdate: () -> Unit = {},
     /** The chat background, once decoded. */
     wallpaper: ImageBitmap? = null,
     hasWallpaper: Boolean = wallpaper != null,
@@ -473,6 +475,17 @@ internal fun SettingsView(
                 }
 
                 Section("Notifications") {
+                    var installAsked by remember { mutableStateOf(false) }
+                    PluginInstallDialog(
+                        visible = installAsked,
+                        feature = "Notifications anywhere",
+                        what = "It watches your bots' chats and sends each new reply to this phone, end-to-end " +
+                            "encrypted through ntfy.sh.",
+                        onDismiss = { installAsked = false },
+                    ) {
+                        installAsked = false
+                        onPushAnywhere(true)
+                    }
                     SwitchRow(
                         title = "Approvals and questions",
                         detail = "When the agent waits on you. Answer right from the notification.",
@@ -493,9 +506,15 @@ internal fun SettingsView(
                         title = "Notifications anywhere",
                         detail = pushDetail(settings.pushAnywhere, push),
                         checked = settings.pushAnywhere,
-                        onCheckedChange = onPushAnywhere,
+                        // On installs code on the gateway: said first, done only once the user agrees.
+                        onCheckedChange = { on -> if (on) installAsked = true else onPushAnywhere(false) },
                         icon = Lucide.Globe,
                     )
+                    val pushUpdate = push.update
+                    if (settings.pushAnywhere && pushUpdate != null) {
+                        Divider()
+                        PluginUpdateRow(pushUpdate, onPushUpdate)
+                    }
                     if (settings.pushAnywhere && push.state == PushStatus.State.On) {
                         Divider()
                         ActionRow(
@@ -583,6 +602,9 @@ private fun pushDetail(on: Boolean, push: PushStatus): String {
         PushStatus.State.On -> push.detail ?: "On. Bot messages come end-to-end encrypted through ntfy.sh; it only sees scrambled data."
         PushStatus.State.Working -> push.detail ?: "Setting up with the gateway…"
         PushStatus.State.NotInstalled -> "The gateway doesn't have the herald-push plugin. Turn this off and on to install it."
+        PushStatus.State.Outdated -> push.update?.let {
+            "The gateway's herald-push plugin is ${it.installed}; this needs ${it.available}. Update it below."
+        } ?: "The gateway's herald-push plugin is too old."
         PushStatus.State.Failed -> "Couldn't set up: ${push.detail ?: "unknown error"}"
         PushStatus.State.Unknown, PushStatus.State.Off -> "On. Checks with the gateway the next time Herald reaches it."
     }
