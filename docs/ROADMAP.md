@@ -269,9 +269,8 @@ Agent tools that run on the phone: a gateway plugin registers them, Herald answe
 - [x] Location (Android's own location service, no Google services; precise or approximate as the user allows; while Herald is open, or also while closed if the user allows that from its own row)
 - [x] Geofences ("when I get home…"): watched places on Android's own proximity alerts; adding asks first; arriving or leaving sends the message to the chat it was added from, marked as coming from the place; listed and removable in Settings → Phone tools
 - [x] Calendar (the phone's calendar provider: list events in a range; adding or moving asks first, showing when, where and which calendar; repeating events and invitations the user doesn't organize are left to the calendar app)
-- [ ] Contacts lookup
+- [x] Contacts lookup (by name, number or email; only names, numbers and emails, at most 20 people a call; never the whole address book, never writes)
 - [ ] Health data (steps, sleep, heart rate; Health Connect)
-- [ ] The agent calls you when it needs an answer: a clarify question or approval rings as a full-screen incoming call on the phone and watch; answer by voice in a live voice call, or decline and tap a choice. Off the gateway's network, the herald-push plugin carries the question
 
 ### Auth & connectivity extras
 - [x] Browser sign-in for SSO/OIDC gateways (RFC 8252 PKCE via Custom Tab and a loopback redirect; `/auth/native/*`). Bearer tokens kept encrypted and refreshed before they expire
