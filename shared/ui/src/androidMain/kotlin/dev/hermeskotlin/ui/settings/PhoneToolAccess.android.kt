@@ -48,6 +48,7 @@ private class AndroidPhoneToolAccess(private val context: Context, private val a
         tool == PhoneTool.Geofences && !granted(FINE) -> "Allow precise location: Android only watches places with it."
         tool == PhoneTool.Geofences && needsBackground() ->
             "Allow location all the time: places are watched while Herald is closed. Choose \"Allow all the time\"."
+        tool == PhoneTool.Calendar && (!granted(READ_CALENDAR) || !granted(WRITE_CALENDAR)) -> "Allow Herald to use your calendar."
         else -> null
     }
 
@@ -61,6 +62,7 @@ private class AndroidPhoneToolAccess(private val context: Context, private val a
             // Precise first: Android only offers "all the time" once Herald has location while in use.
             tool == PhoneTool.Geofences && !granted(FINE) -> prompt(FINE, COARSE)
             tool == PhoneTool.Geofences && needsBackground() -> prompt(BACKGROUND)
+            tool == PhoneTool.Calendar && (!granted(READ_CALENDAR) || !granted(WRITE_CALENDAR)) -> prompt(READ_CALENDAR, WRITE_CALENDAR)
             tool == PhoneTool.Sound && !policyAccess() -> open(Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS))
             tool == PhoneTool.ScreenTime && !usageAccess() -> {
                 // Herald's own switch where Android has a page for it (10 and later), else the list of apps.
@@ -144,10 +146,12 @@ private class AndroidPhoneToolAccess(private val context: Context, private val a
 
     private companion object {
         /** Tools that ask before changing the phone, in a notification on this channel (PhoneConfirmations). */
-        val ASKS = setOf(PhoneTool.Sound, PhoneTool.Alarms, PhoneTool.Open, PhoneTool.Clipboard, PhoneTool.Geofences)
+        val ASKS = setOf(PhoneTool.Sound, PhoneTool.Alarms, PhoneTool.Open, PhoneTool.Clipboard, PhoneTool.Geofences, PhoneTool.Calendar)
         const val CHANNEL = "phone_tools"
         const val FINE = Manifest.permission.ACCESS_FINE_LOCATION
         const val COARSE = Manifest.permission.ACCESS_COARSE_LOCATION
+        const val READ_CALENDAR = Manifest.permission.READ_CALENDAR
+        const val WRITE_CALENDAR = Manifest.permission.WRITE_CALENDAR
 
         @SuppressLint("InlinedApi") // Only asked on Android 10 and later.
         const val BACKGROUND = Manifest.permission.ACCESS_BACKGROUND_LOCATION

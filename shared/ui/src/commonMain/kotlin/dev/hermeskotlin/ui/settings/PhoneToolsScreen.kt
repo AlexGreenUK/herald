@@ -30,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.composables.icons.lucide.AlarmClock
 import com.composables.icons.lucide.BatteryMedium
+import com.composables.icons.lucide.CalendarDays
 import com.composables.icons.lucide.ChevronDown
 import com.composables.icons.lucide.ChevronRight
 import com.composables.icons.lucide.ChevronUp
@@ -441,4 +442,5 @@ internal val PhoneTool.icon: ImageVector
         PhoneTool.Clipboard -> Lucide.ClipboardCopy
         PhoneTool.Location -> Lucide.MapPin
         PhoneTool.Geofences -> Lucide.MapPinned
+        PhoneTool.Calendar -> Lucide.CalendarDays
     }
