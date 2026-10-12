@@ -5,6 +5,8 @@ import dev.hermeskotlin.core.inbox.InboxGroups
 import dev.hermeskotlin.core.inbox.InboxRun
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class InboxFilterTest {
 
@@ -73,5 +75,16 @@ class InboxFilterTest {
         assertEquals(listOf(500L, 300L), byGroups.shown.map { it.at })
         assertEquals(InboxFilter.All, byGroups.copy(groups = byGroups.groups.remove("RUBIX")).shownFilter)
         assertEquals(InboxFilter.All, byGroups.copy(filter = InboxFilter.Job("default", "brief")).shownFilter)
+    }
+
+    @Test
+    fun aRenamedJobsChipShowsTheNewNameAndKeepsItsOwn() {
+        val groups = InboxGroups().renameJob("default", "pulse", "Ticket pulse", own = "rubix-ticket-pulse")
+        val chip = jobChips(runs, groups) { false }.first()
+        assertEquals("Ticket pulse", chip.label)
+        assertEquals("rubix-ticket-pulse", chip.own)
+        assertTrue(chip.renamed)
+        assertFalse(jobChips(runs) { false }.first().renamed)
+        assertEquals("Ticket pulse", InboxUiState(runs = runs, groups = groups).nameOf(runs.first()))
     }
 }

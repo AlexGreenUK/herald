@@ -178,4 +178,38 @@ class InboxTest {
         assertEquals(InboxGroups(), store.state.value.groups)
         assertEquals(5, store.state.value.since)
     }
+
+    @Test
+    fun aJobRenamedOnThePhoneShowsItsNewNameAndResetPutsItsOwnBack() {
+        val pulse = InboxRun(bot = "default", job = "ebfdc86e6536", run = "2026-10-12_13-00-00", label = "rubix-ticket-pulse")
+        var groups = InboxGroups().renameJob("default", "ebfdc86e6536", "  🎟️ Ticket pulse  ", own = pulse.title)
+        assertEquals("🎟️ Ticket pulse", groups.nameOf(pulse))
+        assertEquals("🎟️ Ticket pulse", groups.renamedOf("default", "ebfdc86e6536"))
+        // Only that job, in that profile.
+        assertEquals("rubix-ticket-pulse", groups.nameOf(pulse.copy(bot = "siaulietis")))
+
+        groups = groups.renameJob("default", "ebfdc86e6536", "", own = pulse.title)
+        assertEquals("rubix-ticket-pulse", groups.nameOf(pulse))
+        // Renaming to its own name is the same as no rename.
+        assertNull(InboxGroups().renameJob("default", "ebfdc86e6536", "rubix-ticket-pulse", own = pulse.title).renamedOf("default", "ebfdc86e6536"))
+        assertEquals(InboxGroups.MAX_NAME, InboxGroups().renameJob("d", "j", "x".repeat(99), own = "j").renamedOf("d", "j")!!.length)
+    }
+
+    @Test
+    fun aRoutinesBotTagIsLeftOutOfItsName() {
+        val routine = InboxRun(bot = "dex", job = "j", run = "2026-10-12_13-00-00", label = "[bot:dex] Daily check")
+        assertEquals("Daily check", routine.title)
+        assertEquals("j", InboxRun(job = "j", run = "2026-10-12_13-00-00", label = "[bot:dex] ").title)
+    }
+
+    @Test
+    fun renamesAreKeptAcrossRestarts() = runTest {
+        val disk = InMemoryKeyValueStore()
+        val first = InboxStore(disk)
+        first.bind("https://gw", now = 0)
+        first.editGroups { it.renameJob("default", "j", "Briefing", own = "morning-briefing") }
+        val again = InboxStore(disk)
+        again.bind("https://gw", now = 0)
+        assertEquals("Briefing", again.state.value.groups.renamedOf("default", "j"))
+    }
 }

@@ -139,7 +139,7 @@ internal fun InboxPage(
 
     Column(Modifier.fillMaxSize()) {
         when {
-            state.open != null -> RunView(state.open, state.openLoading, state.openPartial, onBack = viewModel::closeRun)
+            state.open != null -> RunView(state.open, state.nameOf(state.open), state.openLoading, state.openPartial, onBack = viewModel::closeRun)
             state.choosing -> FollowView(state, viewModel)
             state.grouping -> GroupsView(state, viewModel)
             else -> InboxView(state, viewModel, onBack = onBack, onOpenSettings = onOpenSettings)
@@ -156,7 +156,7 @@ private fun InboxView(state: InboxUiState, viewModel: InboxViewModel, onBack: ()
         onBack = onBack,
         subtitle = when {
             state.runs.isEmpty() -> null
-            state.shownFilter is InboxFilter.Job -> state.shown.size.let { "$it ${if (it == 1) "report" else "reports"} from ${state.shown.first().title}" }
+            state.shownFilter is InboxFilter.Job -> state.shown.size.let { "$it ${if (it == 1) "report" else "reports"} from ${state.nameOf(state.shown.first())}" }
             state.shownFilter is InboxFilter.Group -> state.shown.size.let { n ->
                 "$n ${if (n == 1) "report" else "reports"} in ${(state.shownFilter as InboxFilter.Group).name ?: "no group"}"
             }
@@ -169,7 +169,12 @@ private fun InboxView(state: InboxUiState, viewModel: InboxViewModel, onBack: ()
         IconButton(Lucide.Settings2, contentDescription = "Choose jobs", onClick = viewModel::chooseJobs)
     }
     state.block?.let { BlockNotice(it, onOpenSettings) }
-    FilterChips(state, onSelect = viewModel::setFilter)
+    var renaming by remember { mutableStateOf<JobChip?>(null) }
+    FilterChips(state, onSelect = viewModel::setFilter, onRename = { renaming = it })
+    RenameJobDialog(renaming, onDismiss = { renaming = null }) { chip, name ->
+        viewModel.renameJob(chip, name)
+        renaming = null
+    }
     val shown = state.shown
     when {
         state.loading && shown.isEmpty() -> ListSkeleton()
@@ -192,7 +197,7 @@ private fun InboxView(state: InboxUiState, viewModel: InboxViewModel, onBack: ()
                     lastDay = day
                     item(key = "day-$day") { DayLabel(day) }
                 }
-                item(key = run.key) { RunCard(run, unread = state.isUnread(run), onClick = { viewModel.open(run) }) }
+                item(key = run.key) { RunCard(run, state.nameOf(run), unread = state.isUnread(run), onClick = { viewModel.open(run) }) }
             }
         }
     }
@@ -203,7 +208,7 @@ private fun InboxView(state: InboxUiState, viewModel: InboxViewModel, onBack: ()
  * scrolls sideways. Shown once there is more than one job, or a failure, to tell apart.
  */
 @Composable
-private fun FilterChips(state: InboxUiState, onSelect: (InboxFilter) -> Unit) {
+private fun FilterChips(state: InboxUiState, onSelect: (InboxFilter) -> Unit, onRename: (JobChip) -> Unit) {
     // By group once there are groups to split by; by job otherwise, and always when the user picked jobs.
     val byGroup = state.groups.mode == ChipMode.Groups && state.groupChips.isNotEmpty()
     val chips: List<Triple<InboxFilter, String, Int>> = if (byGroup) {
@@ -220,12 +225,16 @@ private fun FilterChips(state: InboxUiState, onSelect: (InboxFilter) -> Unit) {
     ) {
         Chip("All", selected = selected == InboxFilter.All, onClick = { onSelect(InboxFilter.All) }, count = state.unread.takeIf { it > 0 })
         chips.forEach { (filter, label, unread) ->
+            // A job's chip renames on a long press; a group's is renamed on the groups page.
+            val job = (filter as? InboxFilter.Job)?.let { f -> state.chips.firstOrNull { it.filter == f } }
             Chip(
                 label,
                 selected = selected == filter,
                 onClick = { onSelect(filter) },
                 count = unread.takeIf { it > 0 },
                 countColor = Theme[colors][accentText],
+                onLongClick = job?.let { { onRename(it) } },
+                onLongClickLabel = job?.let { "Rename" },
             )
         }
         if (failed > 0) {
@@ -274,7 +283,7 @@ private fun DayLabel(day: String) {
 
 /** A run as a card: the job, when, the start of what it said, and a dot while it's unread. */
 @Composable
-private fun RunCard(run: InboxRun, unread: Boolean, onClick: () -> Unit) {
+private fun RunCard(run: InboxRun, name: String, unread: Boolean, onClick: () -> Unit) {
     val shape = RoundedCornerShape(Theme[radii][radiusLarge])
     val (tile, tint) = if (run.failed) Theme[colors][dangerSoft] to Theme[colors][danger] else Theme[colors][accentSoft] to Theme[colors][accentText]
     Row(
@@ -283,7 +292,7 @@ private fun RunCard(run: InboxRun, unread: Boolean, onClick: () -> Unit) {
             .clip(shape)
             .background(Theme[colors][surface])
             .border(1.dp, Theme[colors][stroke], shape)
-            .clickable(onClickLabel = "Read ${run.title}", onClick = onClick)
+            .clickable(onClickLabel = "Read $name", onClick = onClick)
             .padding(14.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
@@ -293,7 +302,7 @@ private fun RunCard(run: InboxRun, unread: Boolean, onClick: () -> Unit) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    run.title,
+                    name,
                     style = Theme[typography][body].copy(fontWeight = if (unread) FontWeight.SemiBold else FontWeight.Medium),
                     color = Theme[colors][text],
                     maxLines = 1,
@@ -322,8 +331,8 @@ private fun RunCard(run: InboxRun, unread: Boolean, onClick: () -> Unit) {
 
 /** One run in full, as Markdown. */
 @Composable
-private fun RunView(run: InboxRun, loading: Boolean, partial: Boolean, onBack: () -> Unit) {
-    SubpageHeader(run.title, onBack = onBack, subtitle = (if (run.failed) "Failed · " else "") + messageTime(run.at.toDouble(), uses24HourClock()))
+private fun RunView(run: InboxRun, name: String, loading: Boolean, partial: Boolean, onBack: () -> Unit) {
+    SubpageHeader(name, onBack = onBack, subtitle = (if (run.failed) "Failed · " else "") + messageTime(run.at.toDouble(), uses24HourClock()))
     Column(
         Modifier
             .fillMaxSize()
@@ -351,6 +360,7 @@ private fun GroupsView(state: InboxUiState, viewModel: InboxViewModel) {
     val groups = state.groups
     var naming by remember { mutableStateOf<GroupNaming?>(null) }
     var picking by remember { mutableStateOf<InboxFilter.Job?>(null) }
+    var renamingJob by remember { mutableStateOf<JobChip?>(null) }
     SubpageHeader("Chips and groups", onBack = viewModel::closeGroups, subtitle = "Kept on this phone") {
         IconButton(Lucide.FolderPlus, contentDescription = "New group", onClick = { naming = GroupNaming(null) })
     }
@@ -389,14 +399,30 @@ private fun GroupsView(state: InboxUiState, viewModel: InboxViewModel) {
                 )
             }
         }
-        item(key = "jobs-label") { DayLabel("Jobs") }
+        item(key = "jobs-label") {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                DayLabel("Jobs")
+                Text(
+                    "The pencil renames a job on this phone, for its chip and cards. A long press on its chip does too.",
+                    style = Theme[typography][bodySmall].copy(fontSize = 12.5.sp),
+                    color = Theme[colors][textTertiary],
+                    modifier = Modifier.padding(start = 6.dp, bottom = 4.dp),
+                )
+            }
+        }
         if (state.groupableJobs.isEmpty()) {
             item(key = "no-jobs") {
                 Text("Jobs show here once they have reports in the Inbox.", style = Theme[typography][bodySmall], color = Theme[colors][textTertiary])
             }
         }
         items(state.groupableJobs, key = { "j-${it.first.filter.bot}/${it.first.filter.job}" }) { (chip, group) ->
-            JobGroupRow(chip.label, group, enabled = groups.names.isNotEmpty(), onClick = { picking = chip.filter })
+            JobGroupRow(
+                chip,
+                group,
+                enabled = groups.names.isNotEmpty(),
+                onClick = { picking = chip.filter },
+                onRename = { renamingJob = chip },
+            )
         }
     }
     GroupNameDialog(
@@ -408,6 +434,10 @@ private fun GroupsView(state: InboxUiState, viewModel: InboxViewModel) {
             naming = null
         },
     )
+    RenameJobDialog(renamingJob, onDismiss = { renamingJob = null }) { chip, name ->
+        viewModel.renameJob(chip, name)
+        renamingJob = null
+    }
     val job = picking
     DropdownSheet(
         visible = job != null,
@@ -418,6 +448,29 @@ private fun GroupsView(state: InboxUiState, viewModel: InboxViewModel) {
         onPick = { group -> job?.let { viewModel.assignGroup(it, group) }; picking = null },
         onDismiss = { picking = null },
     )
+}
+
+/** Renames a job on this phone: what its chip, cards and page say. Blank, or its own name, puts that back. */
+@Composable
+private fun RenameJobDialog(chip: JobChip?, onDismiss: () -> Unit, onSave: (JobChip, String) -> Unit) {
+    var shown by remember { mutableStateOf(chip) }
+    if (chip != null) shown = chip
+    val c = shown ?: return
+    val name = rememberTextFieldState(c.label)
+    LaunchedEffect(chip) { if (chip != null) name.edit { replace(0, length, chip.label) } }
+    Dialog(
+        visible = chip != null,
+        onDismissRequest = onDismiss,
+        title = "Rename job",
+        message = "Only on this phone: on the gateway it stays ${c.own}.",
+        actions = {
+            if (c.renamed) Button("Reset", onClick = { onSave(c, "") }, variant = ButtonVariant.Ghost, size = ButtonSize.Small)
+            Button("Cancel", onClick = onDismiss, variant = ButtonVariant.Ghost, size = ButtonSize.Small)
+            Button("Save", onClick = { onSave(c, name.text.toString()) }, size = ButtonSize.Small)
+        },
+    ) {
+        TextField(name, placeholder = c.own)
+    }
 }
 
 /** The name dialog: a new group when [from] is null, else a rename of [from]. */
@@ -478,7 +531,8 @@ private fun GroupRow(name: String, jobs: Int, onRename: () -> Unit, onRemove: ()
 }
 
 @Composable
-private fun JobGroupRow(label: String, group: String?, enabled: Boolean, onClick: () -> Unit) {
+private fun JobGroupRow(chip: JobChip, group: String?, enabled: Boolean, onClick: () -> Unit, onRename: () -> Unit) {
+    val label = chip.label
     val shape = RoundedCornerShape(Theme[radii][radiusLarge])
     Row(
         Modifier
@@ -487,11 +541,18 @@ private fun JobGroupRow(label: String, group: String?, enabled: Boolean, onClick
             .background(Theme[colors][surface])
             .border(1.dp, Theme[colors][stroke], shape)
             .clickable(enabled = enabled, onClickLabel = "Choose $label's group", onClick = onClick)
-            .padding(14.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+            .padding(start = 4.dp, end = 14.dp, top = 6.dp, bottom = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(label, style = Theme[typography][body], color = Theme[colors][text], maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        IconButton(Lucide.Pencil, contentDescription = "Rename $label", onClick = onRename)
+        Column(Modifier.weight(1f)) {
+            Text(label, style = Theme[typography][body], color = Theme[colors][text], maxLines = 1, overflow = TextOverflow.Ellipsis)
+            // A renamed job still says what it's called on the gateway.
+            if (chip.renamed) {
+                Text(chip.own, style = Theme[typography][code].copy(fontSize = 11.5.sp), color = Theme[colors][textMuted], maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
         Text(
             group ?: if (enabled) "No group" else "",
             style = Theme[typography][bodySmall].copy(fontWeight = FontWeight.Medium),

@@ -1,5 +1,6 @@
 package dev.hermeskotlin.core.inbox
 
+import dev.hermeskotlin.core.cron.Routines
 import dev.hermeskotlin.core.network.HermesJson
 import dev.hermeskotlin.core.push.PushApi
 import dev.hermeskotlin.core.push.PushKeys
@@ -42,7 +43,8 @@ data class InboxRun(
 ) {
     val key: String get() = "$bot/$job/$run"
     val failed: Boolean get() = status == FAILED
-    val title: String get() = label.ifBlank { job }
+    /** The job's name as the gateway has it, without a Bot Mode routine's `[bot:…]` tag. */
+    val title: String get() = Routines.title(label).trim().ifBlank { job }
 
     companion object {
         const val OK = "ok"
@@ -266,8 +268,26 @@ data class InboxGroups(
     val names: List<String> = emptyList(),
     val jobs: Map<String, String> = emptyMap(),
     val mode: ChipMode = ChipMode.Jobs,
+    /** Names the user gave jobs on this phone ([jobKey] to name), shown instead of the job's own. */
+    val renamed: Map<String, String> = emptyMap(),
 ) {
     fun of(bot: String, job: String): String? = jobs[jobKey(bot, job)]?.takeIf { it in names }
+
+    /** What [run]'s job is called here: the name the user gave it, else its own. */
+    fun nameOf(run: InboxRun): String = renamed[jobKey(run.bot, run.job)] ?: run.title
+
+    /** The name the user gave a job, or null when it goes by its own. */
+    fun renamedOf(bot: String, job: String): String? = renamed[jobKey(bot, job)]
+
+    /**
+     * Calls a job [name] on this phone (trimmed, at most [MAX_NAME]); blank, or the job's own name [own], puts its
+     * own name back.
+     */
+    fun renameJob(bot: String, job: String, name: String, own: String): InboxGroups {
+        val clean = name.trim().take(MAX_NAME)
+        val key = jobKey(bot, job)
+        return if (clean.isEmpty() || clean == own) copy(renamed = renamed - key) else copy(renamed = renamed + (key to clean))
+    }
 
     /** Adds a group called [name] (trimmed, at most [MAX_NAME]); a blank or taken name changes nothing. */
     fun add(name: String): InboxGroups {
@@ -291,7 +311,7 @@ data class InboxGroups(
         if (group == null || group !in names) copy(jobs = jobs - jobKey(bot, job)) else copy(jobs = jobs + (jobKey(bot, job) to group))
 
     companion object {
-        const val MAX_NAME = 32
+        const val MAX_NAME = 40
         const val MAX_GROUPS = 20
         fun jobKey(bot: String, job: String) = "$bot/$job"
     }

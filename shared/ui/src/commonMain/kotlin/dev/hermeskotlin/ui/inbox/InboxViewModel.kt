@@ -41,8 +41,13 @@ sealed interface InboxFilter {
     data class Group(val name: String?) : InboxFilter
 }
 
-/** A job's chip: what it filters to, its name, and how many of its runs are unread. */
-data class JobChip(val filter: InboxFilter.Job, val label: String, val runs: Int, val unread: Int)
+/**
+ * A job's chip: what it filters to, the name it shows ([label]: the user's, else the job's own), the job's own
+ * name ([own]), and how many of its runs are unread.
+ */
+data class JobChip(val filter: InboxFilter.Job, val label: String, val runs: Int, val unread: Int, val own: String = label) {
+    val renamed: Boolean get() = label != own
+}
 
 /** A group's chip: what it filters to, its name, and how many of its runs are unread. */
 data class GroupChip(val filter: InboxFilter.Group, val label: String, val runs: Int, val unread: Int)
@@ -64,10 +69,11 @@ fun groupChips(runs: List<InboxRun>, groups: InboxGroups, isUnread: (InboxRun) -
  * One chip per job with runs in the Inbox, the job with the newest run first, so the job that just reported is
  * at hand. Each job is named by its newest run's label, the name it goes by now.
  */
-fun jobChips(runs: List<InboxRun>, isUnread: (InboxRun) -> Boolean): List<JobChip> =
+fun jobChips(runs: List<InboxRun>, groups: InboxGroups = InboxGroups(), isUnread: (InboxRun) -> Boolean): List<JobChip> =
     runs.groupBy { it.bot to it.job }
         .map { (id, ofJob) ->
-            JobChip(InboxFilter.Job(id.first, id.second), ofJob.maxBy { it.at }.title, ofJob.size, ofJob.count(isUnread))
+            val newest = ofJob.maxBy { it.at }
+            JobChip(InboxFilter.Job(id.first, id.second), groups.nameOf(newest), ofJob.size, ofJob.count(isUnread), own = newest.title)
         }
         .sortedByDescending { chip -> runs.first { it.bot == chip.filter.bot && it.job == chip.filter.job }.at }
 
@@ -114,7 +120,10 @@ data class InboxUiState(
 ) {
     fun isUnread(run: InboxRun): Boolean = run.key !in read && run.at > since
     val unread: Int get() = runs.count(::isUnread)
-    val chips: List<JobChip> get() = jobChips(runs, ::isUnread)
+    val chips: List<JobChip> get() = jobChips(runs, groups, ::isUnread)
+
+    /** The name [run]'s job shows by: the user's, else its own. */
+    fun nameOf(run: InboxRun): String = groups.nameOf(run)
     val groupChips: List<GroupChip> get() = groupChips(runs, groups, ::isUnread)
     val failed: Int get() = runs.count { it.failed }
 
@@ -212,6 +221,9 @@ class InboxViewModel(
     fun removeGroup(name: String) = editGroups { it.remove(name) }
 
     fun assignGroup(job: InboxFilter.Job, group: String?) = editGroups { it.assign(job.bot, job.job, group) }
+
+    /** Calls [chip]'s job [name] on this phone; blank puts its own name back. */
+    fun renameJob(chip: JobChip, name: String) = editGroups { it.renameJob(chip.filter.bot, chip.filter.job, name, chip.own) }
 
     private fun editGroups(change: (InboxGroups) -> InboxGroups) {
         viewModelScope.launch { store.editGroups(change) }

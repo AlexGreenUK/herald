@@ -112,7 +112,8 @@ class PushListener(
         inbox.add(run)
         if (!message.notify) return
         if (visibility.visible.value && connection.state.value is ConnectionState.Connected) return
-        notifications.postCronRun(run.key, run.job, run.title, run.text, run.failed)
+        // The name the user gave the job on this phone, when they did.
+        notifications.postCronRun(run.key, run.job, inbox.state.value.groups.nameOf(run), run.text, run.failed)
     }
 
     /** The message inside [event], or null for anything that isn't a valid envelope signed by [gateway]. */
