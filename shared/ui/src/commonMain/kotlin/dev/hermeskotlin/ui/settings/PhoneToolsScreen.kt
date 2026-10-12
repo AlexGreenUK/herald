@@ -27,6 +27,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.composables.icons.lucide.AlarmClock
 import com.composables.icons.lucide.BatteryMedium
 import com.composables.icons.lucide.ChevronRight
+import com.composables.icons.lucide.ExternalLink
 import com.composables.icons.lucide.Hourglass
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.ShieldCheck
@@ -226,4 +227,5 @@ internal val PhoneTool.icon: ImageVector
         PhoneTool.Sound -> Lucide.Volume2
         PhoneTool.Alarms -> Lucide.AlarmClock
         PhoneTool.ScreenTime -> Lucide.Hourglass
+        PhoneTool.Open -> Lucide.ExternalLink
     }
