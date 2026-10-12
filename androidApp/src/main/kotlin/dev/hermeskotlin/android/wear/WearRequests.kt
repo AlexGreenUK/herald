@@ -7,6 +7,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
@@ -50,13 +52,19 @@ class WearRequests(private val relay: WatchRelay, private val notifications: Cha
             }
         }
         scope.launch {
-            relay.busy.collect { busy ->
-                if (busy || quiet.isEmpty()) return@collect
+            relay.busy.collectLatest { busy ->
+                if (busy || quiet.isEmpty()) return@collectLatest
+                // An answer given just before hanging up takes a moment to come back from the gateway.
+                delay(SETTLE_MS)
                 // The call's over and they're still unanswered: they wait as any question does.
-                val left = quiet.values.toList()
+                val left = quiet.filterKeys { it in posted }.values.toList()
                 quiet.clear()
                 left.forEach { (chat, title, request) -> notifications.postRequest(chat, title, request) }
             }
         }
+    }
+
+    private companion object {
+        const val SETTLE_MS = 3_000L
     }
 }

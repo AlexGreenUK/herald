@@ -54,8 +54,8 @@ class PhoneCallActivity : ComponentActivity() {
         lifecycleScope.launch {
             val ended = model.state.filterNotNull().first { it.ended }
             ended.error?.let { Toast.makeText(this@PhoneCallActivity, it, Toast.LENGTH_LONG).show() }
-            // Never on the line: the question waits in the usual notification, as when it isn't picked up.
-            ended.notAsked?.let { notifications.postRequest(it.storedSessionId, it.caller, it.request) }
+            // Never on the line: the question waits in the shade, without a sound, as the toast just said why.
+            ended.notAsked?.let { notifications.postRequest(it.storedSessionId, it.caller, it.request, quiet = true) }
             finish()
         }
         // A rotation keeps the model: a call on the line, or one being picked up, carries on there.
