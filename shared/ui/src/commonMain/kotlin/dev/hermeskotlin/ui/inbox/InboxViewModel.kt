@@ -29,6 +29,34 @@ import kotlinx.coroutines.launch
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
 
+/** What the Inbox list shows: every run, only the failed ones, or one job's. */
+sealed interface InboxFilter {
+    data object All : InboxFilter
+    data object Failed : InboxFilter
+    data class Job(val bot: String, val job: String) : InboxFilter
+}
+
+/** A job's chip: what it filters to, its name, and how many of its runs are unread. */
+data class JobChip(val filter: InboxFilter.Job, val label: String, val runs: Int, val unread: Int)
+
+/**
+ * One chip per job with runs in the Inbox, the job with the newest run first, so the job that just reported is
+ * at hand. Each job is named by its newest run's label, the name it goes by now.
+ */
+fun jobChips(runs: List<InboxRun>, isUnread: (InboxRun) -> Boolean): List<JobChip> =
+    runs.groupBy { it.bot to it.job }
+        .map { (id, ofJob) ->
+            JobChip(InboxFilter.Job(id.first, id.second), ofJob.maxBy { it.at }.title, ofJob.size, ofJob.count(isUnread))
+        }
+        .sortedByDescending { chip -> runs.first { it.bot == chip.filter.bot && it.job == chip.filter.job }.at }
+
+/** The runs [filter] keeps, in their order. */
+fun List<InboxRun>.filtered(filter: InboxFilter): List<InboxRun> = when (filter) {
+    InboxFilter.All -> this
+    InboxFilter.Failed -> filter { it.failed }
+    is InboxFilter.Job -> filter { it.bot == filter.bot && it.job == filter.job }
+}
+
 /** Why the Inbox can't fetch from the gateway: it then shows what it kept, with this said once. */
 enum class InboxBlock {
     /** Notifications anywhere is off: the Inbox goes by this phone's push registration. */
@@ -45,8 +73,7 @@ data class InboxUiState(
     val loading: Boolean = true,
     val error: String? = null,
     val block: InboxBlock? = null,
-    /** Show only the failed runs. */
-    val failuresOnly: Boolean = false,
+    val filter: InboxFilter = InboxFilter.All,
     /** The run open in full; null shows the list. */
     val open: InboxRun? = null,
     val openLoading: Boolean = false,
@@ -62,7 +89,13 @@ data class InboxUiState(
 ) {
     fun isUnread(run: InboxRun): Boolean = run.key !in read && run.at > since
     val unread: Int get() = runs.count(::isUnread)
-    val shown: List<InboxRun> get() = if (failuresOnly) runs.filter { it.failed } else runs
+    val chips: List<JobChip> get() = jobChips(runs, ::isUnread)
+    val failed: Int get() = runs.count { it.failed }
+
+    /** A job filter whose job has left the Inbox shows everything again. */
+    val shownFilter: InboxFilter get() = filter.takeIf { f -> f !is InboxFilter.Job || runs.any { it.bot == f.bot && it.job == f.job } }
+        ?: InboxFilter.All
+    val shown: List<InboxRun> get() = runs.filtered(shownFilter)
 }
 
 /**
@@ -123,7 +156,7 @@ class InboxViewModel(
 
     fun refresh() = load()
 
-    fun setFailuresOnly(on: Boolean) = _state.update { it.copy(failuresOnly = on) }
+    fun setFilter(filter: InboxFilter) = _state.update { it.copy(filter = filter) }
 
     fun dismissMessage() = _state.update { it.copy(message = null) }
 

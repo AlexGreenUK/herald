@@ -3,6 +3,7 @@ package dev.hermeskotlin.ui.inbox
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -131,6 +132,7 @@ private fun InboxView(state: InboxUiState, viewModel: InboxViewModel, onBack: ()
         onBack = onBack,
         subtitle = when {
             state.runs.isEmpty() -> null
+            state.shownFilter is InboxFilter.Job -> state.shown.size.let { "$it ${if (it == 1) "report" else "reports"} from ${state.shown.first().title}" }
             unread > 0 -> "$unread unread · from the jobs you follow"
             else -> "From the jobs you follow"
         },
@@ -139,22 +141,12 @@ private fun InboxView(state: InboxUiState, viewModel: InboxViewModel, onBack: ()
         IconButton(Lucide.Settings2, contentDescription = "Choose jobs", onClick = viewModel::chooseJobs)
     }
     state.block?.let { BlockNotice(it, onOpenSettings) }
-    if (state.runs.any { it.failed }) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Chip("All", selected = !state.failuresOnly, onClick = { viewModel.setFailuresOnly(false) })
-            Chip(
-                "Failed",
-                selected = state.failuresOnly,
-                onClick = { viewModel.setFailuresOnly(true) },
-                count = state.runs.count { it.failed },
-                countColor = Theme[colors][danger],
-            )
-        }
-    }
+    FilterChips(state, onSelect = viewModel::setFilter)
     val shown = state.shown
     when {
         state.loading && shown.isEmpty() -> ListSkeleton()
         state.error != null && shown.isEmpty() -> EmptyState(Lucide.TriangleAlert, "Couldn't load the Inbox", state.error)
+        shown.isEmpty() && state.shownFilter == InboxFilter.Failed -> EmptyState(Lucide.Inbox, "No failed runs", "Every run in the Inbox went fine.")
         shown.isEmpty() && state.block == null -> EmptyState(
             Lucide.Inbox,
             "Nothing here yet",
@@ -174,6 +166,42 @@ private fun InboxView(state: InboxUiState, viewModel: InboxViewModel, onBack: ()
                 }
                 item(key = run.key) { RunCard(run, unread = state.isUnread(run), onClick = { viewModel.open(run) }) }
             }
+        }
+    }
+}
+
+/**
+ * All, then a chip per job (its unread count beside it), then Failed when any run failed, in one row that
+ * scrolls sideways. Shown once there is more than one job, or a failure, to tell apart.
+ */
+@Composable
+private fun FilterChips(state: InboxUiState, onSelect: (InboxFilter) -> Unit) {
+    val chips = state.chips
+    val failed = state.failed
+    if (chips.size < 2 && failed == 0) return
+    val selected = state.shownFilter
+    Row(
+        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Chip("All", selected = selected == InboxFilter.All, onClick = { onSelect(InboxFilter.All) }, count = state.unread.takeIf { it > 0 })
+        chips.forEach { chip ->
+            Chip(
+                chip.label,
+                selected = selected == chip.filter,
+                onClick = { onSelect(chip.filter) },
+                count = chip.unread.takeIf { it > 0 },
+                countColor = Theme[colors][accentText],
+            )
+        }
+        if (failed > 0) {
+            Chip(
+                "Failed",
+                selected = selected == InboxFilter.Failed,
+                onClick = { onSelect(InboxFilter.Failed) },
+                count = failed,
+                countColor = Theme[colors][danger],
+            )
         }
     }
 }
