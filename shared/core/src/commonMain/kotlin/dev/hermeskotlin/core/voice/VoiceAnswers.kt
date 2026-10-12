@@ -65,12 +65,17 @@ object VoiceAnswers {
      * faster", "hmm, wait"). The rest is left to the voice, which talks it through and hands the answer over.
      */
     fun takesAsAnswer(request: InputRequest, transcript: String): Boolean {
-        val words = words(transcript)
+        // "Um, blue" is blue.
+        val words = words(transcript).dropWhile { it in FILLERS }
         if (words.isEmpty()) return false
+        val said = " ${words.joinToString(" ")} "
+        // "How about blue" offers an answer.
+        val asksBack = words.first() in ASKS_BACK && !said.startsWith(" how about ")
         return when (request) {
             is InputRequest.Approval -> approval(request, transcript) != null
             is InputRequest.Clarify -> request.questions.size == 1 && '?' !in transcript &&
-                words.first() !in QUESTION_STARTS && words.first() !in ASKS_BACK && words.none { it in HOLD_ON }
+                words.first() !in QUESTION_STARTS && !asksBack && words.none { it in HOLD_ON } &&
+                HOLD_PHRASES.none { " $it " in said }
             else -> false
         }
     }
@@ -127,12 +132,23 @@ object VoiceAnswers {
     private val HEDGES = setOf("but", "if", "what", "why", "how", "which", "when", "where", "who", "wait", "maybe", "unless", "first", "hold")
     private val QUESTION_STARTS = setOf("is", "can", "could", "would", "will", "should", "does", "are", "did", "shall", "may")
 
-    /** First words that ask back rather than answer. */
-    private val ASKS_BACK = setOf("what", "why", "how", "which", "when", "where", "who", "sorry", "pardon", "repeat", "huh", "tell", "explain")
+    /** First words that ask back rather than answer (speech to text drops the "?": "do I need to pick"). */
+    private val ASKS_BACK = setOf(
+        "what", "why", "how", "which", "when", "where", "who", "sorry", "pardon", "repeat", "huh", "explain", "do", "say",
+    )
+
+    /** Sounds before the answer, not part of it. */
+    private val FILLERS = setOf("um", "uh", "erm", "er", "hmm", "mm", "ah", "oh", "so", "well")
 
     /** Words that put the answer off. */
-    private val HOLD_ON = setOf("wait", "hold", "hmm", "um", "uh", "erm", "moment")
-    private val ALWAYS_WORDS =setOf("always", "permanently", "forever")
+    private val HOLD_ON = setOf("wait", "hold", "moment", "sec", "hang")
+
+    /** Ways of putting it off, or of not knowing, that aren't an answer. */
+    private val HOLD_PHRASES = listOf(
+        "a second", "a minute", "let me think", "let me see", "not sure", "don't know", "dont know", "no idea",
+        "the options", "say again", "again please", "tell me", "remind me",
+    )
+    private val ALWAYS_WORDS = setOf("always", "permanently", "forever")
     private val SESSION_WORDS = setOf("chat", "session")
     /** Words that grant it, once unless they say how far. */
     private val ONCE = setOf(

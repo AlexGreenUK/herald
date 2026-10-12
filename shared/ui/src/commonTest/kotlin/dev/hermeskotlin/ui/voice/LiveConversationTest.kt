@@ -454,9 +454,13 @@ class LiveConversationTest {
         assertEquals(1, socket.submits.value.size)
         assertTrue(session.state.value.running)
 
-        // Handed over late after all: not a second answer, nor a request that stops the turn.
+        // Handed over late after all: not a second answer, nor a request that stops the turn. Told so while Hermes
+        // still works on it, not once its turn is over.
         call.receive("""{"type":"session.delegation.created","delegation":{"id":"d2"}}""")
-        call.sent.first { sent -> sent.any { it["delegation_id"]?.jsonPrimitive?.contentOrNull == "d2" } }
+        val reply = call.sent.first { sent -> sent.any { it["delegation_id"]?.jsonPrimitive?.contentOrNull == "d2" } }
+            .first { it["delegation_id"]?.jsonPrimitive?.contentOrNull == "d2" }
+        assertTrue(reply.toString().contains("already has that answer"), reply.toString())
+        assertTrue(session.state.value.running)
         delay(5_000)
         assertEquals(1, socket.answers.value.size)
         assertEquals(1, socket.submits.value.size)

@@ -133,10 +133,14 @@ class VoiceAnswersTest {
     fun whatsTakenAsTheAnswerWithoutTheVoiceHandingItOver() {
         val color = InputRequest.Clarify("srq-2", listOf(ClarifyQuestion(null, "Which color?", listOf("Red", "Blue"))))
         // Anything that answers, a choice or not.
-        listOf("Green", "Blue please", "the second one", "I think red").forEach { assertTrue(VoiceAnswers.takesAsAnswer(color, it), it) }
-        // A question back or a hedge is the voice's to talk through.
-        listOf("Which one is brighter", "what are the options", "is red darker", "hmm, wait", "sorry?", "", "  ")
-            .forEach { assertFalse(VoiceAnswers.takesAsAnswer(color, it), it) }
+        listOf("Green", "Blue please", "the second one", "I think red", "um, blue", "how about blue", "tell it red", "give me red")
+            .forEach { assertTrue(VoiceAnswers.takesAsAnswer(color, it), it) }
+        // A question back, a hedge or not knowing is the voice's to talk through.
+        listOf(
+            "Which one is brighter", "what are the options", "is red darker", "hmm, wait", "sorry?", "", "  ", "um",
+            "one sec", "give me a second", "say the options again", "do I need to pick", "I'm not sure", "let me think",
+            "I don't know", "hang on",
+        ).forEach { assertFalse(VoiceAnswers.takesAsAnswer(color, it), it) }
         // Several questions are never asked aloud.
         val two = color.copy(questions = color.questions + ClarifyQuestion(null, "Why?"))
         assertFalse(VoiceAnswers.takesAsAnswer(two, "Green"))
