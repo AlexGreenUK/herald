@@ -49,6 +49,7 @@ private class AndroidPhoneToolAccess(private val context: Context, private val a
         tool == PhoneTool.Geofences && needsBackground() ->
             "Allow location all the time: places are watched while Herald is closed. Choose \"Allow all the time\"."
         tool == PhoneTool.Calendar && (!granted(READ_CALENDAR) || !granted(WRITE_CALENDAR)) -> "Allow Herald to use your calendar."
+        tool == PhoneTool.Contacts && !granted(READ_CONTACTS) -> "Allow Herald to read your contacts."
         else -> null
     }
 
@@ -63,6 +64,7 @@ private class AndroidPhoneToolAccess(private val context: Context, private val a
             tool == PhoneTool.Geofences && !granted(FINE) -> prompt(FINE, COARSE)
             tool == PhoneTool.Geofences && needsBackground() -> prompt(BACKGROUND)
             tool == PhoneTool.Calendar && (!granted(READ_CALENDAR) || !granted(WRITE_CALENDAR)) -> prompt(READ_CALENDAR, WRITE_CALENDAR)
+            tool == PhoneTool.Contacts && !granted(READ_CONTACTS) -> prompt(READ_CONTACTS)
             tool == PhoneTool.Sound && !policyAccess() -> open(Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS))
             tool == PhoneTool.ScreenTime && !usageAccess() -> {
                 // Herald's own switch where Android has a page for it (10 and later), else the list of apps.
@@ -152,6 +154,7 @@ private class AndroidPhoneToolAccess(private val context: Context, private val a
         const val COARSE = Manifest.permission.ACCESS_COARSE_LOCATION
         const val READ_CALENDAR = Manifest.permission.READ_CALENDAR
         const val WRITE_CALENDAR = Manifest.permission.WRITE_CALENDAR
+        const val READ_CONTACTS = Manifest.permission.READ_CONTACTS
 
         @SuppressLint("InlinedApi") // Only asked on Android 10 and later.
         const val BACKGROUND = Manifest.permission.ACCESS_BACKGROUND_LOCATION
