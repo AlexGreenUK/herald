@@ -201,23 +201,6 @@ class VoiceController(
         return true
     }
 
-    /**
-     * Why the call couldn't start, in a line: the vendor's own message when the gateway passed one on (no
-     * credits, a bad key), rather than the raw JSON under "Can't reach the gateway".
-     */
-    private fun liveFailure(result: ApiResult<*>): String {
-        val raw = when (result) {
-            is ApiResult.Unavailable -> result.message
-            is ApiResult.Failed -> result.message
-            else -> null
-        }
-        val vendor = raw?.let { VENDOR_MESSAGE.find(it)?.groupValues?.get(1) }
-        return when {
-            vendor != null -> "GPT-Live couldn't start: $vendor"
-            else -> result.errorMessage ?: "Couldn't start the live call."
-        }
-    }
-
     /** Turns the microphone off or on in a live call. */
     fun toggleMute() {
         val conversation = live ?: return
@@ -409,7 +392,6 @@ class VoiceController(
     }
 
     private companion object {
-        val VENDOR_MESSAGE = Regex(""""message"\s*:\s*"((?:[^"\\]|\\.)*)"""")
         const val MAX_FAILURES = 3
         const val RETRY_PAUSE_MS = 1_000L
         const val TURN_START_MS = 15_000L
@@ -418,3 +400,22 @@ class VoiceController(
         const val DICTATION_MAX_MS = 120_000L
     }
 }
+
+/**
+ * Why a live call couldn't start, in a line: the vendor's own message when the gateway passed one on (no
+ * credits, a bad key), rather than the raw JSON under "Can't reach the gateway".
+ */
+internal fun liveFailure(result: ApiResult<*>): String {
+    val raw = when (result) {
+        is ApiResult.Unavailable -> result.message
+        is ApiResult.Failed -> result.message
+        else -> null
+    }
+    val vendor = raw?.let { VENDOR_MESSAGE.find(it)?.groupValues?.get(1) }
+    return when {
+        vendor != null -> "GPT-Live couldn't start: $vendor"
+        else -> result.errorMessage ?: "Couldn't start the live call."
+    }
+}
+
+private val VENDOR_MESSAGE = Regex(""""message"\s*:\s*"((?:[^"\\]|\\.)*)"""")
