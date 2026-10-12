@@ -19,7 +19,12 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
 /** The phone tools on Android: each reads or does what the agent asked, through the platform's own APIs. */
-class AndroidPhoneTools(private val context: Context, confirmations: PhoneConfirmations) : PhoneToolRunner {
+class AndroidPhoneTools(
+    private val context: Context,
+    confirmations: PhoneConfirmations,
+    places: Geofences,
+    chats: ChatTargets,
+) : PhoneToolRunner {
 
     private val sound = SoundTool(context, confirmations)
     private val alarms = AlarmTool(context, confirmations)
@@ -27,6 +32,7 @@ class AndroidPhoneTools(private val context: Context, confirmations: PhoneConfir
     private val open = OpenTool(context, confirmations)
     private val clipboard = ClipboardTool(confirmations)
     private val location = LocationTool(context)
+    private val geofences = GeofenceTool(context, confirmations, location, places, chats)
 
     override suspend fun run(tool: PhoneTool, args: JsonObject, session: String): JsonElement = withContext(Dispatchers.IO) {
         when (tool) {
@@ -38,6 +44,7 @@ class AndroidPhoneTools(private val context: Context, confirmations: PhoneConfir
             PhoneTool.Open -> open.run(args)
             PhoneTool.Clipboard -> clipboard.run(args)
             PhoneTool.Location -> location.run(args)
+            PhoneTool.Geofences -> geofences.run(args, session)
         }
     }
 

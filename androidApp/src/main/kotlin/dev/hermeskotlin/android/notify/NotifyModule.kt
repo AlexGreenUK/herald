@@ -2,6 +2,9 @@ package dev.hermeskotlin.android.notify
 
 import android.os.Build
 import dev.hermeskotlin.android.phone.AndroidPhoneTools
+import dev.hermeskotlin.android.phone.ChatTargets
+import dev.hermeskotlin.android.phone.Geofences
+import dev.hermeskotlin.core.phone.WatchedPlaces
 import dev.hermeskotlin.android.phone.PhoneConfirmations
 import dev.hermeskotlin.android.push.PushListener
 import dev.hermeskotlin.core.phone.PhoneToolRunner
@@ -28,6 +31,8 @@ val notifyModule = module {
     single { PushListener(get(), get(), get(), get(), get(), get(), get(), get(), get()) }
     single { PushSetup(get(), get(), get(), get(), get(), get(), deviceName = { Build.MODEL ?: "Android phone" }) }
     single { PhoneConfirmations(androidContext()) }
-    single { AndroidPhoneTools(androidContext(), get()) } bind PhoneToolRunner::class
+    single { Geofences(androidContext(), get(), get()) } bind WatchedPlaces::class
+    single { ChatTargets(get(), get(), get(), get()) }
+    single { AndroidPhoneTools(androidContext(), get(), get(), get()) } bind PhoneToolRunner::class
     single { PhoneToolsBridge(get(), get(), get(), get(), get(), get(), get(), get(), deviceName = { Build.MODEL ?: "Android phone" }) }
 }

@@ -176,6 +176,11 @@
             android:name=".notify.NotificationActionReceiver"
             android:exported="false" />
 
+        <!-- Android's proximity alert for a place the agent watches (the Watched places phone tool). -->
+        <receiver
+            android:name=".phone.GeofenceReceiver"
+            android:exported="false" />
+
         <!--
             Messages from Herald's watch app (the Data Layer delivers only from an app with this package name and
             signing key): what's asked there goes to Hermes from here.

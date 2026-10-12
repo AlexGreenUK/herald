@@ -146,19 +146,25 @@ class BotsApi(private val connection: GatewayConnection) : BotChatBackend {
      * typed into the bot's notification: the chat is attached on this socket and the prompt submitted;
      * the bot's answer shows up like any other.
      */
-    suspend fun sendToBot(profile: String, storedSessionId: String, text: String) {
+    suspend fun sendToBot(profile: String, storedSessionId: String, text: String) = sendToChat(profile, storedSessionId, text)
+
+    /**
+     * Sends [text] to the stored chat [storedSessionId] in [profile] (null: the gateway's launch profile) without
+     * opening it in the app: attached on this socket and the prompt submitted.
+     */
+    suspend fun sendToChat(profile: String?, storedSessionId: String, text: String) {
         val client = client()
         val resumed = client.request(
             "session.resume",
             buildJsonObject {
                 put("session_id", storedSessionId)
-                put("profile", profile)
+                profile?.let { put("profile", it) }
                 put("source", CLIENT_SOURCE)
                 put("cols", TERMINAL_COLUMNS)
                 put("omit_messages", true)
             },
         ) as? JsonObject
-        val runtime = (resumed?.get("session_id") as? JsonPrimitive)?.contentOrNull ?: throw RpcException(0, "Couldn't open the bot's chat.")
+        val runtime = (resumed?.get("session_id") as? JsonPrimitive)?.contentOrNull ?: throw RpcException(0, "Couldn't open the chat.")
         client.request(
             "prompt.submit",
             buildJsonObject {

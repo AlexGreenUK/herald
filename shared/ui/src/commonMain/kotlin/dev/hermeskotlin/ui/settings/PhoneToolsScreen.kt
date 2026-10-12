@@ -38,6 +38,7 @@ import com.composables.icons.lucide.ExternalLink
 import com.composables.icons.lucide.Hourglass
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.MapPin
+import com.composables.icons.lucide.MapPinned
 import com.composables.icons.lucide.ShieldCheck
 import com.composables.icons.lucide.Smartphone
 import com.composables.icons.lucide.Trash2
@@ -51,6 +52,8 @@ import dev.hermeskotlin.core.phone.PhoneTool
 import dev.hermeskotlin.core.phone.PhoneToolUse
 import dev.hermeskotlin.core.phone.PhoneToolsStatus
 import dev.hermeskotlin.core.phone.PhoneToolsStatus.State
+import dev.hermeskotlin.core.phone.WatchedPlace
+import androidx.compose.ui.text.style.TextOverflow
 import dev.hermeskotlin.core.phone.enabledPhoneTools
 import dev.hermeskotlin.core.push.KnownPhone
 import dev.hermeskotlin.core.settings.AppSettings
@@ -81,10 +84,13 @@ fun PhoneToolsScreen(onBack: () -> Unit, viewModel: PhoneToolsViewModel = koinVi
     val status by viewModel.status.collectAsStateWithLifecycle()
     val recent by viewModel.recent.collectAsStateWithLifecycle()
     val phones by viewModel.phones.collectAsStateWithLifecycle()
+    val places by viewModel.places.collectAsStateWithLifecycle()
     val access = rememberPhoneToolAccess()
     PlatformBackHandler(enabled = true, onBack = onBack)
     // Other phones change the list (a new one reports, one is used): fresh each time the page opens.
     LaunchedEffect(Unit) { viewModel.refreshPhones() }
+    // A new access is made each time the user comes back (maybe from granting location): arm the places again.
+    LaunchedEffect(access) { viewModel.refreshPlaces() }
     PhoneToolsView(
         settings = settings,
         status = status,
@@ -105,6 +111,8 @@ fun PhoneToolsScreen(onBack: () -> Unit, viewModel: PhoneToolsViewModel = koinVi
         onAllow = access::request,
         optional = access::optional,
         onAllowOptional = access::requestOptional,
+        places = places,
+        onRemovePlace = viewModel::removePlace,
     )
 }
 
@@ -126,6 +134,8 @@ internal fun PhoneToolsView(
     onAllow: (PhoneTool) -> Unit = {},
     optional: (PhoneTool) -> String? = { null },
     onAllowOptional: (PhoneTool) -> Unit = {},
+    places: List<WatchedPlace> = emptyList(),
+    onRemovePlace: (String) -> Unit = {},
     nowMillis: Long = Clock.System.now().toEpochMilliseconds(),
 ) {
     var removing by remember { mutableStateOf<KnownPhone?>(null) }
@@ -238,6 +248,28 @@ internal fun PhoneToolsView(
                         }
                     }
                 }
+                // Listed even with the tool off, so the user sees what would fire if it went back on.
+                if (places.isNotEmpty()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Section("Watched places") {
+                            places.forEachIndexed { i, place ->
+                                if (i > 0) Divider()
+                                PlaceRow(place, onRemove = { onRemovePlace(place.id) })
+                            }
+                        }
+                        Text(
+                            if (PhoneTool.Geofences in settings.enabledPhoneTools()) {
+                                "Android checks every few minutes, so a message can come a little late. It's sent as you, " +
+                                    "marked as coming from the place."
+                            } else {
+                                "Watched places is off, so none of these fire."
+                            },
+                            style = Theme[typography][bodySmall],
+                            color = Theme[colors][textTertiary],
+                            modifier = Modifier.padding(horizontal = 6.dp),
+                        )
+                    }
+                }
                 if (recent.isNotEmpty()) {
                     Section("Used lately") {
                         recent.forEachIndexed { i, use ->
@@ -301,6 +333,31 @@ private fun PhoneRow(
             // This phone goes away by turning phone tools off; removing it here would only last until its next report.
             if (!phone.me) IconButton(Lucide.Trash2, "Remove ${phone.name}", onClick = onRemove, iconSize = 18.dp)
         }
+    }
+}
+
+/** A place the phone watches: what fires it, the message it sends, and a remove button. Removing needs no question. */
+@Composable
+private fun PlaceRow(place: WatchedPlace, onRemove: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(start = 14.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconTile(Lucide.MapPinned)
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            val event = if (place.arriving) "Arriving at" else "Leaving"
+            Text("$event ${place.name} · ${place.radiusMeters} m", style = Theme[typography][body], color = Theme[colors][text])
+            val chat = place.chatTitle?.takeIf { it.isNotBlank() }?.let { " to $it" }.orEmpty()
+            Text(
+                "Sends$chat: ${place.message}",
+                style = Theme[typography][bodySmall],
+                color = Theme[colors][textTertiary],
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        IconButton(Lucide.Trash2, "Stop watching ${place.name}", onClick = onRemove, iconSize = 18.dp)
     }
 }
 
@@ -383,4 +440,5 @@ internal val PhoneTool.icon: ImageVector
         PhoneTool.Open -> Lucide.ExternalLink
         PhoneTool.Clipboard -> Lucide.ClipboardCopy
         PhoneTool.Location -> Lucide.MapPin
+        PhoneTool.Geofences -> Lucide.MapPinned
     }

@@ -21,6 +21,14 @@ internal fun JsonObject.int(name: String): Int? {
     return value.content.toIntOrNull() ?: throw PhoneToolException("$name must be a whole number.")
 }
 
+/** The agent's [name] argument as a number; null when left out. */
+internal fun JsonObject.double(name: String): Double? {
+    val value = get(name)
+    if (value == null || value == JsonNull) return null
+    if (value !is JsonPrimitive || value.isString) throw PhoneToolException("$name must be a number.")
+    return value.content.toDoubleOrNull()?.takeIf { it.isFinite() } ?: throw PhoneToolException("$name must be a number.")
+}
+
 /** The agent's [name] argument as true or false; null when left out. */
 internal fun JsonObject.boolean(name: String): Boolean? {
     val value = get(name)

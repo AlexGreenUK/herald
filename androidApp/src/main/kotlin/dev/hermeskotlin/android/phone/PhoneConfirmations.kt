@@ -130,6 +130,29 @@ class PhoneConfirmations(private val context: Context) {
         }
     }
 
+    /**
+     * Tells the user something a tool did on its own (a watched place fired), on the same channel; a tap opens Herald.
+     * Not a question: nothing waits for it.
+     */
+    @SuppressLint("MissingPermission") // Without the permission Android drops it, which is all that can be done.
+    fun tell(id: String, title: String, text: String) {
+        createChannel()
+        val open = context.packageManager.getLaunchIntentForPackage(context.packageName)?.let {
+            PendingIntent.getActivity(context, id.hashCode(), it, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        }
+        val notification = NotificationCompat.Builder(context, CHANNEL)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setColor(ContextCompat.getColor(context, R.color.notification_accent))
+            .setContentTitle(title)
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
+            .setContentIntent(open)
+            .setAutoCancel(true)
+            .build()
+        runCatching { manager.notify(NOTE_TAG, id.hashCode(), notification) }
+    }
+
     @SuppressLint("MissingPermission") // cantAsk checks it.
     private fun post(id: Int, key: String, title: String, what: String): Boolean {
         val allow = PendingIntent.getActivity(
@@ -162,6 +185,7 @@ class PhoneConfirmations(private val context: Context) {
     companion object {
         private const val CHANNEL = "phone_tools"
         private const val TAG = "phone_tool"
+        private const val NOTE_TAG = "phone_tool_note"
 
         /** The question's title for a change to the phone's own settings. */
         const val CHANGE = "The agent wants to change your phone"

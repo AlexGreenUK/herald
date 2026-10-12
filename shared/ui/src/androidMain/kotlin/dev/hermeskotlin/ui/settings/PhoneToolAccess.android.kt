@@ -23,6 +23,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import androidx.core.content.edit
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import dev.hermeskotlin.core.phone.PhoneTool
@@ -44,14 +45,22 @@ private class AndroidPhoneToolAccess(private val context: Context, private val a
         tool == PhoneTool.Sound && !policyAccess() -> "Allow Herald to change Do Not Disturb."
         tool == PhoneTool.ScreenTime && !usageAccess() -> "Give Herald Usage access, to see which apps you use."
         tool == PhoneTool.Location && !granted(FINE) && !granted(COARSE) -> "Allow Herald to use this phone's location."
+        tool == PhoneTool.Geofences && !granted(FINE) -> "Allow precise location: Android only watches places with it."
+        tool == PhoneTool.Geofences && needsBackground() ->
+            "Allow location all the time: places are watched while Herald is closed. Choose \"Allow all the time\"."
         else -> null
     }
+
+    private fun needsBackground() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !granted(BACKGROUND)
 
     override fun request(tool: PhoneTool) {
         when {
             tool in ASKS && !notificationsOn() -> requestNotifications()
             // Both, so the prompt offers precise or approximate: the user picks.
             tool == PhoneTool.Location && !granted(FINE) && !granted(COARSE) -> prompt(FINE, COARSE)
+            // Precise first: Android only offers "all the time" once Herald has location while in use.
+            tool == PhoneTool.Geofences && !granted(FINE) -> prompt(FINE, COARSE)
+            tool == PhoneTool.Geofences && needsBackground() -> prompt(BACKGROUND)
             tool == PhoneTool.Sound && !policyAccess() -> open(Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS))
             tool == PhoneTool.ScreenTime && !usageAccess() -> {
                 // Herald's own switch where Android has a page for it (10 and later), else the list of apps.
@@ -82,7 +91,7 @@ private class AndroidPhoneToolAccess(private val context: Context, private val a
         val store = context.getSharedPreferences(ASKED_STORE, Context.MODE_PRIVATE)
         val asked = store.getStringSet(ASKED, emptySet()).orEmpty()
         if (activity == null || first !in asked || ActivityCompat.shouldShowRequestPermissionRationale(activity, first)) {
-            store.edit().putStringSet(ASKED, asked + first).apply()
+            store.edit { putStringSet(ASKED, asked + first) }
             ask(arrayOf(*permissions))
         } else {
             open(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).setData(Uri.fromParts("package", context.packageName, null)))
@@ -135,7 +144,7 @@ private class AndroidPhoneToolAccess(private val context: Context, private val a
 
     private companion object {
         /** Tools that ask before changing the phone, in a notification on this channel (PhoneConfirmations). */
-        val ASKS = setOf(PhoneTool.Sound, PhoneTool.Alarms, PhoneTool.Open, PhoneTool.Clipboard)
+        val ASKS = setOf(PhoneTool.Sound, PhoneTool.Alarms, PhoneTool.Open, PhoneTool.Clipboard, PhoneTool.Geofences)
         const val CHANNEL = "phone_tools"
         const val FINE = Manifest.permission.ACCESS_FINE_LOCATION
         const val COARSE = Manifest.permission.ACCESS_COARSE_LOCATION
