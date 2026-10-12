@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.provider.AlarmClock
 import dev.hermeskotlin.core.phone.PhoneToolException
+import dev.hermeskotlin.core.phone.hidden
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -106,6 +107,9 @@ internal class AlarmTool(private val context: Context, private val confirmations
     private fun label(args: JsonObject): String? =
         args.string("label")?.trim()?.takeIf { it.isNotEmpty() }?.also {
             if (it.codePointCount(0, it.length) > 80) throw PhoneToolException("label is at most 80 characters.")
+            // It sits in quotes in the question: it mustn't close them, break the line or hide anything.
+            if (hidden(it, newlines = false)) throw PhoneToolException("label has hidden characters, line breaks or odd spaces in it.")
+            if ('"' in it) throw PhoneToolException("label can't have \" in it.")
         }
 
     private fun length(seconds: Int): String {
