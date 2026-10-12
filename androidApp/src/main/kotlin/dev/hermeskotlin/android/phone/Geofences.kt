@@ -46,6 +46,9 @@ class Geofences(private val context: Context, private val settings: SettingsStor
      */
     suspend fun enabled(): Boolean = PhoneTool.Geofences in settings.settings.filterNotNull().first().enabledPhoneTools()
 
+    /** Whether the Location tool is on: only then may adding a place tell the agent where the phone is. */
+    suspend fun locationOn(): Boolean = PhoneTool.Location in settings.settings.filterNotNull().first().enabledPhoneTools()
+
     /** Records where the phone is for [id]; true when that's news (see [WatchedPlace.inside]). */
     fun moved(id: String, entering: Boolean): Boolean = synchronized(this) {
         val place = find(id) ?: return false
@@ -92,7 +95,8 @@ class Geofences(private val context: Context, private val settings: SettingsStor
     @SuppressLint("MissingPermission") // allowed() checks it first.
     private fun arm(places: List<WatchedPlace>) = synchronized(this) {
         val manager = context.getSystemService(LocationManager::class.java) ?: return
-        (armed - places.map { it.id }.toSet()).forEach(::disarm)
+        // Every kept place too, not only those armed in this process: Android may still hold alerts from an earlier one.
+        (armed + _places.value.map { it.id } - places.map { it.id }.toSet()).forEach(::disarm)
         if (!allowed()) return
         for (place in places) {
             try {
