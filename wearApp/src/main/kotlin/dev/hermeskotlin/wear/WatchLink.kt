@@ -5,6 +5,8 @@ import androidx.wear.tiles.TileService
 import com.google.android.gms.wearable.CapabilityClient
 import com.google.android.gms.wearable.Wearable
 import dev.hermeskotlin.wearlink.CALL_EVENT_TYPES
+import dev.hermeskotlin.wearlink.CALL_GAP_MS
+import dev.hermeskotlin.wearlink.InOrder
 import dev.hermeskotlin.wearlink.CallEnd
 import dev.hermeskotlin.wearlink.CallEvents
 import dev.hermeskotlin.wearlink.CallPhase
@@ -139,9 +141,9 @@ class WatchLink(
     private var watchCall: WatchCall? = null
     private var callJob: Job? = null
     private var callUpdateSeq = 0
-    private var callSendSeq = 0
     private var callEventsSeq = 0
-    private val earlySends = mutableMapOf<Int, CallEvents>()
+    private var callSends = InOrder<CallEvents> {}
+    private var callSendGap: Job? = null
 
     private var watchdog: Job? = null
 
@@ -202,9 +204,8 @@ class WatchLink(
         quiet()
         val id = UUID.randomUUID().toString()
         callUpdateSeq = 0
-        callSendSeq = 0
         callEventsSeq = 0
-        earlySends.clear()
+        callSends = InOrder { batch -> watchCall?.let { call -> batch.events.forEach(call::send) } }
         _turn.value = null
         _call.value = WatchCallState(id, CallStage.Starting)
         callJob = scope.launch(main) {
@@ -284,12 +285,14 @@ class WatchLink(
     }
 
     private fun finishCall(id: String, error: String?) {
-        if (_call.value?.id != id) return
+        // Once: a call already over keeps how it ended, not what failed in it after.
+        if (_call.value?.let { it.id == id && it.active } != true) return
         watchCall?.close()
         watchCall = null
         _call.update { if (it?.id == id) it.copy(stage = CallStage.Ended, error = error, speaking = false, level = 0f, thinking = false, working = null) else it }
         // Something went wrong: what the phone can do may have changed (live voice gone, signed out).
         if (error != null) refreshPhone()
+        callSendGap?.cancel()
         callJob?.cancel()
         callJob = null
     }
@@ -314,6 +317,8 @@ class WatchLink(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
+                    // Hung up meanwhile: the failure is only the call closing under it.
+                    if (_call.value?.let { it.id == now.id && it.active } != true) return@launch
                     send(WearPaths.CALL_END, WearJson.encode(CallEnd(now.id)))
                     finishCall(now.id, e.message ?: "The call didn't connect.")
                 }
@@ -335,15 +340,14 @@ class WatchLink(
     /** What Herald says to the voice model, in the order it was said, though messages may overtake each other. */
     private fun onCallSend(events: CallEvents) {
         val now = _call.value ?: return
-        if (events.callId != now.id || !now.active || events.seq <= callSendSeq) return
-        val call = watchCall ?: return
-        earlySends[events.seq] = events
-        // One missing for a while: what came after it goes on without it.
-        if (earlySends.size > MAX_EARLY) callSendSeq = earlySends.keys.min() - 1
-        while (true) {
-            val next = earlySends.remove(callSendSeq + 1) ?: break
-            callSendSeq = next.seq
-            next.events.forEach(call::send)
+        if (events.callId != now.id || !now.active) return
+        val order = callSends
+        order.add(events.seq, events)
+        if (order.waiting && callSendGap?.isActive != true) {
+            callSendGap = scope.launch(main) {
+                delay(CALL_GAP_MS)
+                order.skipGap()
+            }
         }
     }
 
@@ -484,7 +488,6 @@ class WatchLink(
         /** The phone gives up on a call after 30 s without a word from the watch. */
         private const val HEARTBEAT_MS = 10_000L
         private const val DROP_GRACE_MS = 2_000L
-        private const val MAX_EARLY = 4
     }
 }
 

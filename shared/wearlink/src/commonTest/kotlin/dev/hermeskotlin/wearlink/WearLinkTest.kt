@@ -76,6 +76,25 @@ class WearLinkTest {
     }
 
     @Test
+    fun aCallsBatchesComeOutInOrderAndALostOneHoldsThemOnlyUntilSkipped() {
+        val out = mutableListOf<String>()
+        val order = InOrder<String> { out += it }
+        order.add(2, "b")
+        assertTrue(order.waiting)
+        assertEquals(emptyList<String>(), out)
+        order.add(1, "a")
+        order.add(1, "a again")
+        assertEquals(listOf("a", "b"), out)
+        assertFalse(order.waiting)
+        order.add(5, "e")
+        order.add(4, "d")
+        order.skipGap()
+        order.add(3, "too late")
+        order.add(6, "f")
+        assertEquals(listOf("a", "b", "d", "e", "f"), out)
+    }
+
+    @Test
     fun longRepliesAreCutAtAWordToFitAMessage() {
         assertEquals("short", clipForWatch("short"))
         val clipped = clipForWatch("word ".repeat(100), max = 40)

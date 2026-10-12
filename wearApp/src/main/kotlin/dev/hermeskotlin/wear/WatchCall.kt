@@ -56,6 +56,8 @@ class WatchCall(context: Context) {
     private var routed = false
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private val waiting = ArrayDeque<String>()
+    // Guards the native objects against close(), which frees them. No WebRTC callback may take it: close() holds it
+    // while peer.close() waits on WebRTC's threads, so one blocked here would deadlock (flush() goes off-thread).
     private val lock = Any()
     private var answered = false
 
@@ -249,7 +251,8 @@ class WatchCall(context: Context) {
         val callback = object : ConnectivityManager.NetworkCallback() {
             // Never after the call: binding then would hold the whole app on this network.
             override fun onAvailable(network: Network) = synchronized(lock) {
-                if (!closed && connectivity.bindProcessToNetwork(network)) got.complete(network)
+                // Still the call's request: one let go at the timeout may yet call back.
+                if (!closed && networkCallback === this && connectivity.bindProcessToNetwork(network)) got.complete(network)
             }
 
             override fun onLost(network: Network) = synchronized(lock) {

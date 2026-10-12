@@ -209,9 +209,14 @@ class WatchRelay(
             is ApiResult.Success -> result.value.live
             else -> known?.takeIf { it.first == gateway }?.second ?: false
         }
+        liveVoiceIs(gateway, on)
+        return on
+    }
+
+    /** What a call just found out of [gateway]'s live voice, so the watch is told it next, not minutes on. */
+    fun liveVoiceIs(gateway: GatewayUrl, on: Boolean) {
         liveVoice = gateway to on
         liveVoiceAt = Clock.System.now().toEpochMilliseconds()
-        return on
     }
 
     /**

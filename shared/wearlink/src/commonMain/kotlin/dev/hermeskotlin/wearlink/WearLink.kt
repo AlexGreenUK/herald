@@ -298,6 +298,44 @@ object WearJson {
     }
 }
 
+/**
+ * Puts a call's numbered batches ([CallEvents.seq], from 1) back in the order they were sent, since messages may
+ * overtake each other: each goes to [deliver] once all before it have. A batch that never comes (its message
+ * failed) holds the rest only until [skipGap], which the caller runs a moment after [waiting] turns true.
+ * Not thread-safe: one thread uses it.
+ */
+class InOrder<T>(private val deliver: (T) -> Unit) {
+    private var last = 0
+    private val early = mutableMapOf<Int, T>()
+
+    /** Some came early, and wait for one missing. */
+    val waiting: Boolean get() = early.isNotEmpty()
+
+    fun add(seq: Int, item: T) {
+        if (seq <= last || seq in early) return
+        early[seq] = item
+        drain()
+    }
+
+    /** Gives up on what's missing: the batches waiting go on without it. */
+    fun skipGap() {
+        if (early.isEmpty()) return
+        last = early.keys.min() - 1
+        drain()
+    }
+
+    private fun drain() {
+        while (true) {
+            val next = early.remove(last + 1) ?: return
+            last++
+            deliver(next)
+        }
+    }
+}
+
+/** How long a call's batches wait for one that's missing before going on without it. */
+const val CALL_GAP_MS = 1_500L
+
 /** The most of a reply one message carries; the Data Layer refuses a message much over 100 KB. */
 const val MAX_WATCH_TEXT = 24_000
 

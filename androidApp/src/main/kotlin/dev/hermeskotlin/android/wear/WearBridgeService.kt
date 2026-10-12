@@ -48,7 +48,7 @@ class WearBridgeService : WearableListenerService() {
                 calls.start(node, it)
                 keepUp()
             }
-            WearPaths.CALL_EVENTS -> WearJson.decode<CallEvents>(event.data)?.let(calls::events)
+            WearPaths.CALL_EVENTS -> WearJson.decode<CallEvents>(event.data)?.let { calls.events(node, it) }
             WearPaths.CALL_END -> WearJson.decode<CallEnd>(event.data)?.let(calls::end)
             WearPaths.CHATS -> relay.chats(node)
             WearPaths.STATUS -> relay.status(node)

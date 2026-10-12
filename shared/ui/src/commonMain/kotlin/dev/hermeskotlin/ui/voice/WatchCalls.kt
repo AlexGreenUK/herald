@@ -8,11 +8,13 @@ import dev.hermeskotlin.core.wear.WatchOutbox
 import dev.hermeskotlin.core.wear.WatchRelay
 import dev.hermeskotlin.core.wear.contextPercentOf
 import dev.hermeskotlin.core.wear.modelOf
+import dev.hermeskotlin.wearlink.CALL_GAP_MS
 import dev.hermeskotlin.wearlink.CallEnd
 import dev.hermeskotlin.wearlink.CallEvents
 import dev.hermeskotlin.wearlink.CallPhase
 import dev.hermeskotlin.wearlink.CallStart
 import dev.hermeskotlin.wearlink.CallUpdate
+import dev.hermeskotlin.wearlink.InOrder
 import dev.hermeskotlin.wearlink.WearJson
 import dev.hermeskotlin.wearlink.WearPaths
 import kotlinx.coroutines.CancellationException
@@ -81,9 +83,20 @@ class WatchCalls(
         }
     }
 
-    /** The voice model's events of a call as the watch got them, or (empty) that the watch is still there. */
-    fun events(events: CallEvents) {
-        scope.launch { call?.takeIf { it.id == events.callId }?.received(events) }
+    /**
+     * The voice model's events of a call as the watch got them, or (empty) that the watch is still there. A call
+     * that's over here (the watch went quiet too long, Herald restarted) is told over, so the watch hangs up too.
+     */
+    fun events(node: String, events: CallEvents) {
+        scope.launch {
+            val held = call?.takeIf { it.id == events.callId }
+            if (held != null) {
+                held.received(events)
+            } else {
+                val over = CallUpdate(events.callId, CallPhase.Ended, seq = Int.MAX_VALUE, error = CALL_LOST)
+                outbox.sendSafely(node, WearPaths.CALL_UPDATE, WearJson.encode(over))
+            }
+        }
     }
 
     /** Hung up on the watch. */
@@ -99,7 +112,7 @@ class WatchCalls(
         suspend fun tell(update: CallUpdate) {
             telling.withLock {
                 last = update.copy(seq = ++seq)
-                held.sent(outbox.sendSafely(node, WearPaths.CALL_UPDATE, WearJson.encode(last)))
+                outbox.sendSafely(node, WearPaths.CALL_UPDATE, WearJson.encode(last))
             }
         }
         suspend fun end(error: String?) = tell(last.copy(phase = CallPhase.Ended, answerSdp = null, error = error, thinking = false, working = null))
@@ -109,8 +122,14 @@ class WatchCalls(
             is CallChat.Failed -> return end(found.message)
             is CallChat.Ready -> found
         }
-        val status = audio.voiceLiveStatus(chat.gateway, chat.profile)
-        if (status !is ApiResult.Success || !status.value.live) return end(NOT_LIVE)
+        if (held.over) return
+        when (val status = audio.voiceLiveStatus(chat.gateway, chat.profile)) {
+            is ApiResult.Success -> {
+                relay.liveVoiceIs(chat.gateway, status.value.live)
+                if (!status.value.live) return end(NOT_LIVE)
+            }
+            else -> return end(liveFailure(status))
+        }
         if (held.over) return
 
         val voice = MutableStateFlow(VoiceChatState(VoicePhase.Connecting, live = true))
@@ -121,7 +140,6 @@ class WatchCalls(
             tell(last.copy(phase = CallPhase.Live, answerSdp = sdp))
         }
         // What the watch shows of the call, a few times a second at most: the captions, Hermes at work, the chat.
-        // The answer goes again with each until the watch's first events say it arrived.
         val forward = scope.launch {
             var heldChat: String? = null
             combine(voice, chat.session.state) { v, s ->
@@ -150,6 +168,15 @@ class WatchCalls(
                 delay(UPDATE_EVERY_MS)
             }
         }
+        // The answer goes again until the call's first events say the watch has it: a lost one would leave the
+        // watch "Live" on a call that never connects.
+        val answering = scope.launch {
+            while (!held.heard) {
+                delay(ANSWER_AGAIN_MS)
+                val sdp = answer
+                if (sdp != null && !held.heard && last.phase == CallPhase.Live) tell(last.copy(answerSdp = sdp))
+            }
+        }
         val watching = scope.launch { held.watch() }
         val error = try {
             conversation.run {
@@ -163,31 +190,38 @@ class WatchCalls(
         } finally {
             withContext(NonCancellable) {
                 watching.cancel()
+                answering.cancel()
                 forward.cancelAndJoin()
             }
         }
-        // Hung up on the watch, or the watch is gone: nothing to tell. Otherwise ("stop" said, the call dropped) it's told.
-        if (!held.over) end(error)
+        // Hung up on the watch: nothing to tell. Otherwise ("stop" said, the call dropped, the watch gone quiet)
+        // it's told, in case it's still there.
+        if (!held.hungUp) end(if (held.lost) CALL_LOST else error)
     }
 
     /** The watch's call as [LiveConversation] sees it: the model's events come from the watch, and go back to it. */
     private inner class WatchHeldCall(val id: String, private val node: String, private val offer: String) : LiveCall {
         var onAnswer: (suspend (String) -> Unit)? = null
 
-        /** Hung up on the watch, or the watch stopped answering. */
-        var over = false
+        /** Hung up on the watch. */
+        var hungUp = false
             private set
 
-        /** Something came from the watch since the answer went: it has it. */
+        /** The watch stopped saying it's there. */
+        var lost = false
+            private set
+
+        val over: Boolean get() = hungUp || lost
+
+        /** The call's events have come from the watch: it has the answer, the call is through. */
         var heard = false
             private set
 
         private val incoming = Channel<String>(Channel.UNLIMITED)
         override val events: ReceiveChannel<String> = incoming
-        private var lastIn = 0
-        private val early = mutableMapOf<Int, CallEvents>()
+        private val order = InOrder<CallEvents> { batch -> batch.events.forEach { incoming.trySend(it) } }
+        private var gap: Job? = null
         private var heardAt = TimeSource.Monotonic.markNow()
-        private var failedSends = 0
         private val outgoing = Channel<String>(Channel.UNLIMITED)
 
         override suspend fun connect(answer: suspend (offerSdp: String) -> String) {
@@ -196,39 +230,34 @@ class WatchCalls(
             scope.launch { sendBatches() }
         }
 
-        /** A batch from the watch, put back in order if it overtook another. */
+        /** A batch from the watch, put back in order if it overtook another. Empty, it only says the watch is there. */
         fun received(batch: CallEvents) {
             heardAt = TimeSource.Monotonic.markNow()
-            heard = true
-            if (batch.seq <= lastIn) return
-            early[batch.seq] = batch
-            // One missing for a while: what came after it goes on without it.
-            if (early.size > MAX_EARLY) lastIn = early.keys.min() - 1
-            while (true) {
-                val next = early.remove(lastIn + 1) ?: break
-                lastIn = next.seq
-                next.events.forEach { incoming.trySend(it) }
-            }
-        }
-
-        fun hungUp() {
-            over = true
-            incoming.close()
-        }
-
-        /** Ends the call once the watch has said nothing for a while, or messages to it keep failing. */
-        suspend fun watch() {
-            while (true) {
-                delay(WATCH_CHECK_MS)
-                if (heardAt.elapsedNow().inWholeMilliseconds > WATCH_QUIET_MS || failedSends >= MAX_FAILED_SENDS) {
-                    hungUp()
-                    return
+            if (batch.events.isNotEmpty()) heard = true
+            order.add(batch.seq, batch)
+            if (order.waiting && gap?.isActive != true) {
+                gap = scope.launch {
+                    delay(CALL_GAP_MS)
+                    order.skipGap()
                 }
             }
         }
 
-        fun sent(ok: Boolean) {
-            failedSends = if (ok) 0 else failedSends + 1
+        fun hungUp() {
+            hungUp = true
+            incoming.close()
+        }
+
+        /** Ends the call once the watch has said nothing for a while. */
+        suspend fun watch() {
+            while (true) {
+                delay(WATCH_CHECK_MS)
+                if (heardAt.elapsedNow().inWholeMilliseconds > WATCH_QUIET_MS) {
+                    lost = true
+                    incoming.close()
+                    return
+                }
+            }
         }
 
         override fun send(event: String): Boolean = outgoing.trySend(event).isSuccess
@@ -241,7 +270,7 @@ class WatchCalls(
                 delay(SEND_GATHER_MS)
                 val batch = mutableListOf(first)
                 while (true) batch += outgoing.tryReceive().getOrNull() ?: break
-                sent(outbox.sendSafely(node, WearPaths.CALL_SEND, WearJson.encode(CallEvents(id, ++seq, batch))))
+                outbox.sendSafely(node, WearPaths.CALL_SEND, WearJson.encode(CallEvents(id, ++seq, batch)))
             }
         }
 
@@ -255,6 +284,7 @@ class WatchCalls(
 
         override fun close() {
             incoming.close()
+            gap?.cancel()
             // The close command LiveConversation sends last still goes, then the sender stops.
             outgoing.close()
         }
@@ -282,13 +312,13 @@ class WatchCalls(
 
     companion object {
         const val NOT_LIVE = "Live voice isn't set up on your gateway any more. Tap to ask one question at a time."
+        const val CALL_LOST = "Herald on your phone lost the call."
         private const val UPDATE_EVERY_MS = 250L
+        private const val ANSWER_AGAIN_MS = 1_500L
         private const val SEND_GATHER_MS = 60L
         private const val WATCH_CHECK_MS = 5_000L
 
         /** The watch says it's there every 10 s; three missed and it's gone. */
         private const val WATCH_QUIET_MS = 30_000L
-        private const val MAX_FAILED_SENDS = 3
-        private const val MAX_EARLY = 4
     }
 }
