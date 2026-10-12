@@ -114,7 +114,8 @@ internal fun PhoneToolsView(
             ) {
                 Text(
                     "Let the agent use this phone: read how it is, or do something on it. Every tool is off until you " +
-                        "turn it on, and anything that changes the phone asks you first, in a notification. A tool you " +
+                        "turn it on, and anything that changes the phone asks you first: in Herald while it's open, else " +
+                        "in a notification. A tool you " +
                         "turn off is taken away from the agent at once.",
                     style = Theme[typography][bodySmall],
                     color = Theme[colors][textTertiary],
