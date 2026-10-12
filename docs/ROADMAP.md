@@ -267,7 +267,7 @@ Agent tools that run on the phone: a gateway plugin registers them, Herald answe
 - [x] Open URLs, maps, apps or the share sheet (after Allow; a link's real site is shown first, lookalike and hidden-character links refused)
 - [x] Write to the clipboard (after Allow; up to 300 characters, all shown in the question; hidden characters refused; the clipboard is never read)
 - [x] Location (Android's own location service, no Google services; precise or approximate as the user allows; while Herald is open, or also while closed if the user allows that from its own row)
-- [ ] Geofences ("when I get home…")
+- [x] Geofences ("when I get home…"): watched places on Android's own proximity alerts; adding asks first; arriving or leaving sends the message to the chat it was added from, marked as coming from the place; listed and removable in Settings → Phone tools
 - [ ] Calendar (read, add, move events)
 - [ ] Contacts lookup
 - [ ] Health data (steps, sleep, heart rate; Health Connect)
