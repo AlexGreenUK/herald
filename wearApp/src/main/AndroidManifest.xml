@@ -6,6 +6,13 @@
     <!-- When the watch has no speech recognizer of its own, it records and the gateway transcribes. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
+    <!-- A live voice call goes from the watch straight to the voice model, over Wi-Fi or mobile data when there is
+         some (it asks for them), the call's audio routed as a call. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+
     <!-- The watch's own speech recognizer, used first; apps are hidden from Herald unless it says which it looks up. -->
     <queries>
         <intent>

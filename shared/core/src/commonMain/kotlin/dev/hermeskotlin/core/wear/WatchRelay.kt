@@ -51,6 +51,12 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.concurrent.atomics.AtomicBoolean
+import kotlin.concurrent.atomics.AtomicInt
+import kotlin.concurrent.atomics.ExperimentalAtomicApi
+import kotlin.concurrent.atomics.incrementAndFetch
+import kotlin.concurrent.atomics.updateAndFetch
+import kotlin.time.Clock
 
 /** How the relay reaches the watch: the platform's Data Layer, or a fake in tests. */
 interface WatchOutbox {
@@ -71,6 +77,7 @@ interface WatchOutbox {
  * One ask is followed at a time: a new one takes over the updates and the voice, and its words reach the
  * running turn the way a prompt sent mid-turn does.
  */
+@OptIn(ExperimentalAtomicApi::class)
 class WatchRelay(
     private val gateways: GatewayRepository,
     private val auth: AuthApi,
@@ -86,8 +93,31 @@ class WatchRelay(
 
     private val _busy = MutableStateFlow(false)
 
-    /** A watch ask is being answered or read aloud; the app keeps its connection up meanwhile. */
+    /** A watch ask is being answered or read aloud, or a call is on; the app keeps its connection up meanwhile. */
     val busy: StateFlow<Boolean> = _busy.asStateFlow()
+
+    // Set at once, not through a flow: busy has to be true before the caller returns (see ask). Atomic, as the
+    // watch's messages arrive on their own thread. Calls are counted: a new one starts before the last has ended.
+    private val askingNow = AtomicBoolean(false)
+    private val calls = AtomicInt(0)
+    private var asking: Boolean
+        get() = askingNow.load()
+        set(value) {
+            askingNow.store(value)
+            refreshBusy()
+        }
+
+    /** Busy from both, checked again after writing: a write from another thread in between is then caught. */
+    private fun refreshBusy() {
+        while (true) {
+            val wanted = askingNow.load() || calls.load() > 0
+            _busy.value = wanted
+            if (wanted == (askingNow.load() || calls.load() > 0)) return
+        }
+    }
+
+    private var liveVoice: Pair<GatewayUrl, Boolean>? = null
+    private var liveVoiceAt = 0L
 
     private val _session = MutableStateFlow<ChatSession?>(null)
 
@@ -108,33 +138,33 @@ class WatchRelay(
      * the app keep itself up, so nothing lets the connection go before [ask] or [expectedNothing].
      */
     fun expect() {
-        _busy.value = true
+        asking = true
     }
 
     /** What [expect] waited for never came: not busy, unless a turn is still being answered. */
     fun expectedNothing() {
         scope.launch {
-            turnLock.withLock { if (turn?.isActive != true) _busy.value = false }
+            turnLock.withLock { if (turn?.isActive != true) asking = false }
         }
     }
 
     /** A typed or transcribed ask from the watch [node]; [recording] is its audio when it was spoken. */
     fun ask(node: String, ask: WatchAsk, recording: ByteArray? = null) {
         // Busy at once, before the caller returns: that is when Android still lets the app keep itself up.
-        _busy.value = true
+        asking = true
         scope.launch {
             turnLock.withLock {
                 // Joined, so the old turn's last update can't land after the new one's first.
                 turn?.cancelAndJoin()
                 releaseLater?.cancel()
                 turnAskId = ask.id
-                _busy.value = true
+                asking = true
                 turn = scope.launch {
                     try {
                         answer(node, ask, recording)
                     } finally {
                         if (turnAskId == ask.id) {
-                            _busy.value = false
+                            asking = false
                             releaseHeldChatLater()
                         }
                     }
@@ -149,7 +179,7 @@ class WatchRelay(
             val stopped = turnLock.withLock {
                 if (askId != turnAskId) return@withLock false
                 turn?.cancel()
-                _busy.value = false
+                asking = false
                 true
             }
             if (stopped) _session.value?.takeIf { it.state.value.running }?.interrupt()
@@ -163,9 +193,73 @@ class WatchRelay(
             val signedIn = saved != null && auth.hasStoredSession(saved.gatewayUrl) && state !is ConnectionState.SessionExpired
             // Idle counts: Herald connects when asked, it just holds no connection while in the background.
             val reachable = state is ConnectionState.Connected || state is ConnectionState.Idle
-            val status = PhoneStatus(signedIn, signedIn && reachable, failed = signedIn && state is ConnectionState.Failed)
+            val live = signedIn && saved != null && liveVoiceOn(saved.gatewayUrl)
+            val status = PhoneStatus(signedIn, signedIn && reachable, failed = signedIn && state is ConnectionState.Failed, liveVoice = live)
             outbox.sendSafely(node, WearPaths.STATUS, WearJson.encode(status))
         }
+    }
+
+    /** Whether the gateway talks live (GPT-Live), asked at most every few minutes: the watch asks how the phone stands often. */
+    private suspend fun liveVoiceOn(gateway: GatewayUrl): Boolean {
+        val known = liveVoice
+        if (known != null && known.first == gateway && Clock.System.now().toEpochMilliseconds() - liveVoiceAt < LIVE_VOICE_CHECK_MS) return known.second
+        val result = audio.voiceLiveStatus(gateway, profiles.get(gateway))
+        // A failed check keeps what was known: an older gateway answers 404, a dropped one nothing.
+        val on = when (result) {
+            is ApiResult.Success -> result.value.live
+            else -> known?.takeIf { it.first == gateway }?.second ?: false
+        }
+        liveVoiceIs(gateway, on)
+        return on
+    }
+
+    /** What a call just found out of [gateway]'s live voice, so the watch is told it next, not minutes on. */
+    fun liveVoiceIs(gateway: GatewayUrl, on: Boolean) {
+        liveVoice = gateway to on
+        liveVoiceAt = Clock.System.now().toEpochMilliseconds()
+    }
+
+    /**
+     * The watch's chat [chatId] (null: a new one) for a live call from the watch, once the gateway is connected and
+     * its history loaded (the call opens with it); else what went wrong, for the watch to say.
+     */
+    suspend fun chatForCall(chatId: String?): CallChat {
+        val saved = gateways.current()
+        if (saved == null || !auth.hasStoredSession(saved.gatewayUrl) || connection.state.value is ConnectionState.SessionExpired) {
+            return CallChat.Failed(SIGNED_OUT)
+        }
+        val gateway = saved.gatewayUrl
+        val profile = profiles.get(gateway)
+        connection.start(gateway)
+        if (withTimeoutOrNull(CONNECT_MS) { connection.state.first { it is ConnectionState.Connected } } == null) {
+            connection.retry()
+            return CallChat.Failed("Herald can't reach your gateway right now.")
+        }
+        val session = turnLock.withLock {
+            // A call takes over from an ask still being answered: one voice at a time.
+            turn?.cancelAndJoin()
+            sessionFor(gateway, profile, chatId)
+        }
+        withTimeoutOrNull(CONNECT_MS) { session.state.first { it.historyLoaded } }
+        return CallChat.Ready(session, gateway, profile)
+    }
+
+    /** A live call from the watch is on in [session]'s chat: the connection stays up, and its turns aren't notified. */
+    fun callStarted() {
+        calls.incrementAndFetch()
+        refreshBusy()
+        scope.launch { turnLock.withLock { releaseLater?.cancel() } }
+    }
+
+    /** The call's chat got its id (a new chat, with the first request), or kept it. */
+    fun callChat(storedId: String) {
+        scope.launch { turnLock.withLock { if (heldChat != storedId) holdChat(storedId) } }
+    }
+
+    fun callEnded() {
+        val left = calls.updateAndFetch { (it - 1).coerceAtLeast(0) }
+        refreshBusy()
+        if (left == 0) scope.launch { turnLock.withLock { releaseHeldChatLater() } }
     }
 
     /** The recent chats for the watch [node] to pick from, bot chats left out (they talk on their own). */
@@ -324,7 +418,7 @@ class WatchRelay(
         releaseLater = scope.launch {
             delay(RELEASE_AFTER_MS)
             turnLock.withLock {
-                if (heldChat == held && turn?.isActive != true) {
+                if (heldChat == held && turn?.isActive != true && calls.load() == 0) {
                     host.releaseSideChat(held)
                     heldChat = null
                 }
@@ -367,7 +461,14 @@ class WatchRelay(
         private const val TURN_START_MS = 15_000L
         private const val UPDATE_EVERY_MS = 400L
         private const val RELEASE_AFTER_MS = 30_000L
+        private const val LIVE_VOICE_CHECK_MS = 5 * 60_000L
     }
+}
+
+/** The watch's chat for a live call: [Ready] with what the call runs in, or [Failed] with why not. */
+sealed interface CallChat {
+    data class Ready(val session: ChatSession, val gateway: GatewayUrl, val profile: String?) : CallChat
+    data class Failed(val message: String) : CallChat
 }
 
 /** The turn as the watch shows it while it runs. */
@@ -382,10 +483,10 @@ internal data class TurnProgress(
 )
 
 /** The chat's model by the name people know it, for the watch's edge. */
-internal fun modelOf(state: ChatState): String? = state.model?.takeIf { it.isNotBlank() }?.let(::displayModelName)
+fun modelOf(state: ChatState): String? = state.model?.takeIf { it.isNotBlank() }?.let(::displayModelName)
 
 /** How full the context window is, 0–100: the gateway's own figure, else worked out from the tokens. */
-internal fun contextPercentOf(state: ChatState): Int? {
+fun contextPercentOf(state: ChatState): Int? {
     val usage = state.usage ?: return null
     usage.contextPercent?.let { return it.coerceIn(0, 100) }
     val used = usage.contextUsed ?: return null

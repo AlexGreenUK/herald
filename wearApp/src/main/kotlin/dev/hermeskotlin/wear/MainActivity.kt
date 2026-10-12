@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.speech.RecognizerIntent
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -41,7 +42,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private val microphone = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) record() else listening.value = Listening(error = "Herald needs the microphone to hear you.")
+        if (granted) record() else listening.value = Listening(error = NEEDS_MICROPHONE)
+    }
+
+    private val callMicrophone = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) app.link.startCall() else listening.value = Listening(error = NEEDS_MICROPHONE)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -52,7 +57,7 @@ class MainActivity : ComponentActivity() {
                 store = app.store,
                 speech = app.speech,
                 listening = listening,
-                onMic = ::listen,
+                onMic = ::talk,
                 onFinishRecording = recorder::finish,
                 onDismissListeningError = { listening.value = Listening() },
             )
@@ -64,6 +69,13 @@ class MainActivity : ComponentActivity() {
                     app.link.refreshPhone()
                     delay(PHONE_CHECK_MS)
                 }
+            }
+        }
+        // A call keeps the screen on: with it off, the activity stops, and the call with it.
+        lifecycleScope.launch {
+            app.link.call.collect { call ->
+                if (call?.active == true) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             }
         }
         if (savedInstanceState == null) handle(intent)
@@ -80,14 +92,27 @@ class MainActivity : ComponentActivity() {
         val typed = if (BuildConfig.DEBUG) intent.getStringExtra(EXTRA_DEBUG_ASK) else null
         when {
             !typed.isNullOrBlank() -> app.link.ask(typed)
-            intent.getBooleanExtra(EXTRA_LISTEN, false) -> listen()
+            intent.getBooleanExtra(EXTRA_LISTEN, false) -> talk()
         }
     }
 
     override fun onStop() {
         super.onStop()
-        // Out of sight, a recording would go on hearing the room.
+        // Out of sight, a recording or a call would go on hearing the room.
         recordingJob?.cancel()
+        if (!isChangingConfigurations) app.link.endCall()
+    }
+
+    /** The mic: a live call when the gateway talks live and it's on, else listening for one ask. */
+    private fun talk() {
+        if (!(app.link.liveVoice.value && app.store.live.value)) return listen()
+        app.link.dismissCall()
+        listening.value = Listening()
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            app.link.startCall()
+        } else {
+            callMicrophone.launch(Manifest.permission.RECORD_AUDIO)
+        }
     }
 
     private fun listen() {
@@ -140,6 +165,7 @@ class MainActivity : ComponentActivity() {
         const val EXTRA_LISTEN = "listen"
         private const val EXTRA_DEBUG_ASK = "ask"
         private const val PHONE_CHECK_MS = 30_000L
+        private const val NEEDS_MICROPHONE = "Herald needs the microphone to hear you."
 
         /** For a PendingIntent, which starts it in its own task (it's singleTask) and to its onNewIntent when open. */
         fun listenIntent(context: Context): Intent = Intent(context, MainActivity::class.java).putExtra(EXTRA_LISTEN, true)

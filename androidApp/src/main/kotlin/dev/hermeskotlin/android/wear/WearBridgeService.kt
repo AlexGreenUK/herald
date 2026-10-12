@@ -6,6 +6,10 @@ import com.google.android.gms.wearable.Wearable
 import com.google.android.gms.wearable.WearableListenerService
 import dev.hermeskotlin.android.notify.ChatNotifier
 import dev.hermeskotlin.core.wear.WatchRelay
+import dev.hermeskotlin.ui.voice.WatchCalls
+import dev.hermeskotlin.wearlink.CallEnd
+import dev.hermeskotlin.wearlink.CallEvents
+import dev.hermeskotlin.wearlink.CallStart
 import dev.hermeskotlin.wearlink.RecordedAsk
 import dev.hermeskotlin.wearlink.WatchAsk
 import dev.hermeskotlin.wearlink.WatchStop
@@ -28,6 +32,7 @@ import java.io.ByteArrayOutputStream
 class WearBridgeService : WearableListenerService() {
 
     private val relay: WatchRelay by inject()
+    private val calls: WatchCalls by inject()
     private val scope: CoroutineScope by inject()
     private val notifier: ChatNotifier by inject()
 
@@ -39,6 +44,12 @@ class WearBridgeService : WearableListenerService() {
                 keepUp()
             }
             WearPaths.STOP -> WearJson.decode<WatchStop>(event.data)?.let { relay.stop(it.askId) }
+            WearPaths.CALL_START -> WearJson.decode<CallStart>(event.data)?.let {
+                calls.start(node, it)
+                keepUp()
+            }
+            WearPaths.CALL_EVENTS -> WearJson.decode<CallEvents>(event.data)?.let { calls.events(node, it) }
+            WearPaths.CALL_END -> WearJson.decode<CallEnd>(event.data)?.let(calls::end)
             WearPaths.CHATS -> relay.chats(node)
             WearPaths.STATUS -> relay.status(node)
         }

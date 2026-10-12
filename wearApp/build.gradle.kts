@@ -42,6 +42,9 @@ android {
         buildConfig = true
     }
 
+    // As androidApp: WebRTC's native libraries stay compressed, so the watch app downloads smaller.
+    packaging { jniLibs.useLegacyPackaging = true }
+
     lint {
         abortOnError = true
         warningsAsErrors = true
@@ -83,6 +86,8 @@ dependencies {
     implementation(libs.wear.protolayout)
     implementation(libs.wear.protolayout.material3)
     implementation(libs.wear.complications.data.source)
+    // Live voice calls, held on the watch.
+    implementation(libs.webrtc.android)
     implementation(libs.play.services.wearable)
     implementation(libs.kotlinx.coroutines.play.services)
     testImplementation(libs.kotlin.test.junit)
