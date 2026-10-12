@@ -19,7 +19,8 @@ android {
         minSdk = libs.versions.android.wear.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
         val (major, minor, patch) = appVersion.substringBefore('-').split('.').map { it.toInt() }.plus(listOf(0, 0)).take(3)
-        versionCode = major * 10_000 + minor * 100 + patch
+        // androidApp's code plus a million: Play takes each version code once per app, across phone and watch.
+        versionCode = 1_000_000 + major * 10_000 + minor * 100 + patch
         versionName = appVersion
     }
 

@@ -12,6 +12,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
@@ -79,7 +80,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun listen() {
-        app.speech.stop()
+        // Nothing of the last reply may play while the recognizer listens.
+        app.link.quiet()
         // The watch's speech recognizer, straight to listening: talking is what the mic is for.
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
             .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
@@ -106,6 +108,9 @@ class MainActivity : ComponentActivity() {
         recordingJob = lifecycleScope.launch {
             val audio = try {
                 recorder.record { level -> listening.value = listening.value.copy(level = level) }
+            } catch (e: CancellationException) {
+                // Left the screen: nothing to tell.
+                throw e
             } catch (e: Exception) {
                 listening.value = Listening(error = e.message ?: "Couldn't use the microphone.")
                 return@launch

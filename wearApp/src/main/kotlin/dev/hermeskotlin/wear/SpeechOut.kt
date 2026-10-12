@@ -6,6 +6,8 @@ import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.media.MediaPlayer
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -28,6 +30,9 @@ class SpeechOut(private val context: Context) {
     private var next = 0
     private var count = 0
     private var player: MediaPlayer? = null
+    private var playing: File? = null
+    private val main = Handler(Looper.getMainLooper())
+    private val giveUp = Runnable { stop() }
     private var tts: TextToSpeech? = null
     private var ttsReady = false
     private var pendingSay: String? = null
@@ -79,8 +84,11 @@ class SpeechOut(private val context: Context) {
     }
 
     fun stop() {
+        main.removeCallbacks(giveUp)
         player?.release()
         player = null
+        playing?.delete()
+        playing = null
         clips.values.forEach { it.delete() }
         clips.clear()
         next = 0
@@ -99,14 +107,24 @@ class SpeechOut(private val context: Context) {
 
     private fun pump() {
         if (player != null) return
-        val file = clips.remove(next) ?: return
+        main.removeCallbacks(giveUp)
+        val file = clips.remove(next)
+        if (file == null) {
+            // A clip lost on the way (or never made) would leave the reply "speaking" for good.
+            if (next < count) main.postDelayed(giveUp, CLIP_WITHIN_MS)
+            return
+        }
         _speaking.value = true
         val media = MediaPlayer()
         player = media
+        playing = file
         fun finished() {
             media.release()
             file.delete()
-            if (player === media) player = null
+            if (player === media) {
+                player = null
+                playing = null
+            }
             next++
             if (next >= count) _speaking.value = false else pump()
         }
@@ -159,6 +177,9 @@ class SpeechOut(private val context: Context) {
 
     private companion object {
         const val MAX_TTS_PIECE = 3_000
+
+        /** How long the next clip may take after the last one ended: the gateway makes one in a few seconds. */
+        const val CLIP_WITHIN_MS = 20_000L
         val AUDIBLE = setOf(
             AudioDeviceInfo.TYPE_BUILTIN_SPEAKER,
             AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,

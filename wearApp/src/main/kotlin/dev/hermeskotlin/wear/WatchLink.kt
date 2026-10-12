@@ -82,6 +82,9 @@ class WatchLink(
 
     private var watchdog: Job? = null
 
+    /** The ask whose voice was stopped here: its clips still arriving are dropped. */
+    @Volatile private var silenced: String? = null
+
     /** Sends what was said or typed; with [audio], the phone has the gateway transcribe it first. */
     fun ask(text: String?, audio: ByteArray? = null, audioType: String? = null) {
         speech.stop()
@@ -106,12 +109,24 @@ class WatchLink(
 
     /** Stops the running turn, and the voice reading a reply. */
     fun stop() {
-        speech.stop()
+        quiet()
         val now = _turn.value ?: return
         if (!now.running) return
-        scope.launch { send(WearPaths.STOP, WearJson.encode(WatchStop(now.askId))) }
         // The phone stops telling once it stops the turn: what came so far stays as the reply.
         _turn.update { it?.takeIf { t -> t.askId == now.askId }?.copy(update = now.update.copy(phase = ReplyPhase.Done, activity = null)) ?: it }
+    }
+
+    /**
+     * Silences the reply: what plays stops, and clips still on their way are dropped. The phone is told while it
+     * may still be making them, so it stops (and lets its connection go).
+     */
+    fun quiet() {
+        speech.stop()
+        val now = _turn.value ?: return
+        silenced = now.askId
+        if (now.running || now.update.speech == ReplySpeech.Coming) {
+            scope.launch { send(WearPaths.STOP, WearJson.encode(WatchStop(now.askId))) }
+        }
     }
 
     fun newChat() {
@@ -149,16 +164,22 @@ class WatchLink(
     fun onSpeech(path: String, bytes: ByteArray) {
         val clip = WearPaths.parseSpeech(path) ?: return
         val now = _turn.value ?: return
-        if (clip.askId != now.askId || !store.speak.value) return
+        if (clip.askId != now.askId || clip.askId == silenced || !store.speak.value) return
         scope.launch(Dispatchers.Main) { speech.clip(clip.askId, clip.index, clip.count, clip.mimeType, bytes) }
     }
 
     private fun onReply(update: ReplyUpdate) {
-        val now = _turn.value
-        // Only the ask on screen, and never an older update over a newer one.
-        if (now == null || update.askId != now.askId || update.seq <= now.update.seq) return
-        if (!now.running && update.phase != ReplyPhase.Done) return
-        _turn.value = now.copy(update = update)
+        var taken = false
+        // Atomic: this runs off the main thread, where an ask() in between must not be written over.
+        _turn.update { now ->
+            taken = false
+            // Only the ask on screen, and never an older update over a newer one.
+            if (now == null || update.askId != now.askId || update.seq <= now.update.seq) return@update now
+            if (!now.running && update.phase != ReplyPhase.Done) return@update now
+            taken = true
+            now.copy(update = update)
+        }
+        if (!taken) return
         _phone.value = PhoneState.Ready
         update.chatId?.let { store.setChat(it, update.title ?: store.chat.value.title) }
         if (update.phase == ReplyPhase.Done) {
@@ -166,7 +187,7 @@ class WatchLink(
                 store.lastReply = update.text
                 TileService.getUpdater(context).requestUpdate(AskTileService::class.java)
             }
-            if (update.speech == ReplySpeech.Unavailable && store.speak.value && update.text.isNotBlank()) {
+            if (update.speech == ReplySpeech.Unavailable && update.askId != silenced && store.speak.value && update.text.isNotBlank()) {
                 scope.launch(Dispatchers.Main) { speech.say(update.askId, spokenText(update.text)) }
             }
         }
