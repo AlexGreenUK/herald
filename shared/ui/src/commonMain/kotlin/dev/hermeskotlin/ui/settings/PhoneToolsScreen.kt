@@ -35,6 +35,7 @@ import com.composables.icons.lucide.ChevronDown
 import com.composables.icons.lucide.ChevronRight
 import com.composables.icons.lucide.ChevronUp
 import com.composables.icons.lucide.ClipboardCopy
+import com.composables.icons.lucide.Contact
 import com.composables.icons.lucide.ExternalLink
 import com.composables.icons.lucide.Hourglass
 import com.composables.icons.lucide.Lucide
@@ -443,4 +444,5 @@ internal val PhoneTool.icon: ImageVector
         PhoneTool.Location -> Lucide.MapPin
         PhoneTool.Geofences -> Lucide.MapPinned
         PhoneTool.Calendar -> Lucide.CalendarDays
+        PhoneTool.Contacts -> Lucide.Contact
     }
