@@ -62,20 +62,30 @@ object VoiceAnswers {
     /**
      * Whether [transcript], said once [request] was asked, is its answer as it stands, to take without the voice
      * handing it over: a clear approval, or anything said to a question but a question back or a hedge ("which one is
-     * faster", "hmm, wait"). The rest is left to the voice, which talks it through and hands the answer over.
+     * faster", "hmm, wait", "I'm not sure"). The rest is left to the voice, which talks it through and hands the
+     * answer over.
      */
     fun takesAsAnswer(request: InputRequest, transcript: String): Boolean {
         // "Um, blue" is blue.
-        val words = words(transcript).dropWhile { it in FILLERS }
-        if (words.isEmpty()) return false
+        val words = words(transcript).dropWhile { it in FILLERS || FILLER_SOUND.matches(it) }
+        if ('?' in transcript) return false
+        // A lone "okay" grants an approval, and is no answer to a question.
+        if (words.isEmpty()) return request is InputRequest.Approval && approval(request, transcript) != null
         val said = " ${words.joinToString(" ")} "
-        // "How about blue" offers an answer.
-        val asksBack = words.first() in ASKS_BACK && !said.startsWith(" how about ")
+        // "How about blue" offers an answer; "do I need to pick" asks.
+        val asksBack = (words.first() in ASKS_BACK && !said.startsWith(" how about ")) ||
+            (words.first() == "do" && words.getOrNull(1) in PEOPLE)
+        val holdsOff = words.first() in QUESTION_STARTS || asksBack || words.none { it !in UNSURE } ||
+            words.any { it in HOLD_ON } || HOLD_PHRASES.any { " $it " in said }
+        if (holdsOff) return false
         return when (request) {
+            // "I don't know what that does" isn't a no.
             is InputRequest.Approval -> approval(request, transcript) != null
-            is InputRequest.Clarify -> request.questions.size == 1 && '?' !in transcript &&
-                words.first() !in QUESTION_STARTS && !asksBack && words.none { it in HOLD_ON } &&
-                HOLD_PHRASES.none { " $it " in said }
+            is InputRequest.Clarify -> {
+                val question = request.questions.singleOrNull() ?: return false
+                // A bare "okay" while they think names none of the choices.
+                !(question.choices.isNotEmpty() && words.all { it in ACKS } && clarify(question, transcript) == listOf(transcript.trim()))
+            }
             else -> false
         }
     }
@@ -132,21 +142,30 @@ object VoiceAnswers {
     private val HEDGES = setOf("but", "if", "what", "why", "how", "which", "when", "where", "who", "wait", "maybe", "unless", "first", "hold")
     private val QUESTION_STARTS = setOf("is", "can", "could", "would", "will", "should", "does", "are", "did", "shall", "may")
 
-    /** First words that ask back rather than answer (speech to text drops the "?": "do I need to pick"). */
-    private val ASKS_BACK = setOf(
-        "what", "why", "how", "which", "when", "where", "who", "sorry", "pardon", "repeat", "huh", "explain", "do", "say",
-    )
+    /** First words that ask back rather than answer (speech to text drops the "?": "which one is faster"). */
+    private val ASKS_BACK = setOf("what", "why", "how", "which", "where", "who", "pardon", "repeat", "huh", "explain", "say")
+    private val PEOPLE = setOf("i", "you", "we", "they")
 
-    /** Sounds before the answer, not part of it. */
-    private val FILLERS = setOf("um", "uh", "erm", "er", "hmm", "mm", "ah", "oh", "so", "well")
+    /** Words before the answer, not part of it: "sorry, the blue one". Said alone, there's no answer. */
+    private val FILLERS = setOf("so", "well", "sorry", "okay", "ok", "alright")
+    /** Sounds, however long they're drawn out: "umm", "hmmm", "mhm". */
+    private val FILLER_SOUND = Regex("u+h*m*|u+m+|h*m+|m+h+m+|e+r+m*|e+h+|a+h+|o+h+")
+
+    /** All a lone acknowledgement is made of. */
+    private val ACKS = setOf("yeah", "yes", "right", "sure", "got", "it", "fine", "cool")
+    /** All a guess with nothing in it is made of: "maybe", "I guess probably". */
+    private val UNSURE = setOf("maybe", "probably", "perhaps", "i", "guess", "think", "possibly")
 
     /** Words that put the answer off. */
-    private val HOLD_ON = setOf("wait", "hold", "moment", "sec", "hang")
+    private val HOLD_ON = setOf("wait", "hold", "moment", "sec", "secs", "hang", "dunno", "idk", "unsure")
 
-    /** Ways of putting it off, or of not knowing, that aren't an answer. */
+    /** Ways of putting it off, of not knowing or of not having heard, that aren't an answer. */
     private val HOLD_PHRASES = listOf(
-        "a second", "a minute", "let me think", "let me see", "not sure", "don't know", "dont know", "no idea",
-        "the options", "say again", "again please", "tell me", "remind me",
+        "one second", "one minute", "just a second", "just a minute", "give me a second", "give me a minute",
+        "let me think", "let me see", "let me check", "let me look", "let's see", "lets see",
+        "not sure", "don't know", "dont know", "do not know", "don't remember", "no idea", "no clue", "not certain",
+        "didn't catch", "didn't hear", "one more time", "say again", "again please", "tell me", "remind me",
+        "options again", "read the options", "list the options",
     )
     private val ALWAYS_WORDS = setOf("always", "permanently", "forever")
     private val SESSION_WORDS = setOf("chat", "session")

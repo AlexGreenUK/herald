@@ -120,7 +120,8 @@ internal class LiveConversation(
                     it.copy(
                         phase = when {
                             speaking -> VoicePhase.Speaking
-                            delegationId != null -> VoicePhase.Thinking
+                            // Or the turn after an answer taken from what was said.
+                            delegationId != null || delegation?.isActive == true -> VoicePhase.Thinking
                             else -> VoicePhase.Listening
                         },
                         level = if (it.muted || speaking) 0f else call.micLevel(),
@@ -415,6 +416,7 @@ internal class LiveConversation(
         }
         val words = lastWordsSaid()
         val said = words.joinToString("") { it.text }.trim()
+        val wasHeard = heard.toList()
         heard.clear()
         val answer = when (request) {
             is InputRequest.Approval -> VoiceAnswers.approval(request, said)?.let(InputAnswers::approval)
@@ -439,6 +441,9 @@ internal class LiveConversation(
         if (answered) {
             asking = null
             answeredUpTo = words.maxOf { it.endMs }
+        } else {
+            // A handover of the same words, waiting meanwhile, tries them again.
+            heard.addAll(0, wasHeard)
         }
         sent()
         if (!answered) {
