@@ -260,7 +260,8 @@ Agent tools that run on the phone: a gateway plugin registers them, Herald answe
 - [x] Settings → Phone tools: one switch for all of them and one per tool, all off; the herald-push plugin (0.2) offers the agent only the tools switched on, in new chats (Hermes fixes a chat's tools when it starts; an open chat calling a tool that's off is refused). Calls are fetched when a watched chat starts a `phone_*` tool, on a push, and every 15 s; each phone answers with its own secret key; turns from messaging platforms are refused. The page lists what the agent used lately
 - [x] Battery and charging state
 - [x] Network state (Wi-Fi or mobile, offline)
-- [ ] Do Not Disturb, ringer and volume (read and set)
+- [x] Do Not Disturb, ringer and volume (read and set). A change asks first in a notification (Allow does it from the tap, Deny or a swipe refuses, no answer in 110 s refuses), and the result is read back. From Android 15 an app only turns off a Do Not Disturb it turned on, so the agent is told that up front
+- [x] Changes ask on the phone first; the page asks for what a tool needs (notifications, Do Not Disturb access) when it's switched on
 - [ ] Set alarms and timers
 - [ ] App screen time (Usage Access)
 - [ ] Open URLs, maps, apps or the share sheet
