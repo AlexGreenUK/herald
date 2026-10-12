@@ -32,8 +32,10 @@ import dev.hermeskotlin.wearlink.clipForWatch
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -46,6 +48,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
 /** How the relay reaches the watch: the platform's Data Layer, or a fake in tests. */
@@ -96,6 +99,23 @@ class WatchRelay(
     private var turn: Job? = null
     private var turnAskId: String? = null
     private val turnLock = Mutex()
+    private var heldChat: String? = null
+    private var releaseLater: Job? = null
+
+    /**
+     * An ask is on its way (a recording still being read off its channel): busy now, while Android still lets
+     * the app keep itself up, so nothing lets the connection go before [ask] or [expectedNothing].
+     */
+    fun expect() {
+        _busy.value = true
+    }
+
+    /** What [expect] waited for never came: not busy, unless a turn is still being answered. */
+    fun expectedNothing() {
+        scope.launch {
+            turnLock.withLock { if (turn?.isActive != true) _busy.value = false }
+        }
+    }
 
     /** A typed or transcribed ask from the watch [node]; [recording] is its audio when it was spoken. */
     fun ask(node: String, ask: WatchAsk, recording: ByteArray? = null) {
@@ -103,14 +123,19 @@ class WatchRelay(
         _busy.value = true
         scope.launch {
             turnLock.withLock {
-                turn?.cancel()
+                // Joined, so the old turn's last update can't land after the new one's first.
+                turn?.cancelAndJoin()
+                releaseLater?.cancel()
                 turnAskId = ask.id
                 _busy.value = true
                 turn = scope.launch {
                     try {
                         answer(node, ask, recording)
                     } finally {
-                        if (turnAskId == ask.id) _busy.value = false
+                        if (turnAskId == ask.id) {
+                            _busy.value = false
+                            releaseHeldChatLater()
+                        }
                     }
                 }
             }
@@ -120,12 +145,13 @@ class WatchRelay(
     /** The watch asked to stop: the running turn ends and the voice goes quiet. */
     fun stop(askId: String) {
         scope.launch {
-            turnLock.withLock {
-                if (askId != turnAskId) return@withLock
+            val stopped = turnLock.withLock {
+                if (askId != turnAskId) return@withLock false
                 turn?.cancel()
                 _busy.value = false
+                true
             }
-            _session.value?.takeIf { it.state.value.running }?.interrupt()
+            if (stopped) _session.value?.takeIf { it.state.value.running }?.interrupt()
         }
     }
 
@@ -159,6 +185,7 @@ class WatchRelay(
 
     fun close() {
         _session.value?.let { closeSession(it) }
+        heldChat?.let(host::releaseSideChat)
         scope.cancel()
     }
 
@@ -196,13 +223,16 @@ class WatchRelay(
             return fail("Herald can't reach your gateway right now.")
         }
         val session = sessionFor(gateway, profile, ask.chatId)
-        val sentAt = session.state.value.messages.size
+        // A chat picked on the watch loads its history first; sent before it, the reply would be found among the old.
+        withTimeoutOrNull(CONNECT_MS) { session.state.first { it.historyLoaded } }
+        ask.chatId?.let(::holdChat)
         if (!session.send(text)) return fail(session.state.value.error ?: "Couldn't send that.")
-        session.state.value.storedSessionId?.let(host::holdSideChat)
+        session.state.value.storedSessionId?.let(::holdChat)
 
         // The reply as it streams, a few times a second at most: each update is a whole message to the watch.
+        // Its own job, joined, so its last tell can't race the final one below for the next seq.
         val streaming = scope.launch {
-            session.state.map { state -> progressOf(state, sentAt) }.distinctUntilChanged().conflate().collect { progress ->
+            session.state.map(::progressOf).distinctUntilChanged().conflate().collect { progress ->
                 tell(last.copy(phase = progress.phase, chatId = progress.chatId, title = progress.title, text = progress.text, activity = progress.activity))
                 delay(UPDATE_EVERY_MS)
             }
@@ -211,12 +241,12 @@ class WatchRelay(
             withTimeoutOrNull(TURN_START_MS) { session.state.first { it.running } }
             session.state.first { !it.running }
         } finally {
-            streaming.cancel()
+            withContext(NonCancellable) { streaming.cancelAndJoin() }
         }
 
         val state = session.state.value
-        state.storedSessionId?.let(host::holdSideChat)
-        val reply = replyAfter(state, sentAt)
+        state.storedSessionId?.let(::holdChat)
+        val reply = replyAfter(state)
         val done = last.copy(chatId = state.storedSessionId ?: last.chatId, title = state.title, activity = null)
         if (reply?.outcome == TurnOutcome.Error) {
             return tell(done.copy(phase = ReplyPhase.Failed, text = clipForWatch(reply.text), error = reply.error ?: "The turn failed."))
@@ -234,7 +264,9 @@ class WatchRelay(
      * while the rest are made. False when not even the first could be made or sent: the watch reads it itself.
      */
     private suspend fun speak(node: String, askId: String, text: String, gateway: GatewayUrl, profile: String?): Boolean {
-        audio.ttsLease(gateway, true, profile)
+        // Not waited on: the first clip shouldn't wait for it. Let go even when the watch stops the voice
+        // (the turn cancelled), after the lease itself has gone out.
+        val lease = scope.launch { audio.ttsLease(gateway, true, profile) }
         try {
             val chunks = speechChunks(text)
             chunks.forEachIndexed { index, chunk ->
@@ -246,7 +278,35 @@ class WatchRelay(
             }
             return true
         } finally {
-            audio.ttsLease(gateway, false, profile)
+            scope.launch {
+                lease.join()
+                audio.ttsLease(gateway, false, profile)
+            }
+        }
+    }
+
+    /**
+     * Keeps the watch's chat [storedId] out of the phone's watching while the watch tells its turn. Let go a little
+     * after the turn ([releaseHeldChatLater]), so a turn run there later, from the desktop or the phone, is told again.
+     */
+    private fun holdChat(storedId: String) {
+        heldChat?.takeIf { it != storedId }?.let(host::releaseSideChat)
+        heldChat = storedId
+        host.holdSideChat(storedId)
+    }
+
+    /** Let go after a while: the watcher may still be about to see the turn's end, which the watch already told. */
+    private fun releaseHeldChatLater() {
+        val held = heldChat ?: return
+        releaseLater?.cancel()
+        releaseLater = scope.launch {
+            delay(RELEASE_AFTER_MS)
+            turnLock.withLock {
+                if (heldChat == held && turn?.isActive != true) {
+                    host.releaseSideChat(held)
+                    heldChat = null
+                }
+            }
         }
     }
 
@@ -263,7 +323,6 @@ class WatchRelay(
         sessionScope = childScope
         sessionGateway = gateway
         sessionProfile = profile
-        chatId?.let(host::holdSideChat)
         return ChatSession(gateway, chatId, null, connection, sessions, childScope, profile).also {
             it.start()
             _session.value = it
@@ -271,7 +330,6 @@ class WatchRelay(
     }
 
     private fun closeSession(session: ChatSession) {
-        session.state.value.storedSessionId?.let(host::releaseSideChat)
         session.stop()
         sessionScope?.cancel()
         sessionScope = null
@@ -286,15 +344,16 @@ class WatchRelay(
         private const val CONNECT_MS = 10_000L
         private const val TURN_START_MS = 15_000L
         private const val UPDATE_EVERY_MS = 400L
+        private const val RELEASE_AFTER_MS = 30_000L
     }
 }
 
 /** The turn as the watch shows it while it runs. */
 internal data class TurnProgress(val phase: ReplyPhase, val chatId: String?, val title: String?, val text: String, val activity: String?)
 
-/** Where the turn after the [sentAt]th message stands in [state]. */
-internal fun progressOf(state: ChatState, sentAt: Int): TurnProgress {
-    val reply = replyAfter(state, sentAt)
+/** Where the turn for the last prompt stands in [state]. */
+internal fun progressOf(state: ChatState): TurnProgress {
+    val reply = replyAfter(state)
     val waiting = state.inputRequests.isNotEmpty()
     val tool = reply?.tools?.lastOrNull { it.running }
     val activity = when {
@@ -310,9 +369,15 @@ internal fun progressOf(state: ChatState, sentAt: Int): TurnProgress {
     return TurnProgress(phase, state.storedSessionId, state.title, clipForWatch(reply?.text.orEmpty()), activity)
 }
 
-/** The reply to the prompt sent after the [sentAt]th message: the last one past it. */
-internal fun replyAfter(state: ChatState, sentAt: Int): ChatMessage.Assistant? =
-    state.messages.drop(sentAt).lastOrNull { it is ChatMessage.Assistant } as? ChatMessage.Assistant
+/**
+ * The reply to the last prompt: the last answer after it. Found from the end, not by position, since the history
+ * reloads at the turn's end and may then start at another row.
+ */
+internal fun replyAfter(state: ChatState): ChatMessage.Assistant? {
+    val prompt = state.messages.indexOfLast { it is ChatMessage.User }
+    if (prompt < 0) return null
+    return state.messages.drop(prompt + 1).lastOrNull { it is ChatMessage.Assistant } as? ChatMessage.Assistant
+}
 
 /** Catches what a send to the watch may throw, so one lost message doesn't end the turn's updates. */
 internal suspend fun WatchOutbox.sendSafely(node: String, path: String, data: ByteArray): Boolean = safely { send(node, path, data) }

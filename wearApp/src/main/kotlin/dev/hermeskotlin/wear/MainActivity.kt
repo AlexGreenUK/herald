@@ -1,0 +1,130 @@
+package dev.hermeskotlin.wear
+
+import android.Manifest
+import android.content.ActivityNotFoundException
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Bundle
+import android.speech.RecognizerIntent
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
+
+/** This app's own recording, on a watch without an input screen: [level] while it hears, [error] when it missed. */
+data class Listening(val recording: Boolean = false, val level: Float = 0f, val error: String? = null)
+
+/**
+ * The talk screen. A tap on the mic opens the watch's own speech recognizer, so only words go to the phone;
+ * a watch without one records and the gateway transcribes. Launched with
+ * [EXTRA_LISTEN] (the tile, the complication) it starts listening at once.
+ */
+class MainActivity : ComponentActivity() {
+
+    private val app get() = HeraldWatch.of(this)
+    private val recorder = WatchRecorder()
+    private val listening = MutableStateFlow(Listening())
+    private var recordingJob: Job? = null
+
+    private val recognize = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val said = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()?.trim()
+        if (!said.isNullOrEmpty()) app.link.ask(said)
+    }
+
+    private val microphone = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) record() else listening.value = Listening(error = "Herald needs the microphone to hear you.")
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContent {
+            HeraldWatchApp(
+                link = app.link,
+                store = app.store,
+                speech = app.speech,
+                listening = listening,
+                onMic = ::listen,
+                onFinishRecording = recorder::finish,
+                onDismissListeningError = { listening.value = Listening() },
+            )
+        }
+        app.link.refreshPhone()
+        if (savedInstanceState == null) handle(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handle(intent)
+    }
+
+    private fun handle(intent: Intent) {
+        // Debug builds take a typed question from adb (`--es ask "…"`), for trying a turn on an emulator without a mic.
+        val typed = if (BuildConfig.DEBUG) intent.getStringExtra(EXTRA_DEBUG_ASK) else null
+        when {
+            !typed.isNullOrBlank() -> app.link.ask(typed)
+            intent.getBooleanExtra(EXTRA_LISTEN, false) -> listen()
+        }
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // Out of sight, a recording would go on hearing the room.
+        recordingJob?.cancel()
+    }
+
+    private fun listen() {
+        app.speech.stop()
+        // The watch's speech recognizer, straight to listening: talking is what the mic is for.
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+            .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            .putExtra(RecognizerIntent.EXTRA_PROMPT, "Ask Hermes")
+        if (intent.resolveActivity(packageManager) != null) {
+            try {
+                recognize.launch(intent)
+                return
+            } catch (_: ActivityNotFoundException) {
+                // Listed but gone: record instead.
+            }
+        }
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            record()
+        } else {
+            microphone.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
+    @Suppress("MissingPermission") // listen() checks it first.
+    private fun record() {
+        if (recordingJob?.isActive == true) return
+        listening.value = Listening(recording = true)
+        recordingJob = lifecycleScope.launch {
+            val audio = try {
+                recorder.record { level -> listening.value = listening.value.copy(level = level) }
+            } catch (e: Exception) {
+                listening.value = Listening(error = e.message ?: "Couldn't use the microphone.")
+                return@launch
+            } finally {
+                if (listening.value.recording) listening.value = Listening()
+            }
+            if (audio == null) {
+                listening.value = Listening(error = "I didn't hear anything.")
+            } else {
+                app.link.ask(null, audio, WatchRecorder.MIME_TYPE)
+            }
+        }
+    }
+
+    companion object {
+        const val EXTRA_LISTEN = "listen"
+        private const val EXTRA_DEBUG_ASK = "ask"
+
+        /** For a PendingIntent, which starts it in its own task (it's singleTask) and to its onNewIntent when open. */
+        fun listenIntent(context: Context): Intent = Intent(context, MainActivity::class.java).putExtra(EXTRA_LISTEN, true)
+    }
+}

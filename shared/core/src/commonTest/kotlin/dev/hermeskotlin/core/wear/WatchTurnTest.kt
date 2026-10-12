@@ -20,7 +20,7 @@ class WatchTurnTest {
     @Test
     fun beforeTheTurnStartsItIsSendingWithNoReplyFromEarlier() {
         val state = ChatState(storedSessionId = "s1", messages = earlier + ChatMessage.User("u1", "hi", pending = true))
-        val progress = progressOf(state, sentAt = earlier.size)
+        val progress = progressOf(state)
         assertEquals(ReplyPhase.Sending, progress.phase)
         assertEquals("", progress.text)
         assertEquals("s1", progress.chatId)
@@ -35,7 +35,7 @@ class WatchTurnTest {
             tools = listOf(ToolActivity("t1", "read_file"), ToolActivity("t2", "terminal", running = true)),
         )
         val state = ChatState(running = true, title = "Disk", messages = earlier + ChatMessage.User("u1", "hi") + reply)
-        val progress = progressOf(state, sentAt = earlier.size)
+        val progress = progressOf(state)
         assertEquals(ReplyPhase.Working, progress.phase)
         assertEquals("Looking", progress.text)
         assertEquals("Running a command", progress.activity)
@@ -45,15 +45,15 @@ class WatchTurnTest {
     @Test
     fun withoutARunningToolTheGatewaysStatusLineIsTheActivity() {
         val state = ChatState(running = true, status = "thinking…", messages = earlier + ChatMessage.User("u1", "hi"))
-        assertEquals("thinking…", progressOf(state, earlier.size).activity)
-        assertNull(progressOf(state.copy(status = " "), earlier.size).activity)
+        assertEquals("thinking…", progressOf(state).activity)
+        assertNull(progressOf(state.copy(status = " ")).activity)
     }
 
     @Test
     fun aQuestionTheAgentWaitsOnSendsTheWatchToThePhone() {
         val approval = InputRequest.Approval("r1", "rm -rf build", "Delete the build folder", "terminal", listOf(ApprovalChoice.Once, ApprovalChoice.Deny))
         val state = ChatState(running = true, inputRequests = listOf(approval), messages = earlier + ChatMessage.User("u1", "clean"))
-        val progress = progressOf(state, earlier.size)
+        val progress = progressOf(state)
         assertEquals(ReplyPhase.WaitingOnPhone, progress.phase)
         assertEquals("Waiting for you on your phone", progress.activity)
     }
@@ -61,7 +61,14 @@ class WatchTurnTest {
     @Test
     fun theReplyIsTheLastOnePastThePrompt() {
         val state = ChatState(messages = earlier + ChatMessage.User("u1", "hi") + ChatMessage.Assistant("a1", "one") + ChatMessage.Assistant("a2", "two"))
-        assertEquals("two", replyAfter(state, earlier.size)?.text)
-        assertNull(replyAfter(ChatState(messages = earlier), earlier.size))
+        assertEquals("two", replyAfter(state)?.text)
+        assertNull(replyAfter(ChatState(messages = earlier + ChatMessage.User("u1", "hi"))))
+    }
+
+    @Test
+    fun aHistoryReloadedFromAnotherRowStillFindsTheReplyToTheLastPrompt() {
+        // The turn's end reloads the newest rows: the earlier ones are gone, so positions moved.
+        val state = ChatState(messages = listOf(ChatMessage.User("s1", "hi"), ChatMessage.Assistant("s2", "hello")))
+        assertEquals("hello", replyAfter(state)?.text)
     }
 }

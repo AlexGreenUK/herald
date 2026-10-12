@@ -55,7 +55,9 @@ class WearBridgeService : WearableListenerService() {
     override fun onChannelOpened(channel: ChannelClient.Channel) {
         if (!WearPaths.isRecording(channel.path)) return
         val channels = Wearable.getChannelClient(this)
-        // The ask is read off the channel after this returns, so the connection is kept up for it now.
+        // The ask is read off the channel after this returns, so the connection is kept up for it now,
+        // busy at once so nothing lets the service go while it's read.
+        relay.expect()
         keepUp()
         scope.launch {
             val bytes = try {
@@ -79,9 +81,13 @@ class WearBridgeService : WearableListenerService() {
             } finally {
                 runCatching { channels.close(channel) }
             }
-            // Unreadable: the service started for it stops by itself, as nothing is busy.
-            val (ask, audio) = bytes?.let(RecordedAsk::read) ?: return@launch
-            relay.ask(channel.nodeId, ask, audio)
+            val recorded = bytes?.let(RecordedAsk::read)
+            if (recorded == null) {
+                // Unreadable: no longer busy, so the service started for it stops.
+                relay.expectedNothing()
+                return@launch
+            }
+            relay.ask(channel.nodeId, recorded.first, recorded.second)
         }
     }
 

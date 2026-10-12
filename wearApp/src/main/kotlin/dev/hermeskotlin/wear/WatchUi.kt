@@ -1,0 +1,427 @@
+package dev.hermeskotlin.wear
+
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.wear.compose.foundation.lazy.TransformingLazyColumn
+import androidx.wear.compose.foundation.lazy.rememberTransformingLazyColumnState
+import androidx.wear.compose.material3.AppScaffold
+import androidx.wear.compose.material3.Button
+import androidx.wear.compose.material3.ButtonDefaults
+import androidx.wear.compose.material3.CircularProgressIndicator
+import androidx.wear.compose.material3.ColorScheme
+import androidx.wear.compose.material3.EdgeButton
+import androidx.wear.compose.material3.EdgeButtonSize
+import androidx.wear.compose.material3.Icon
+import androidx.wear.compose.material3.MaterialTheme
+import androidx.wear.compose.material3.ScreenScaffold
+import androidx.wear.compose.material3.SwitchButton
+import androidx.wear.compose.material3.Text
+import androidx.wear.compose.material3.TimeText
+import androidx.wear.compose.navigation.SwipeDismissableNavHost
+import androidx.wear.compose.navigation.composable
+import androidx.wear.compose.navigation.rememberSwipeDismissableNavController
+import dev.hermeskotlin.wearlink.ReplyPhase
+import dev.hermeskotlin.wearlink.WatchChat
+import kotlinx.coroutines.flow.StateFlow
+
+/** Herald's typeface, as on the phone. */
+private val Geist = FontFamily(
+    Font(R.font.geist_regular, FontWeight.Normal),
+    Font(R.font.geist_medium, FontWeight.Medium),
+    Font(R.font.geist_semibold, FontWeight.SemiBold),
+)
+
+private val Text1 = Color(0xFFF4F4F6)
+private val Text2 = Color(0xFFD4D4D8)
+private val Muted = Color(0xFF8A8A94)
+private val Surface = Color(0xFF16161A)
+private val Surface2 = Color(0xFF1C1C22)
+
+/** Herald blue, with the phone app's dark surfaces and text. */
+private val HeraldColors = ColorScheme(
+    primary = HeraldBlueText,
+    primaryDim = Color(0xFF4A84FE),
+    primaryContainer = HeraldBlue,
+    onPrimary = Color(0xFF0A0A0C),
+    onPrimaryContainer = Color.White,
+    background = Color.Black,
+    onBackground = Text1,
+    surfaceContainerLow = Surface,
+    surfaceContainer = Surface2,
+    surfaceContainerHigh = Color(0xFF232329),
+    onSurface = Text1,
+    onSurfaceVariant = Muted,
+    error = Danger,
+)
+
+private fun geist(size: Int, weight: FontWeight = FontWeight.Normal, color: Color = Text1, line: Int = 0) =
+    TextStyle(fontFamily = Geist, fontSize = size.sp, fontWeight = weight, color = color, lineHeight = if (line > 0) line.sp else (size * 1.3f).sp)
+
+@Composable
+fun HeraldWatchApp(
+    link: WatchLink,
+    store: WatchStore,
+    speech: SpeechOut,
+    listening: StateFlow<Listening>,
+    onMic: () -> Unit,
+    onFinishRecording: () -> Unit,
+    onDismissListeningError: () -> Unit,
+) {
+    MaterialTheme(colorScheme = HeraldColors) {
+        AppScaffold(timeText = { TimeText() }) {
+            val nav = rememberSwipeDismissableNavController()
+            SwipeDismissableNavHost(navController = nav, startDestination = TALK) {
+                composable(TALK) {
+                    TalkScreen(
+                        link = link,
+                        store = store,
+                        speech = speech,
+                        listening = listening,
+                        onMic = onMic,
+                        onFinishRecording = onFinishRecording,
+                        onDismissListeningError = onDismissListeningError,
+                        onChats = { nav.navigate(CHATS) },
+                    )
+                }
+                composable(CHATS) {
+                    ChatsScreen(link = link, store = store, onPicked = { nav.popBackStack() })
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The orb in the middle is the mic: tap it to talk, tap it again to stop Hermes or its voice. Above it the chat
+ * it talks in; under it what's going on, then what you said and the reply, with Reply at the end.
+ */
+@Composable
+private fun TalkScreen(
+    link: WatchLink,
+    store: WatchStore,
+    speech: SpeechOut,
+    listening: StateFlow<Listening>,
+    onMic: () -> Unit,
+    onFinishRecording: () -> Unit,
+    onDismissListeningError: () -> Unit,
+    onChats: () -> Unit,
+) {
+    val turn by link.turn.collectAsState()
+    val phone by link.phone.collectAsState()
+    val chat by store.chat.collectAsState()
+    val speaking by speech.speaking.collectAsState()
+    val mic by listening.collectAsState()
+    val listState = rememberTransformingLazyColumnState()
+    val current = turn
+    val running = current?.running == true
+    val mood = when {
+        mic.recording -> OrbMood.Listening
+        current?.update?.phase == ReplyPhase.WaitingOnPhone -> OrbMood.Waiting
+        running -> OrbMood.Working
+        speaking -> OrbMood.Speaking
+        current?.update?.phase == ReplyPhase.Failed || mic.error != null -> OrbMood.Failed
+        else -> OrbMood.Idle
+    }
+    val onOrb = {
+        when {
+            mic.recording -> onFinishRecording()
+            running || speaking -> link.stop()
+            else -> onMic()
+        }
+    }
+
+    // Each new ask starts at the top, where the orb shows it working.
+    LaunchedEffect(current?.askId) { if (current != null) listState.scrollToItem(0) }
+
+    val content: @Composable (PaddingValues) -> Unit = { contentPadding ->
+        TransformingLazyColumn(state = listState, contentPadding = contentPadding, modifier = Modifier.fillMaxSize()) {
+            item {
+                val orbSize by animateFloatAsState(if (current == null || mic.recording) 84f else 68f, tween(350), label = "orb")
+                Box(Modifier.fillMaxWidth().padding(top = 4.dp), contentAlignment = Alignment.Center) {
+                    HeraldOrb(
+                        mood = mood,
+                        level = mic.level,
+                        modifier = Modifier
+                            .size(orbSize.dp)
+                            .clip(CircleShape)
+                            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, role = Role.Button, onClick = onOrb)
+                            .semantics {
+                                contentDescription = when {
+                                    mic.recording -> "Done talking"
+                                    running || speaking -> "Stop"
+                                    else -> "Talk to Hermes"
+                                }
+                            },
+                    )
+                }
+            }
+            item { ChatTitle(chat.title ?: if (chat.id == null) "New chat" else "Chat", onChats) }
+            item { Caption(caption(mood, current, mic, phone), mood) }
+            val micError = mic.error
+            if (micError != null) item { Notice(micError, onClick = onDismissListeningError) }
+            if (current != null && !mic.recording) {
+                current.said?.let { said -> item { Said(said) } }
+                val update = current.update
+                if (update.text.isNotBlank()) item { Reply(update.text) }
+            }
+        }
+    }
+    // Reply at the end of a finished turn; before the first ask the orb alone is the mic.
+    if (current != null && !running && !speaking && !mic.recording) {
+        ScreenScaffold(
+            scrollState = listState,
+            modifier = Modifier.halo(mood),
+            edgeButton = {
+                EdgeButton(onClick = onMic, buttonSize = EdgeButtonSize.Medium) {
+                    Icon(painterResource(R.drawable.ic_mic), contentDescription = "Reply")
+                }
+            },
+        ) { contentPadding -> content(contentPadding) }
+    } else {
+        ScreenScaffold(scrollState = listState, modifier = Modifier.halo(mood)) { contentPadding -> content(contentPadding) }
+    }
+}
+
+/** What's going on, under the orb. */
+private fun caption(mood: OrbMood, turn: WatchTurn?, mic: Listening, phone: PhoneState): String? = when {
+    mic.recording -> "Listening… tap when done"
+    mood == OrbMood.Speaking -> "Tap to stop"
+    turn != null && turn.update.phase == ReplyPhase.Failed -> turn.update.error ?: "Something went wrong."
+    turn != null && turn.running -> activityLine(turn.update.phase, turn.update.activity)
+    turn == null -> phoneProblem(phone) ?: "Tap to talk"
+    else -> null
+}
+
+/**
+ * The chat it talks in, under the orb where a round screen is widest, on up to two lines; the › says a tap
+ * opens the chats.
+ */
+@Composable
+private fun ChatTitle(title: String, onClick: () -> Unit) {
+    Box(Modifier.fillMaxWidth().padding(top = 6.dp), contentAlignment = Alignment.Center) {
+        Text(
+            "$title  ›",
+            modifier = Modifier
+                .clip(RoundedCornerShape(12.dp))
+                .clickable(role = Role.Button, onClickLabel = "Open chats", onClick = onClick)
+                .padding(horizontal = 18.dp, vertical = 2.dp),
+            style = geist(14, FontWeight.SemiBold, Text1, line = 18),
+            textAlign = TextAlign.Center,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+private fun Caption(text: String?, mood: OrbMood) {
+    if (text.isNullOrBlank()) return
+    val color by animateColorAsState(
+        when (mood) {
+            OrbMood.Failed -> Danger
+            OrbMood.Waiting -> Amber
+            OrbMood.Idle -> Muted
+            else -> HeraldBlueText
+        },
+        label = "caption",
+    )
+    Text(
+        text,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 2.dp),
+        style = geist(13, FontWeight.Medium, color),
+        textAlign = TextAlign.Center,
+        maxLines = 3,
+    )
+}
+
+/** What was said, quoted, quiet. */
+@Composable
+private fun Said(text: String) {
+    Text(
+        "“$text”",
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 4.dp),
+        style = geist(13, color = Muted),
+        textAlign = TextAlign.Center,
+        maxLines = 4,
+        overflow = TextOverflow.Ellipsis,
+    )
+}
+
+@Composable
+private fun Reply(text: String) {
+    Text(
+        text,
+        modifier = Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, top = 6.dp, bottom = 8.dp),
+        style = geist(16, color = Text1, line = 22),
+    )
+}
+
+/** A short notice in a dark card; a tap dismisses it. */
+@Composable
+private fun Notice(text: String, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(Surface2)
+            .clickable(role = Role.Button, onClick = onClick)
+            .padding(12.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(text, style = geist(13, color = Danger), textAlign = TextAlign.Center)
+    }
+}
+
+/** A Herald-blue light rising from the bottom of the screen, brighter while something happens; amber or red to warn. */
+private fun Modifier.halo(mood: OrbMood): Modifier = drawBehind {
+    val strength = when (mood) {
+        OrbMood.Idle -> 0.18f
+        OrbMood.Failed -> 0.2f
+        else -> 0.32f
+    }
+    val center = Offset(size.width / 2f, size.height * 1.08f)
+    drawRect(Brush.radialGradient(listOf(orbTint(mood).copy(alpha = strength), Color.Transparent), center = center, radius = size.width * 0.8f))
+}
+
+@Composable
+private fun ChatsScreen(link: WatchLink, store: WatchStore, onPicked: () -> Unit) {
+    val list by link.chats.collectAsState()
+    val chat by store.chat.collectAsState()
+    val speak by store.speak.collectAsState()
+    val listState = rememberTransformingLazyColumnState()
+    LaunchedEffect(Unit) { link.refreshChats() }
+
+    ScreenScaffold(scrollState = listState, modifier = Modifier.halo(OrbMood.Idle)) { contentPadding ->
+        TransformingLazyColumn(state = listState, contentPadding = contentPadding, modifier = Modifier.fillMaxSize()) {
+            item {
+                Text("Chats", modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp), style = geist(17, FontWeight.SemiBold), textAlign = TextAlign.Center)
+            }
+            item {
+                Button(
+                    onClick = {
+                        link.newChat()
+                        onPicked()
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = HeraldBlue, contentColor = Color.White, iconColor = Color.White),
+                    icon = { Icon(painterResource(R.drawable.ic_add), contentDescription = null) },
+                    label = { Text("New chat", style = geist(15, FontWeight.Medium, Color.White)) },
+                )
+            }
+            val current = list
+            val error = current?.error
+            when {
+                current == null -> item {
+                    Box(Modifier.fillMaxWidth().padding(12.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(Modifier.size(24.dp)) }
+                }
+                error != null -> item { Notice(error, onClick = link::refreshChats) }
+                current.chats.isEmpty() -> item {
+                    Text("No chats yet.", modifier = Modifier.fillMaxWidth().padding(12.dp), style = geist(13, color = Muted), textAlign = TextAlign.Center)
+                }
+                else -> current.chats.forEach { row ->
+                    item(key = row.id) {
+                        ChatRow(row, picked = row.id == chat.id) {
+                            link.pickChat(row)
+                            onPicked()
+                        }
+                    }
+                }
+            }
+            item {
+                SwitchButton(
+                    checked = speak,
+                    onCheckedChange = store::setSpeak,
+                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                    label = { Text("Read replies aloud", style = geist(14, FontWeight.Medium)) },
+                )
+            }
+        }
+    }
+}
+
+/** One chat: its title and how long ago it was active; the one the watch talks in has a blue dot. */
+@Composable
+private fun ChatRow(chat: WatchChat, picked: Boolean, onClick: () -> Unit) {
+    Button(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
+        colors = ButtonDefaults.buttonColors(containerColor = Surface2, contentColor = Text1, secondaryContentColor = Muted),
+        icon = if (picked) {
+            { Box(Modifier.size(8.dp).background(HeraldBlueText, CircleShape)) }
+        } else {
+            null
+        },
+        secondaryLabel = ago(chat.activityAt)?.let { { Text(it, style = geist(12, color = Muted)) } },
+        label = { Text(chat.title, style = geist(14, FontWeight.Medium), maxLines = 2, overflow = TextOverflow.Ellipsis) },
+    )
+}
+
+/** How long ago [epochSeconds] was, the way a list says it: "now", "5m", "3h", "2d". */
+internal fun ago(epochSeconds: Double?, nowMillis: Long = System.currentTimeMillis()): String? {
+    epochSeconds ?: return null
+    val minutes = ((nowMillis / 1000.0 - epochSeconds) / 60).toLong()
+    return when {
+        minutes < 1 -> "now"
+        minutes < 60 -> "${minutes}m"
+        minutes < 60 * 24 -> "${minutes / 60}h"
+        minutes < 60 * 24 * 7 -> "${minutes / (60 * 24)}d"
+        else -> "${minutes / (60 * 24 * 7)}w"
+    }
+}
+
+private fun phoneProblem(phone: PhoneState): String? = when (phone) {
+    PhoneState.NotConnected -> WatchLink.NOT_CONNECTED
+    PhoneState.NoHerald -> WatchLink.NO_HERALD
+    PhoneState.SignedOut -> "Sign in to Herald on your phone first."
+    PhoneState.Unknown, PhoneState.Ready -> null
+}
+
+internal fun activityLine(phase: ReplyPhase, activity: String?): String = activity ?: when (phase) {
+    ReplyPhase.Transcribing -> "Writing it down…"
+    ReplyPhase.Sending -> "Sending…"
+    ReplyPhase.WaitingOnPhone -> "Waiting for you on your phone"
+    ReplyPhase.Working -> "Thinking…"
+    ReplyPhase.Done, ReplyPhase.Failed -> ""
+}
+
+private const val TALK = "talk"
+private const val CHATS = "chats"
