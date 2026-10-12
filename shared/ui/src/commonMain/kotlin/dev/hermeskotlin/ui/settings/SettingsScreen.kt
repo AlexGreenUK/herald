@@ -95,6 +95,7 @@ import com.composeunstyled.UnstyledIcon
 import com.composeunstyled.theme.Theme
 import com.composeunstyled.theme.rememberColoredIndication
 import dev.hermeskotlin.core.gateway.SavedGateway
+import dev.hermeskotlin.core.phone.enabledPhoneTools
 import dev.hermeskotlin.core.push.PushStatus
 import dev.hermeskotlin.core.settings.AppSettings
 import dev.hermeskotlin.core.settings.RunningSend
@@ -176,8 +177,9 @@ fun SettingsScreen(
         onError = { wallpaperError = it },
     )
     var checkOpen by remember { mutableStateOf(false) }
+    var phoneToolsOpen by remember { mutableStateOf(false) }
     LaunchedEffect(gateway) { viewModel.bind(gateway) }
-    PlatformBackHandler(enabled = !checkOpen, onBack = onBack)
+    PlatformBackHandler(enabled = !checkOpen && !phoneToolsOpen, onBack = onBack)
     SettingsView(
         settings, info, gateway.url, viewModel::update, onBack, onSignOut, onOpenGateways,
         gatewayName = gateway.label,
@@ -197,7 +199,9 @@ fun SettingsScreen(
             wallpaperError = null
             viewModel.removeWallpaper()
         },
+        onOpenPhoneTools = { phoneToolsOpen = true },
     )
+    if (phoneToolsOpen) PhoneToolsScreen(onBack = { phoneToolsOpen = false })
     ConnectionCheckSheet(
         visible = checkOpen,
         results = check.results,
@@ -272,6 +276,7 @@ internal fun SettingsView(
     wallpaperError: String? = null,
     onChooseWallpaper: () -> Unit = {},
     onRemoveWallpaper: () -> Unit = {},
+    onOpenPhoneTools: () -> Unit = {},
 ) {
     Box(
         Modifier
@@ -505,6 +510,15 @@ internal fun SettingsView(
                     }
                 }
 
+                Section("Phone") {
+                    NavRow(
+                        title = "Phone tools",
+                        detail = phoneToolsSummary(settings),
+                        icon = Lucide.Smartphone,
+                        onClick = onOpenPhoneTools,
+                    )
+                }
+
                 Section("Privacy") {
                     val canLock = deviceHasScreenLock()
                     SwitchRow(
@@ -545,6 +559,17 @@ internal fun SettingsView(
                 }
             }
         }
+    }
+}
+
+/** The Phone tools row's line: off, or how many tools the agent may use. */
+private fun phoneToolsSummary(settings: AppSettings): String {
+    val count = settings.enabledPhoneTools().size
+    return when {
+        !settings.phoneTools -> "Off. Let the agent use this phone, each tool only once you turn it on."
+        count == 0 -> "On, but no tool is turned on yet."
+        count == 1 -> "1 tool on."
+        else -> "$count tools on."
     }
 }
 
@@ -631,7 +656,7 @@ private fun PillButton(caption: String, icon: ImageVector, onClick: () -> Unit, 
 }
 
 @Composable
-private fun Section(title: String, content: @Composable ColumnScope.() -> Unit) {
+internal fun Section(title: String, content: @Composable ColumnScope.() -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
             title.uppercase(),
@@ -648,7 +673,7 @@ private fun Section(title: String, content: @Composable ColumnScope.() -> Unit) 
 }
 
 @Composable
-private fun Divider() {
+internal fun Divider() {
     Box(Modifier.padding(horizontal = 14.dp).fillMaxWidth().height(1.dp).background(Theme[colors][stroke]))
 }
 
@@ -666,7 +691,7 @@ private fun Field(title: String, detail: String? = null, control: @Composable ()
 
 /** A setting that's on or off: the whole row toggles. An [icon] sits on a small tile before the title. */
 @Composable
-private fun SwitchRow(title: String, detail: String?, checked: Boolean, onCheckedChange: (Boolean) -> Unit, icon: ImageVector? = null) {
+internal fun SwitchRow(title: String, detail: String?, checked: Boolean, onCheckedChange: (Boolean) -> Unit, icon: ImageVector? = null) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -685,7 +710,7 @@ private fun SwitchRow(title: String, detail: String?, checked: Boolean, onChecke
 }
 
 @Composable
-private fun IconTile(icon: ImageVector) {
+internal fun IconTile(icon: ImageVector) {
     Box(
         Modifier.size(32.dp).background(Theme[colors][surface2], RoundedCornerShape(Theme[radii][radiusSmall])),
         contentAlignment = Alignment.Center,
@@ -813,7 +838,7 @@ private fun TextSizeSlider(selected: TextSize, onSelect: (TextSize) -> Unit) {
 private val SLIDER_THUMB = 22.dp
 
 @Composable
-private fun InfoRow(title: String, value: String) {
+internal fun InfoRow(title: String, value: String) {
     Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Text(title, style = Theme[typography][body], color = Theme[colors][text])
         Text(value, style = Theme[typography][bodySmall], color = Theme[colors][textTertiary], maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -821,7 +846,7 @@ private fun InfoRow(title: String, value: String) {
 }
 
 @Composable
-private fun ActionRow(title: String, icon: ImageVector, onClick: () -> Unit) {
+internal fun ActionRow(title: String, icon: ImageVector, onClick: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(14.dp),
