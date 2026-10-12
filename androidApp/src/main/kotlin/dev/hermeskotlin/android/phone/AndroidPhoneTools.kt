@@ -34,6 +34,7 @@ class AndroidPhoneTools(
     private val location = LocationTool(context)
     private val geofences = GeofenceTool(context, confirmations, location, places, chats)
     private val calendar = CalendarTool(context, confirmations)
+    private val contacts = ContactsTool(context)
 
     override suspend fun run(tool: PhoneTool, args: JsonObject, session: String): JsonElement = withContext(Dispatchers.IO) {
         when (tool) {
@@ -47,6 +48,7 @@ class AndroidPhoneTools(
             PhoneTool.Location -> location.run(args)
             PhoneTool.Geofences -> geofences.run(args, session)
             PhoneTool.Calendar -> calendar.run(args)
+            PhoneTool.Contacts -> contacts.run(args)
         }
     }
 

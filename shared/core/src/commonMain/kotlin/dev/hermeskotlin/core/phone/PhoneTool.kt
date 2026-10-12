@@ -20,6 +20,7 @@ enum class PhoneTool(val id: String, val title: String, val detail: String) {
     Location("phone_location", "Location", "Where the phone is and the nearest address, as precisely as you allow. While Herald is open, unless you also allow it while closed."),
     Geofences("phone_geofence", "Watched places", "Arriving at or leaving a place sends its message to the chat it was added from. Adding one asks you first; needs precise location all the time."),
     Calendar("phone_calendar", "Calendar", "Your events in a time range. Adding or moving one asks you first."),
+    Contacts("phone_contacts", "Contacts", "Looks people up by name, number or email: only their names, numbers and emails, a few at a time."),
     ;
 
     companion object {
