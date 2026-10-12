@@ -74,13 +74,17 @@ object VoiceAnswers {
         val said = " ${words.joinToString(" ")} "
         // "How about blue" offers an answer; "do I need to pick" asks.
         val asksBack = (words.first() in ASKS_BACK && !said.startsWith(" how about ")) ||
-            (words.first() == "do" && words.getOrNull(1) in PEOPLE)
+            (words.first() == "do" && words.getOrNull(1) in PEOPLE) ||
+            // "when the tests pass" answers; "when does it run" asks.
+            (words.first() == "when" && words.getOrNull(1) in AUXILIARIES)
         val holdsOff = words.first() in QUESTION_STARTS || asksBack || words.none { it !in UNSURE } ||
-            words.any { it in HOLD_ON } || HOLD_PHRASES.any { " $it " in said }
+            words.none { it !in NOTED } || words.any { it in HOLD_ON } || HOLD_PHRASES.any { " $it " in said } ||
+            // "One minute" is putting it off, unless it's in an answer ("every one minute").
+            said.trim() in HOLD_ALONE
         if (holdsOff) return false
         return when (request) {
-            // "I don't know what that does" isn't a no.
-            is InputRequest.Approval -> approval(request, transcript) != null
+            // "I don't know what that does" isn't a no; "um, yes" is a yes.
+            is InputRequest.Approval -> approval(request, words.joinToString(" ")) != null
             is InputRequest.Clarify -> {
                 val question = request.questions.singleOrNull() ?: return false
                 // A bare "okay" while they think names none of the choices.
@@ -145,6 +149,9 @@ object VoiceAnswers {
     /** First words that ask back rather than answer (speech to text drops the "?": "which one is faster"). */
     private val ASKS_BACK = setOf("what", "why", "how", "which", "where", "who", "pardon", "repeat", "huh", "explain", "say")
     private val PEOPLE = setOf("i", "you", "we", "they")
+    private val AUXILIARIES = setOf("is", "are", "does", "do", "did", "will", "would", "should", "can", "could")
+    /** All "got it" or "cool" is made of: heard, not answered. */
+    private val NOTED = setOf("got", "it", "cool")
 
     /** Words before the answer, not part of it: "sorry, the blue one". Said alone, there's no answer. */
     private val FILLERS = setOf("so", "well", "sorry", "okay", "ok", "alright")
@@ -161,11 +168,16 @@ object VoiceAnswers {
 
     /** Ways of putting it off, of not knowing or of not having heard, that aren't an answer. */
     private val HOLD_PHRASES = listOf(
-        "one second", "one minute", "just a second", "just a minute", "give me a second", "give me a minute",
+        "just a second", "just a minute", "just one second", "just one minute", "give me a second", "give me a minute",
+        "give me one", "give me two", "give me a few", "missed that", "come again",
         "let me think", "let me see", "let me check", "let me look", "let's see", "lets see",
         "not sure", "don't know", "dont know", "do not know", "don't remember", "no idea", "no clue", "not certain",
         "didn't catch", "didn't hear", "one more time", "say again", "again please", "tell me", "remind me",
         "options again", "read the options", "list the options",
+    )
+    /** Said on its own, a wait. */
+    private val HOLD_ALONE = setOf(
+        "one second", "one minute", "two seconds", "two minutes", "a few seconds", "a few minutes", "a second", "a minute",
     )
     private val ALWAYS_WORDS = setOf("always", "permanently", "forever")
     private val SESSION_WORDS = setOf("chat", "session")

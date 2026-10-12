@@ -136,7 +136,7 @@ class VoiceAnswersTest {
         listOf(
             "Green", "Blue please", "the second one", "I think red", "um, blue", "Umm… blue", "how about blue", "tell it red",
             "give me red", "do the first one", "sorry, the blue one", "when the tests pass", "use a second account",
-            "none of the options",
+            "none of the options", "poll every one minute", "second",
         ).forEach { assertTrue(VoiceAnswers.takesAsAnswer(color, it), it) }
         // A question back, a hedge or not knowing is the voice's to talk through.
         listOf(
@@ -144,9 +144,12 @@ class VoiceAnswersTest {
             "Umm…", "Hmmm", "Mhm", "Okay", "Yeah", "Alright", "let's see", "one sec", "One second.", "just a minute",
             "give me a second", "say the options again", "do I need to pick", "I'm not sure", "let me think", "I don't know",
             "I do not know", "dunno", "idk", "I didn't catch that", "one more time", "maybe", "hmm, maybe", "hang on",
+            "when does it run", "two seconds", "give me two minutes", "sorry, I missed that", "come again", "Got it", "cool",
         ).forEach { assertFalse(VoiceAnswers.takesAsAnswer(color, it), it) }
         // A question without choices takes a plain yes.
-        assertTrue(VoiceAnswers.takesAsAnswer(InputRequest.Clarify("srq-4", listOf(ClarifyQuestion(null, "Push it?"))), "Yeah"))
+        val push = InputRequest.Clarify("srq-4", listOf(ClarifyQuestion(null, "Push it?")))
+        assertTrue(VoiceAnswers.takesAsAnswer(push, "Yeah"))
+        assertFalse(VoiceAnswers.takesAsAnswer(push, "Got it"))
         // Several questions are never asked aloud.
         val two = color.copy(questions = color.questions + ClarifyQuestion(null, "Why?"))
         assertFalse(VoiceAnswers.takesAsAnswer(two, "Green"))
@@ -154,6 +157,8 @@ class VoiceAnswersTest {
         assertTrue(VoiceAnswers.takesAsAnswer(onceOnly, "yes"))
         assertTrue(VoiceAnswers.takesAsAnswer(onceOnly, "no, don't"))
         assertTrue(VoiceAnswers.takesAsAnswer(onceOnly, "Okay"))
+        assertTrue(VoiceAnswers.takesAsAnswer(onceOnly, "um, yes"))
+        assertTrue(VoiceAnswers.takesAsAnswer(onceOnly, "sorry, yes"))
         // Not knowing isn't a no.
         listOf("I don't know what that does", "no wait, let me think", "not sure")
             .forEach { assertFalse(VoiceAnswers.takesAsAnswer(onceOnly, it), it) }
