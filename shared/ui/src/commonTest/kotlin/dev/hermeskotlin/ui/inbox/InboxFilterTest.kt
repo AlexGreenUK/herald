@@ -1,5 +1,7 @@
 package dev.hermeskotlin.ui.inbox
 
+import dev.hermeskotlin.core.inbox.ChipMode
+import dev.hermeskotlin.core.inbox.InboxGroups
 import dev.hermeskotlin.core.inbox.InboxRun
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -41,5 +43,35 @@ class InboxFilterTest {
         assertEquals(InboxFilter.All, state.shownFilter)
         assertEquals(runs.size, state.shown.size)
         assertEquals(1, state.failed)
+    }
+
+    @Test
+    fun groupChipsFollowTheUsersOrderThenOther() {
+        val groups = InboxGroups().add("Personal").add("RUBIX").add("Empty")
+            .assign("default", "pulse", "RUBIX").assign("default", "brief", "Personal")
+        val chips = groupChips(runs, groups) { it.at > 250 }
+        // "Empty" has no runs; the siaulietis briefing is in no group.
+        assertEquals(listOf("Personal", "RUBIX", "Other"), chips.map { it.label })
+        assertEquals(listOf(2, 2, 1), chips.map { it.runs })
+        assertEquals(listOf(1, 2, 0), chips.map { it.unread })
+        assertEquals(listOf(400L, 200L), runs.filtered(InboxFilter.Group("Personal"), groups).map { it.at })
+        assertEquals(listOf(100L), runs.filtered(InboxFilter.Group(null), groups).map { it.at })
+    }
+
+    @Test
+    fun withoutGroupsThereIsNoOtherChip() {
+        assertEquals(emptyList(), groupChips(runs, InboxGroups()) { false })
+    }
+
+    @Test
+    fun aFilterFromTheOtherSplitOrARemovedGroupShowsEverything() {
+        val groups = InboxGroups().add("RUBIX").assign("default", "pulse", "RUBIX")
+        val byJobs = InboxUiState(runs = runs, groups = groups, filter = InboxFilter.Group("RUBIX"))
+        assertEquals(InboxFilter.All, byJobs.shownFilter)
+        val byGroups = byJobs.copy(groups = groups.copy(mode = ChipMode.Groups))
+        assertEquals(InboxFilter.Group("RUBIX"), byGroups.shownFilter)
+        assertEquals(listOf(500L, 300L), byGroups.shown.map { it.at })
+        assertEquals(InboxFilter.All, byGroups.copy(groups = byGroups.groups.remove("RUBIX")).shownFilter)
+        assertEquals(InboxFilter.All, byGroups.copy(filter = InboxFilter.Job("default", "brief")).shownFilter)
     }
 }

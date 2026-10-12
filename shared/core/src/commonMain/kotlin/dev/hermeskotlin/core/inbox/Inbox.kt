@@ -178,9 +178,15 @@ class InboxStore(private val store: KeyValueStore) {
         val read: Set<String> = emptySet(),
         /** Runs read before this (unix seconds) count as read: the Inbox's first look isn't a pile of unread. */
         @SerialName("since") val since: Long = 0,
+        val groups: InboxGroups = InboxGroups(),
     )
 
-    data class Snapshot(val runs: List<InboxRun> = emptyList(), val read: Set<String> = emptySet(), val since: Long = 0) {
+    data class Snapshot(
+        val runs: List<InboxRun> = emptyList(),
+        val read: Set<String> = emptySet(),
+        val since: Long = 0,
+        val groups: InboxGroups = InboxGroups(),
+    ) {
         fun isUnread(run: InboxRun): Boolean = run.key !in read && run.at > since
         val unread: Int get() = runs.count(::isUnread)
     }
@@ -195,7 +201,7 @@ class InboxStore(private val store: KeyValueStore) {
         if (gateway == gatewayUrl) return@withLock
         gateway = gatewayUrl
         val saved = load(gatewayUrl) ?: Saved(since = now).also { save(gatewayUrl, it) }
-        _state.value = Snapshot(saved.runs, saved.read, saved.since)
+        _state.value = Snapshot(saved.runs, saved.read, saved.since, saved.groups)
     }
 
     /** What the gateway listed: replaces the kept runs, keeping pushed ones it didn't list (it may lag). */
@@ -213,11 +219,14 @@ class InboxStore(private val store: KeyValueStore) {
 
     suspend fun markAllRead() = edit { s -> s.copy(read = s.runs.map { it.key }.toSet()) }
 
+    /** Changes the user's groups (kept on this phone, per gateway). */
+    suspend fun editGroups(change: (InboxGroups) -> InboxGroups) = edit { s -> s.copy(groups = change(s.groups)) }
+
     private suspend fun edit(change: (Snapshot) -> Snapshot) = lock.withLock {
         val url = gateway ?: return@withLock
         val next = change(_state.value)
         _state.value = next
-        save(url, Saved(next.runs, next.read, next.since))
+        save(url, Saved(next.runs, next.read, next.since, next.groups))
     }
 
     private fun merge(runs: List<InboxRun>): List<InboxRun> =
@@ -240,6 +249,51 @@ class InboxStore(private val store: KeyValueStore) {
     companion object {
         const val MAX_KEPT = 100
         const val MAX_KEPT_TEXT = 2_000
+    }
+}
+
+/** How the Inbox's chips split the runs: a chip per job, or per group the user made. */
+@Serializable
+enum class ChipMode { Jobs, Groups }
+
+/**
+ * The user's own groups of jobs for the Inbox, such as "RUBIX" and "Personal": [names] in the order made, and
+ * [jobs] mapping a job ([jobKey]) to its group. A job is in one group at most; one in none shows under "Other".
+ * Kept on the phone: they only sort what the phone shows.
+ */
+@Serializable
+data class InboxGroups(
+    val names: List<String> = emptyList(),
+    val jobs: Map<String, String> = emptyMap(),
+    val mode: ChipMode = ChipMode.Jobs,
+) {
+    fun of(bot: String, job: String): String? = jobs[jobKey(bot, job)]?.takeIf { it in names }
+
+    /** Adds a group called [name] (trimmed, at most [MAX_NAME]); a blank or taken name changes nothing. */
+    fun add(name: String): InboxGroups {
+        val clean = name.trim().take(MAX_NAME)
+        if (clean.isEmpty() || names.any { it.equals(clean, ignoreCase = true) } || names.size >= MAX_GROUPS) return this
+        return copy(names = names + clean)
+    }
+
+    /** Renames [from] to [to], keeping its jobs; a blank or taken name changes nothing. */
+    fun rename(from: String, to: String): InboxGroups {
+        val clean = to.trim().take(MAX_NAME)
+        if (clean.isEmpty() || from !in names || names.any { it != from && it.equals(clean, ignoreCase = true) }) return this
+        return copy(names = names.map { if (it == from) clean else it }, jobs = jobs.mapValues { if (it.value == from) clean else it.value })
+    }
+
+    /** Removes the group [name]; its jobs go back to none. */
+    fun remove(name: String): InboxGroups = copy(names = names - name, jobs = jobs.filterValues { it != name })
+
+    /** Puts a job in [group], or in none when it is null. */
+    fun assign(bot: String, job: String, group: String?): InboxGroups =
+        if (group == null || group !in names) copy(jobs = jobs - jobKey(bot, job)) else copy(jobs = jobs + (jobKey(bot, job) to group))
+
+    companion object {
+        const val MAX_NAME = 32
+        const val MAX_GROUPS = 20
+        fun jobKey(bot: String, job: String) = "$bot/$job"
     }
 }
 

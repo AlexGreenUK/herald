@@ -129,4 +129,53 @@ class InboxTest {
         links.consume(links.pending.value!!)
         assertNull(links.pending.value)
     }
+
+    @Test
+    fun groupsAreNamedOnceAndRenamingCarriesTheirJobs() {
+        var groups = InboxGroups().add(" RUBIX ").add("rubix").add("").add("Personal")
+        assertEquals(listOf("RUBIX", "Personal"), groups.names)
+        groups = groups.assign("default", "pulse", "RUBIX").assign("default", "brief", "Personal")
+        assertEquals("RUBIX", groups.of("default", "pulse"))
+        // Another profile's job of the same id is another job.
+        assertNull(groups.of("siaulietis", "pulse"))
+
+        groups = groups.rename("RUBIX", "Bar")
+        assertEquals(listOf("Bar", "Personal"), groups.names)
+        assertEquals("Bar", groups.of("default", "pulse"))
+        // A rename onto a taken name changes nothing.
+        assertEquals(groups, groups.rename("Bar", "personal"))
+    }
+
+    @Test
+    fun removingAGroupFreesItsJobsAndAJobCanLeaveItsGroup() {
+        val groups = InboxGroups().add("RUBIX").assign("default", "pulse", "RUBIX").assign("default", "radar", "RUBIX")
+        assertNull(groups.remove("RUBIX").of("default", "pulse"))
+        assertNull(groups.assign("default", "pulse", null).of("default", "pulse"))
+        assertEquals("RUBIX", groups.assign("default", "pulse", null).of("default", "radar"))
+        // A group that doesn't exist can't be joined.
+        assertNull(InboxGroups().assign("default", "pulse", "Nope").of("default", "pulse"))
+    }
+
+    @Test
+    fun groupsAndTheChipModeAreKeptWithTheInbox() = runTest {
+        val disk = InMemoryKeyValueStore()
+        val first = InboxStore(disk)
+        first.bind("https://gw", now = 0)
+        first.editGroups { it.add("RUBIX").assign("default", "pulse", "RUBIX").copy(mode = ChipMode.Groups) }
+
+        val again = InboxStore(disk)
+        again.bind("https://gw", now = 0)
+        assertEquals(ChipMode.Groups, again.state.value.groups.mode)
+        assertEquals("RUBIX", again.state.value.groups.of("default", "pulse"))
+    }
+
+    @Test
+    fun anInboxSavedBeforeGroupsLoadsWithNone() = runTest {
+        val disk = InMemoryKeyValueStore()
+        disk.put("inbox.v1.https://gw", """{"runs":[],"read":[],"since":5}""")
+        val store = InboxStore(disk)
+        store.bind("https://gw", now = 99)
+        assertEquals(InboxGroups(), store.state.value.groups)
+        assertEquals(5, store.state.value.since)
+    }
 }

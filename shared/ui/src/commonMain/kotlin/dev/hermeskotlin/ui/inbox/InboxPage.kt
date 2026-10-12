@@ -21,6 +21,28 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.foundation.text.input.rememberTextFieldState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import com.composables.icons.lucide.Check
+import com.composables.icons.lucide.ChevronDown
+import com.composables.icons.lucide.Folder
+import com.composables.icons.lucide.FolderPlus
+import com.composables.icons.lucide.FolderTree
+import com.composables.icons.lucide.FolderX
+import com.composables.icons.lucide.Pencil
+import com.composables.icons.lucide.Trash2
+import dev.hermeskotlin.core.inbox.ChipMode
+import dev.hermeskotlin.designsystem.components.BottomSheet
+import dev.hermeskotlin.designsystem.components.Button
+import dev.hermeskotlin.designsystem.components.ButtonSize
+import dev.hermeskotlin.designsystem.components.ButtonVariant
+import dev.hermeskotlin.designsystem.components.Dialog
+import dev.hermeskotlin.designsystem.components.SheetAction
+import dev.hermeskotlin.designsystem.components.SheetHeader
+import dev.hermeskotlin.designsystem.components.TextField
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -113,11 +135,13 @@ internal fun InboxPage(
     }
     PlatformBackHandler(enabled = visible && state.open != null) { viewModel.closeRun() }
     PlatformBackHandler(enabled = visible && state.open == null && state.choosing) { viewModel.closeJobs() }
+    PlatformBackHandler(enabled = visible && state.open == null && !state.choosing && state.grouping) { viewModel.closeGroups() }
 
     Column(Modifier.fillMaxSize()) {
         when {
             state.open != null -> RunView(state.open, state.openLoading, state.openPartial, onBack = viewModel::closeRun)
             state.choosing -> FollowView(state, viewModel)
+            state.grouping -> GroupsView(state, viewModel)
             else -> InboxView(state, viewModel, onBack = onBack, onOpenSettings = onOpenSettings)
         }
         state.message?.let { MessageBanner(it, onDismiss = viewModel::dismissMessage, modifier = Modifier.padding(bottom = 96.dp)) }
@@ -133,11 +157,15 @@ private fun InboxView(state: InboxUiState, viewModel: InboxViewModel, onBack: ()
         subtitle = when {
             state.runs.isEmpty() -> null
             state.shownFilter is InboxFilter.Job -> state.shown.size.let { "$it ${if (it == 1) "report" else "reports"} from ${state.shown.first().title}" }
+            state.shownFilter is InboxFilter.Group -> state.shown.size.let { n ->
+                "$n ${if (n == 1) "report" else "reports"} in ${(state.shownFilter as InboxFilter.Group).name ?: "no group"}"
+            }
             unread > 0 -> "$unread unread · from the jobs you follow"
             else -> "From the jobs you follow"
         },
     ) {
         if (unread > 0) IconButton(Lucide.CheckCheck, contentDescription = "Mark all read", onClick = viewModel::markAllRead)
+        IconButton(Lucide.FolderTree, contentDescription = "Groups", onClick = viewModel::openGroups)
         IconButton(Lucide.Settings2, contentDescription = "Choose jobs", onClick = viewModel::chooseJobs)
     }
     state.block?.let { BlockNotice(it, onOpenSettings) }
@@ -176,7 +204,13 @@ private fun InboxView(state: InboxUiState, viewModel: InboxViewModel, onBack: ()
  */
 @Composable
 private fun FilterChips(state: InboxUiState, onSelect: (InboxFilter) -> Unit) {
-    val chips = state.chips
+    // By group once there are groups to split by; by job otherwise, and always when the user picked jobs.
+    val byGroup = state.groups.mode == ChipMode.Groups && state.groupChips.isNotEmpty()
+    val chips: List<Triple<InboxFilter, String, Int>> = if (byGroup) {
+        state.groupChips.map { Triple(it.filter, it.label, it.unread) }
+    } else {
+        state.chips.map { Triple(it.filter, it.label, it.unread) }
+    }
     val failed = state.failed
     if (chips.size < 2 && failed == 0) return
     val selected = state.shownFilter
@@ -185,12 +219,12 @@ private fun FilterChips(state: InboxUiState, onSelect: (InboxFilter) -> Unit) {
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Chip("All", selected = selected == InboxFilter.All, onClick = { onSelect(InboxFilter.All) }, count = state.unread.takeIf { it > 0 })
-        chips.forEach { chip ->
+        chips.forEach { (filter, label, unread) ->
             Chip(
-                chip.label,
-                selected = selected == chip.filter,
-                onClick = { onSelect(chip.filter) },
-                count = chip.unread.takeIf { it > 0 },
+                label,
+                selected = selected == filter,
+                onClick = { onSelect(filter) },
+                count = unread.takeIf { it > 0 },
                 countColor = Theme[colors][accentText],
             )
         }
@@ -305,6 +339,189 @@ private fun RunView(run: InboxRun, loading: Boolean, partial: Boolean, onBack: (
             )
         }
         if (loading && run.text.isEmpty()) ListSkeleton() else MarkdownText(run.text)
+    }
+}
+
+/**
+ * The chips' split (by job or by group), the user's groups (add, rename, remove), and each job's group. Groups
+ * live on this phone only: they sort what it shows, nothing on the gateway.
+ */
+@Composable
+private fun GroupsView(state: InboxUiState, viewModel: InboxViewModel) {
+    val groups = state.groups
+    var naming by remember { mutableStateOf<GroupNaming?>(null) }
+    var picking by remember { mutableStateOf<InboxFilter.Job?>(null) }
+    SubpageHeader("Chips and groups", onBack = viewModel::closeGroups, subtitle = "Kept on this phone") {
+        IconButton(Lucide.FolderPlus, contentDescription = "New group", onClick = { naming = GroupNaming(null) })
+    }
+    LazyColumn(
+        Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 96.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        item(key = "mode") {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                DayLabel("Chips show")
+                SegmentedControl(
+                    options = ChipMode.entries,
+                    selected = groups.mode,
+                    onSelect = viewModel::setChipMode,
+                    optionLabel = { if (it == ChipMode.Jobs) "Each job" else "My groups" },
+                )
+                if (groups.mode == ChipMode.Groups && groups.names.isEmpty()) {
+                    Text(
+                        "Make a group with the folder button above, then put jobs in it. Until then the chips show each job.",
+                        style = Theme[typography][bodySmall],
+                        color = Theme[colors][textTertiary],
+                    )
+                }
+            }
+        }
+        if (groups.names.isNotEmpty()) {
+            item(key = "groups-label") { DayLabel("Groups") }
+            items(groups.names, key = { "g-$it" }) { name ->
+                val count = state.groupableJobs.count { it.second == name }
+                GroupRow(
+                    name,
+                    jobs = count,
+                    onRename = { naming = GroupNaming(name) },
+                    onRemove = { viewModel.removeGroup(name) },
+                )
+            }
+        }
+        item(key = "jobs-label") { DayLabel("Jobs") }
+        if (state.groupableJobs.isEmpty()) {
+            item(key = "no-jobs") {
+                Text("Jobs show here once they have reports in the Inbox.", style = Theme[typography][bodySmall], color = Theme[colors][textTertiary])
+            }
+        }
+        items(state.groupableJobs, key = { "j-${it.first.filter.bot}/${it.first.filter.job}" }) { (chip, group) ->
+            JobGroupRow(chip.label, group, enabled = groups.names.isNotEmpty(), onClick = { picking = chip.filter })
+        }
+    }
+    GroupNameDialog(
+        naming = naming,
+        taken = groups.names,
+        onDismiss = { naming = null },
+        onSave = { from, to ->
+            if (from == null) viewModel.addGroup(to) else viewModel.renameGroup(from, to)
+            naming = null
+        },
+    )
+    val job = picking
+    DropdownSheet(
+        visible = job != null,
+        title = state.chips.firstOrNull { it.filter == job }?.label ?: "",
+        options = listOf<String?>(null) + groups.names,
+        selected = job?.let { groups.of(it.bot, it.job) },
+        label = { it ?: "No group" },
+        onPick = { group -> job?.let { viewModel.assignGroup(it, group) }; picking = null },
+        onDismiss = { picking = null },
+    )
+}
+
+/** The name dialog: a new group when [from] is null, else a rename of [from]. */
+private data class GroupNaming(val from: String?)
+
+@Composable
+private fun GroupNameDialog(naming: GroupNaming?, taken: List<String>, onDismiss: () -> Unit, onSave: (from: String?, to: String) -> Unit) {
+    var shown by remember { mutableStateOf(naming) }
+    if (naming != null) shown = naming
+    val n = shown ?: return
+    val name = rememberTextFieldState(n.from.orEmpty())
+    LaunchedEffect(naming) { if (naming != null) name.edit { replace(0, length, naming.from.orEmpty()) } }
+    val text = name.text.toString().trim()
+    val clash = taken.any { it != n.from && it.equals(text, ignoreCase = true) }
+    Dialog(
+        visible = naming != null,
+        onDismissRequest = onDismiss,
+        title = if (n.from == null) "New group" else "Rename group",
+        message = if (n.from == null) "Such as RUBIX or Personal. Put jobs in it from the list below." else null,
+        actions = {
+            Button("Cancel", onClick = onDismiss, variant = ButtonVariant.Ghost, size = ButtonSize.Small)
+            Button(
+                if (n.from == null) "Create" else "Save",
+                onClick = { onSave(n.from, text) },
+                size = ButtonSize.Small,
+                enabled = text.isNotEmpty() && !clash,
+            )
+        },
+    ) {
+        TextField(name, placeholder = "Group name", error = if (clash) "There's a group with that name." else null)
+    }
+}
+
+@Composable
+private fun GroupRow(name: String, jobs: Int, onRename: () -> Unit, onRemove: () -> Unit) {
+    val shape = RoundedCornerShape(Theme[radii][radiusLarge])
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(Theme[colors][surface], shape)
+            .border(1.dp, Theme[colors][stroke], shape)
+            .padding(start = 14.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        UnstyledIcon(Lucide.Folder, contentDescription = null, tint = Theme[colors][accentText], modifier = Modifier.size(16.dp))
+        Column(Modifier.weight(1f)) {
+            Text(name, style = Theme[typography][body].copy(fontWeight = FontWeight.Medium), color = Theme[colors][text], maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                if (jobs == 1) "1 job" else "$jobs jobs",
+                style = Theme[typography][bodySmall].copy(fontSize = 12.5.sp),
+                color = Theme[colors][textTertiary],
+            )
+        }
+        IconButton(Lucide.Pencil, contentDescription = "Rename $name", onClick = onRename)
+        IconButton(Lucide.Trash2, contentDescription = "Remove $name", onClick = onRemove)
+    }
+}
+
+@Composable
+private fun JobGroupRow(label: String, group: String?, enabled: Boolean, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(Theme[radii][radiusLarge])
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(Theme[colors][surface])
+            .border(1.dp, Theme[colors][stroke], shape)
+            .clickable(enabled = enabled, onClickLabel = "Choose $label's group", onClick = onClick)
+            .padding(14.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, style = Theme[typography][body], color = Theme[colors][text], maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        Text(
+            group ?: if (enabled) "No group" else "",
+            style = Theme[typography][bodySmall].copy(fontWeight = FontWeight.Medium),
+            color = if (group != null) Theme[colors][accentText] else Theme[colors][textTertiary],
+            maxLines = 1,
+        )
+        if (enabled) UnstyledIcon(Lucide.ChevronDown, contentDescription = null, tint = Theme[colors][textTertiary], modifier = Modifier.size(16.dp))
+    }
+}
+
+/** A short list of choices in a bottom sheet, with a tick on the [selected] one. */
+@Composable
+private fun <T> DropdownSheet(
+    visible: Boolean,
+    title: String,
+    options: List<T>,
+    selected: T,
+    label: (T) -> String,
+    onPick: (T) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    BottomSheet(visible = visible, onDismiss = onDismiss) {
+        SheetHeader(title, "Group")
+        options.forEach { option ->
+            SheetAction(
+                label(option),
+                if (option == selected) Lucide.Check else if (option == null) Lucide.FolderX else Lucide.Folder,
+                onClick = { onPick(option) },
+            )
+        }
     }
 }
 

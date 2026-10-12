@@ -7,9 +7,11 @@ import dev.hermeskotlin.core.connection.GatewayConnection
 import dev.hermeskotlin.core.cron.CronApi
 import dev.hermeskotlin.core.cron.CronJob
 import dev.hermeskotlin.core.gateway.SavedGateway
+import dev.hermeskotlin.core.inbox.ChipMode
 import dev.hermeskotlin.core.inbox.Follow
 import dev.hermeskotlin.core.inbox.Following
 import dev.hermeskotlin.core.inbox.InboxApi
+import dev.hermeskotlin.core.inbox.InboxGroups
 import dev.hermeskotlin.core.inbox.InboxRun
 import dev.hermeskotlin.core.inbox.InboxStore
 import dev.hermeskotlin.core.network.ApiResult
@@ -29,15 +31,34 @@ import kotlinx.coroutines.launch
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
 
-/** What the Inbox list shows: every run, only the failed ones, or one job's. */
+/** What the Inbox list shows: every run, only the failed ones, one job's, or one of the user's groups. */
 sealed interface InboxFilter {
     data object All : InboxFilter
     data object Failed : InboxFilter
     data class Job(val bot: String, val job: String) : InboxFilter
+
+    /** A group the user made; [name] null is "Other", the jobs in no group. */
+    data class Group(val name: String?) : InboxFilter
 }
 
 /** A job's chip: what it filters to, its name, and how many of its runs are unread. */
 data class JobChip(val filter: InboxFilter.Job, val label: String, val runs: Int, val unread: Int)
+
+/** A group's chip: what it filters to, its name, and how many of its runs are unread. */
+data class GroupChip(val filter: InboxFilter.Group, val label: String, val runs: Int, val unread: Int)
+
+/**
+ * A chip per group the user made, in their order, then "Other" for the runs of jobs in no group. Groups with no
+ * runs in the Inbox are left out, and "Other" only shows when there is a group to tell it from.
+ */
+fun groupChips(runs: List<InboxRun>, groups: InboxGroups, isUnread: (InboxRun) -> Boolean): List<GroupChip> {
+    val byGroup = runs.groupBy { groups.of(it.bot, it.job) }
+    val made = groups.names.mapNotNull { name ->
+        byGroup[name]?.let { GroupChip(InboxFilter.Group(name), name, it.size, it.count(isUnread)) }
+    }
+    val other = byGroup[null]?.takeIf { made.isNotEmpty() }?.let { GroupChip(InboxFilter.Group(null), "Other", it.size, it.count(isUnread)) }
+    return made + listOfNotNull(other)
+}
 
 /**
  * One chip per job with runs in the Inbox, the job with the newest run first, so the job that just reported is
@@ -51,10 +72,11 @@ fun jobChips(runs: List<InboxRun>, isUnread: (InboxRun) -> Boolean): List<JobChi
         .sortedByDescending { chip -> runs.first { it.bot == chip.filter.bot && it.job == chip.filter.job }.at }
 
 /** The runs [filter] keeps, in their order. */
-fun List<InboxRun>.filtered(filter: InboxFilter): List<InboxRun> = when (filter) {
+fun List<InboxRun>.filtered(filter: InboxFilter, groups: InboxGroups = InboxGroups()): List<InboxRun> = when (filter) {
     InboxFilter.All -> this
     InboxFilter.Failed -> filter { it.failed }
     is InboxFilter.Job -> filter { it.bot == filter.bot && it.job == filter.job }
+    is InboxFilter.Group -> filter { groups.of(it.bot, it.job) == filter.name }
 }
 
 /** Why the Inbox can't fetch from the gateway: it then shows what it kept, with this said once. */
@@ -70,6 +92,9 @@ data class InboxUiState(
     val runs: List<InboxRun> = emptyList(),
     val read: Set<String> = emptySet(),
     val since: Long = 0,
+    val groups: InboxGroups = InboxGroups(),
+    /** The groups page: make, rename and remove groups, and put jobs in them. */
+    val grouping: Boolean = false,
     val loading: Boolean = true,
     val error: String? = null,
     val block: InboxBlock? = null,
@@ -90,12 +115,24 @@ data class InboxUiState(
     fun isUnread(run: InboxRun): Boolean = run.key !in read && run.at > since
     val unread: Int get() = runs.count(::isUnread)
     val chips: List<JobChip> get() = jobChips(runs, ::isUnread)
+    val groupChips: List<GroupChip> get() = groupChips(runs, groups, ::isUnread)
     val failed: Int get() = runs.count { it.failed }
 
-    /** A job filter whose job has left the Inbox shows everything again. */
-    val shownFilter: InboxFilter get() = filter.takeIf { f -> f !is InboxFilter.Job || runs.any { it.bot == f.bot && it.job == f.job } }
-        ?: InboxFilter.All
-    val shown: List<InboxRun> get() = runs.filtered(shownFilter)
+    /**
+     * The filter in force: one that no longer fits (its job left the Inbox, its group was removed, or the chips
+     * now split the other way) shows everything again.
+     */
+    val shownFilter: InboxFilter get() = filter.takeIf { f ->
+        when (f) {
+            InboxFilter.All, InboxFilter.Failed -> true
+            is InboxFilter.Job -> groups.mode == ChipMode.Jobs && runs.any { it.bot == f.bot && it.job == f.job }
+            is InboxFilter.Group -> groups.mode == ChipMode.Groups && groupChips.any { it.filter == f }
+        }
+    } ?: InboxFilter.All
+    val shown: List<InboxRun> get() = runs.filtered(shownFilter, groups)
+
+    /** Every job with runs in the Inbox, for the groups page: its chip and the group it's in. */
+    val groupableJobs: List<Pair<JobChip, String?>> get() = chips.map { it to groups.of(it.filter.bot, it.filter.job) }
 }
 
 /**
@@ -121,7 +158,7 @@ class InboxViewModel(
 
     init {
         viewModelScope.launch {
-            store.state.collect { kept -> _state.update { it.copy(runs = kept.runs, read = kept.read, since = kept.since) } }
+            store.state.collect { kept -> _state.update { it.copy(runs = kept.runs, read = kept.read, since = kept.since, groups = kept.groups) } }
         }
         // A run finished on the gateway: cron output arrives without an event of its own, so a
         // sessions change (an agent run is a session) is the nudge to look again.
@@ -157,6 +194,28 @@ class InboxViewModel(
     fun refresh() = load()
 
     fun setFilter(filter: InboxFilter) = _state.update { it.copy(filter = filter) }
+
+    /** Splits the chips by job or by the user's groups. */
+    fun setChipMode(mode: ChipMode) {
+        _state.update { it.copy(filter = InboxFilter.All) }
+        editGroups { it.copy(mode = mode) }
+    }
+
+    fun openGroups() = _state.update { it.copy(grouping = true) }
+
+    fun closeGroups() = _state.update { it.copy(grouping = false) }
+
+    fun addGroup(name: String) = editGroups { it.add(name) }
+
+    fun renameGroup(from: String, to: String) = editGroups { it.rename(from, to) }
+
+    fun removeGroup(name: String) = editGroups { it.remove(name) }
+
+    fun assignGroup(job: InboxFilter.Job, group: String?) = editGroups { it.assign(job.bot, job.job, group) }
+
+    private fun editGroups(change: (InboxGroups) -> InboxGroups) {
+        viewModelScope.launch { store.editGroups(change) }
+    }
 
     fun dismissMessage() = _state.update { it.copy(message = null) }
 
