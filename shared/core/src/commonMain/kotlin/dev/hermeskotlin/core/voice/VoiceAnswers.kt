@@ -133,9 +133,10 @@ object VoiceAnswers {
 
     private fun String.containsPhrase(phrase: String): Boolean = " $this ".contains(" $phrase ")
 
-    /** "Give me five minutes", "give me a couple of seconds": a wait, however long. */
+    /** "Give me five minutes", "give me a couple of seconds": a wait, however long; "updates every minute" isn't one. */
     private fun asksForTime(words: List<String>) = words.windowed(2).withIndex().any { (i, pair) ->
-        pair == listOf("give", "me") && words.drop(i + 2).take(4).any { it in TIME_WORDS }
+        val after = words.drop(i + 2).take(4)
+        pair == listOf("give", "me") && after.any { it in TIME_WORDS } && after.none { it in EVERY }
     }
 
     private fun filler(word: String) = word in FILLERS || FILLER_SOUND.matches(word)
@@ -183,6 +184,7 @@ object VoiceAnswers {
         "didn't catch", "didn't hear", "one more time", "say again", "again please", "tell me", "remind me",
         "options again", "read the options", "list the options",
     )
+    private val EVERY = setOf("every", "each", "per")
     private val TIME_WORDS = setOf("second", "seconds", "sec", "secs", "minute", "minutes", "min", "mins", "moment")
     /** Said on its own, a wait. */
     private val HOLD_ALONE = setOf(

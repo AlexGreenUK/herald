@@ -137,6 +137,7 @@ class VoiceAnswersTest {
             "Green", "Blue please", "the second one", "I think red", "um, blue", "Umm… blue", "how about blue", "tell it red",
             "give me red", "do the first one", "sorry, the blue one", "when the tests pass", "use a second account",
             "none of the options", "poll every one minute", "second", "give me one of each", "give me a few examples",
+            "give me updates every minute",
         ).forEach { assertTrue(VoiceAnswers.takesAsAnswer(color, it), it) }
         // A question back, a hedge or not knowing is the voice's to talk through.
         listOf(
