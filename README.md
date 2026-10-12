@@ -116,6 +116,10 @@ connection one at a time and says what to fix.
 - Your sign-in and the offline copy of your chats are encrypted with a key held in the Android
   Keystore. App data is excluded from backups.
 - No analytics, no tracking.
+- Phone tools are off until you switch each one on in Settings → Phone tools. What a tool reads (your
+  location, calendar, contacts, or steps, sleep and heart rate from Health Connect) goes only to your
+  gateway's agent, in the chat that asked, when the agent calls it. Herald only reads health data, never
+  writes it, and keeps none of it.
 
 ## Development
 
