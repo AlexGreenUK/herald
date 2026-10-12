@@ -111,5 +111,8 @@ dependencies {
     implementation(libs.androidx.fragment)
     implementation(libs.koin.android)
     implementation(libs.androidx.health.connect)
+    // The watch companion's link to Herald's Wear OS app (wearApp).
+    implementation(libs.play.services.wearable)
+    implementation(libs.kotlinx.coroutines.play.services)
     debugImplementation(libs.compose.ui.tooling)
 }
