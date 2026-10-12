@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -72,6 +73,11 @@ data class PhoneRequest(
     val session: String = "",
     /** When the agent stops waiting, in the gateway's epoch seconds. */
     val expires: Long = 0,
+    /**
+     * The gateway's time when it listed the call (epoch seconds; 0 from a plugin before 0.3.3): [expires] is
+     * measured against it, never against the phone's own clock, which may be off.
+     */
+    @Transient val gatewayNow: Long = 0,
 )
 
 /** What the plugin answers to `/herald-push phone …`. */
@@ -82,6 +88,8 @@ private data class PhoneReply(
     val tools: List<String> = emptyList(),
     val requests: List<PhoneRequest> = emptyList(),
     val phones: List<KnownPhone> = emptyList(),
+    /** The gateway's time with `pending`, epoch seconds (0.3.3 on). */
+    val now: Long = 0,
 )
 
 /**
@@ -264,7 +272,8 @@ class PushApi(private val connection: GatewayConnection) {
             put("device_id", deviceId)
             put("key", key)
         }
-        return output("phone pending $body")?.let(::phoneReply)?.takeIf { it.ok }?.requests
+        val reply = output("phone pending $body")?.let(::phoneReply)?.takeIf { it.ok } ?: return null
+        return reply.requests.map { it.copy(gatewayNow = reply.now) }
     }
 
     /** Hands the agent the [result] of a tool call, or the [error] it failed with. */
@@ -314,10 +323,10 @@ class PushApi(private val connection: GatewayConnection) {
         const val PLUGIN_REPO = "https://github.com/Giton22/hermes-herald-push"
 
         /** The plugin commit this Herald was built and reviewed against. */
-        const val PLUGIN_REF = "63fae949089175127b64e5288c9985418b19ae13"
+        const val PLUGIN_REF = "37926e1e68ec29eb517b3f25313686ce7a22930e"
 
         /** The version at [PLUGIN_REF]: an older copy on the gateway is offered this as an update. */
-        const val PLUGIN_VERSION = "0.3.2"
+        const val PLUGIN_VERSION = "0.3.3"
 
         /** The oldest plugin this Herald works with; an older copy waits for the user to update it. */
         const val MIN_PLUGIN_VERSION = "0.1.1"
