@@ -256,9 +256,10 @@ uses. The protocol itself is described in [hermes-protocol-research.md](hermes-p
 - [ ] UnifiedPush distributor support, so the ntfy app holds the one connection instead of Herald's foreground service
 
 ### Phone abilities for the agent
-Agent tools that run on the phone: a gateway plugin registers them, Herald answers over the dashboard socket (woken by push when it's away), and a tool says "phone offline" after a timeout. Every tool below, the incoming call included, has its own switch in Settings, plus one switch for all of them; all are off until the user turns them on. A tool that is off is not offered to the agent at all (the phone tells the plugin which tools it has, and the plugin registers only those), so the agent can't even ask. Turning a tool off takes effect at once, and a request already waiting for it is refused. Anything that changes the phone or your data asks on the phone first. Notifications, photos and files are left out on purpose: they would send one-time codes and private messages to the gateway, and text from strangers would reach the agent.
-- [ ] Battery and charging state
-- [ ] Network state (Wi-Fi or mobile, offline)
+Agent tools that run on the phone: a gateway plugin registers them, Herald answers over the dashboard socket (woken by push when it's away), and a tool says "phone offline" after a timeout. Every tool below, the incoming call included, has its own switch in Settings, plus one switch for all of them; all are off until the user turns them on. A tool that is off is not offered to the agent at all (the phone tells the plugin which tools it has, and the plugin offers only those), so the agent can't even ask. Turning a tool off takes effect at once, and a request already waiting for it is refused. Anything that changes the phone or your data asks on the phone first. Notifications, photos and files are left out on purpose: they would send one-time codes and private messages to the gateway, and text from strangers would reach the agent.
+- [x] Settings → Phone tools: one switch for all of them and one per tool, all off; the herald-push plugin (0.2) offers the agent only the tools switched on, in new chats (Hermes fixes a chat's tools when it starts; an open chat calling a tool that's off is refused). Calls are fetched when a watched chat starts a `phone_*` tool, on a push, and every 15 s; each phone answers with its own secret key; turns from messaging platforms are refused. The page lists what the agent used lately
+- [x] Battery and charging state
+- [x] Network state (Wi-Fi or mobile, offline)
 - [ ] Do Not Disturb, ringer and volume (read and set)
 - [ ] Set alarms and timers
 - [ ] App screen time (Usage Access)

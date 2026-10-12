@@ -139,38 +139,18 @@ class PushSetup(
      * The plugin, ready: switched on when it was only disabled, installed when missing (only with [install]),
      * and reinstalled at the reviewed commit when older than this Herald needs. Null with the status set.
      */
-    private suspend fun plugin(install: Boolean): PushPluginReply? {
-        var info = api.info()
-        if (info == null && install) {
-            // Present but switched off (in Desktop's Plugins hub, say): a toggle is enough, and an
-            // install would be refused as "already exists".
-            _status.value = PushStatus(State.Working, "Setting up on the gateway…")
-            if (api.enable()) info = api.info()
-            if (info == null) {
-                _status.value = PushStatus(State.Working, "Installing on the gateway…")
-                api.install()
-                info = api.info()
+    private suspend fun plugin(install: Boolean): PushPluginReply? =
+        when (val plugin = api.prepare(install) { _status.value = PushStatus(State.Working, it) }) {
+            is PluginState.Ready -> plugin.info
+            PluginState.Missing -> {
+                _status.value = PushStatus(State.NotInstalled)
+                null
+            }
+            is PluginState.Failed -> {
+                _status.value = PushStatus(State.Failed, plugin.reason)
+                null
             }
         }
-        if (info != null && info.ok && !info.versionAtLeast(PushApi.MIN_PLUGIN_VERSION)) {
-            _status.value = PushStatus(State.Working, "Updating the gateway's plugin…")
-            api.install(force = true)
-            info = api.info()
-            if (info != null && info.ok && !info.versionAtLeast(PushApi.MIN_PLUGIN_VERSION)) {
-                _status.value = PushStatus(State.Failed, "The gateway's herald-push plugin is too old (${info.version}). Update it there.")
-                return null
-            }
-        }
-        if (info == null) {
-            _status.value = PushStatus(State.NotInstalled)
-            return null
-        }
-        if (!info.ok) {
-            _status.value = PushStatus(State.Failed, info.error)
-            return null
-        }
-        return info
-    }
 
     private companion object {
         /** How long leaving a gateway may wait on telling it; the retirement itself is already saved. */

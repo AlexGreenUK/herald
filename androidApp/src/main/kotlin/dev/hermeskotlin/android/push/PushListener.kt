@@ -10,6 +10,7 @@ import dev.hermeskotlin.core.connection.ConnectionState
 import dev.hermeskotlin.core.connection.GatewayConnection
 import dev.hermeskotlin.core.gateway.GatewayRepository
 import dev.hermeskotlin.core.network.HermesJson
+import dev.hermeskotlin.core.phone.PhoneToolsBridge
 import dev.hermeskotlin.core.push.PushGateway
 import dev.hermeskotlin.core.push.NtfyClient
 import dev.hermeskotlin.core.push.NtfyEvent
@@ -47,6 +48,7 @@ class PushListener(
     private val notifications: ChatNotifications,
     private val bots: BotNotifier,
     private val gateways: GatewayRepository,
+    private val phoneTools: PhoneToolsBridge,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val guard = PushGuard(PushMessage.MAX_AGE_G2P_SECONDS) { System.currentTimeMillis() / 1000 }
@@ -90,6 +92,8 @@ class PushListener(
         when (message.type) {
             PushMessage.BOT_MESSAGE -> showBotMessage(message)
             PushMessage.PING -> notifications.postPushTest()
+            // Only a nudge: the call itself is fetched over the authenticated socket.
+            PushMessage.PHONE_REQUEST -> phoneTools.wake()
         }
     }
 

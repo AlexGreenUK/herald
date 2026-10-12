@@ -29,6 +29,9 @@ data class PushMessage(
         const val BOT_MESSAGE = "bot_message"
         const val PING = "ping"
 
+        /** A phone tool call waits on the gateway ([requestId]); the phone fetches it over the socket. */
+        const val PHONE_REQUEST = "phone_request"
+
         /** Gateway → phone messages are news; older than a day they're dropped. */
         const val MAX_AGE_G2P_SECONDS = 24 * 3600L
 

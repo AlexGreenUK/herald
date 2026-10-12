@@ -12,6 +12,7 @@ import dev.hermeskotlin.ui.sessions.InsightsViewModel
 import dev.hermeskotlin.ui.sessions.ScheduledViewModel
 import dev.hermeskotlin.ui.rooms.RoomsViewModel
 import dev.hermeskotlin.ui.sessions.SessionsViewModel
+import dev.hermeskotlin.ui.settings.PhoneToolsViewModel
 import dev.hermeskotlin.ui.settings.SettingsViewModel
 import dev.hermeskotlin.ui.signin.SignInViewModel
 import org.koin.core.module.dsl.viewModelOf
@@ -30,6 +31,7 @@ val uiModule = module {
     viewModelOf(::InsightsViewModel)
     viewModelOf(::ChatViewModel)
     viewModelOf(::SettingsViewModel)
+    viewModelOf(::PhoneToolsViewModel)
 }
 
 /** Every shared module, in dependency order. */
