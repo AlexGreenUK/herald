@@ -186,7 +186,7 @@ private const val MAX_EDGE_MODEL = 12
 
 /**
  * The orb in the middle is the mic: tap it to talk, tap it again to stop Hermes or its voice. Above it the chat
- * it talks in; under it what's going on, then what you said and the reply, with Reply at the end.
+ * it talks in; under it what's going on, then what you said and the reply. In a call, mute and hang up flank it.
  */
 @Composable
 private fun TalkScreen(
@@ -221,7 +221,7 @@ private fun TalkScreen(
     }
     val onOrb = {
         when {
-            // In a call the orb is the mute button; End is at the bottom.
+            // In a call the orb mutes too; while it connects, it hangs up.
             inCall && call.stage == CallStage.Live -> link.toggleMute()
             inCall -> link.endCall()
             mic.recording -> onFinishRecording()
@@ -287,20 +287,6 @@ private fun TalkScreen(
                 current.said?.let { said -> item { Said(said) } }
                 val update = current.update
                 if (update.text.isNotBlank()) item { Reply(update.text) }
-            }
-            // A mic after a finished reply, so a long one needn't be scrolled back up to answer. A small button in
-            // the list, not an edge button: that one only opens up once the list is scrolled to its end.
-            if (!inCall && (call != null || current != null) && !running && !speaking && !mic.recording) {
-                item {
-                    Box(Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 8.dp), contentAlignment = Alignment.Center) {
-                        FilledIconButton(
-                            onClick = onMic,
-                            colors = IconButtonDefaults.filledIconButtonColors(containerColor = HeraldBlue, contentColor = Color.White),
-                        ) {
-                            Icon(painterResource(R.drawable.ic_mic), contentDescription = "Reply", tint = Color.White)
-                        }
-                    }
-                }
             }
         }
     }
