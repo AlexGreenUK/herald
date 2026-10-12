@@ -60,6 +60,22 @@ class WearLinkTest {
     }
 
     @Test
+    fun aCallsMessagesGoBothWaysIntact() {
+        val start = CallStart("c1", chatId = null, offerSdp = "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\n")
+        assertEquals(start, WearJson.decode<CallStart>(WearJson.encode(start)))
+        val events = CallEvents("c1", seq = 3, events = listOf("""{"type":"session.started"}""", """{"type":"error"}"""))
+        assertEquals(events, WearJson.decode<CallEvents>(WearJson.encode(events)))
+        val update = CallUpdate("c1", CallPhase.Live, seq = 2, answerSdp = "v=0", caption = "Hello", captionIsVoice = true, thinking = true, working = "terminal")
+        assertEquals(update, WearJson.decode<CallUpdate>(WearJson.encode(update)))
+    }
+
+    @Test
+    fun anOlderPhoneSaysNothingOfLiveVoice() {
+        val status = WearJson.decode<PhoneStatus>("""{"signedIn":true,"connected":true}""".encodeToByteArray())
+        assertEquals(PhoneStatus(signedIn = true, connected = true, failed = false, liveVoice = false), status)
+    }
+
+    @Test
     fun longRepliesAreCutAtAWordToFitAMessage() {
         assertEquals("short", clipForWatch("short"))
         val clipped = clipForWatch("word ".repeat(100), max = 40)

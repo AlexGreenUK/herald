@@ -26,6 +26,21 @@ object WearPaths {
     /** Phone → watch: a [ReplyUpdate], again each time the turn moves on. */
     const val REPLY = "/herald/reply"
 
+    /** Watch → phone: a [CallStart], the watch's WebRTC offer for a live voice call. */
+    const val CALL_START = "/herald/call/start"
+
+    /** Watch → phone: [CallEvents], what the voice model sent on the call's event channel. */
+    const val CALL_EVENTS = "/herald/call/events"
+
+    /** Phone → watch: [CallEvents] for the watch to send on the call's event channel. */
+    const val CALL_SEND = "/herald/call/send"
+
+    /** Phone → watch: a [CallUpdate], again each time the call moves on. */
+    const val CALL_UPDATE = "/herald/call/update"
+
+    /** Watch → phone: a [CallEnd], hung up on the watch. */
+    const val CALL_END = "/herald/call/end"
+
     /** Every path above and below starts with this; the apps' listeners filter on it. */
     const val PREFIX = "/herald/"
 
@@ -194,7 +209,76 @@ data class ChatList(val chats: List<WatchChat> = emptyList(), val error: String?
  * when asked; false while it's (re)connecting or failing to. [failed]: it gave up, and won't connect on its own.
  */
 @Serializable
-data class PhoneStatus(val signedIn: Boolean, val connected: Boolean, val failed: Boolean = false)
+data class PhoneStatus(
+    val signedIn: Boolean,
+    val connected: Boolean,
+    val failed: Boolean = false,
+    /** The gateway talks live (GPT-Live): the watch can hold a voice call instead of sending what it heard. */
+    val liveVoice: Boolean = false,
+)
+
+/*
+ * A live voice call from the watch. The watch holds the WebRTC call itself (its microphone and speaker, straight
+ * to the voice model), but it has no gateway: the phone trades its offer for the model's answer through the
+ * gateway, and runs the conversation. What the model sends on the event channel goes to the phone; when it hands
+ * a request over, the phone runs it as a Hermes turn in the watch's chat and sends the reply back for the voice
+ * to say, as Herald does for its own calls.
+ */
+
+/** Starts call [id] in [chatId] (null: a new chat), with the watch's WebRTC [offerSdp]. */
+@Serializable
+data class CallStart(val id: String, val chatId: String?, val offerSdp: String)
+
+/** Event-channel messages of call [callId], in order; [seq] counts each side's batches, so a late one is told apart. */
+@Serializable
+data class CallEvents(val callId: String, val seq: Int, val events: List<String>)
+
+@Serializable
+data class CallEnd(val callId: String)
+
+@Serializable
+enum class CallPhase {
+    /** The phone is getting the voice model's answer. */
+    Connecting,
+
+    /** [CallUpdate.answerSdp] is there to connect with; the call goes on. */
+    Live,
+
+    /** Over: hung up, "stop" said, or [CallUpdate.error]. */
+    Ended,
+}
+
+/**
+ * Where call [callId] stands, from the phone. [answerSdp] comes once, with the first [CallPhase.Live]. [caption]
+ * is the latest words said (the voice's when [captionIsVoice]); [thinking] is true while Hermes works on a
+ * request, with [working] the tool it runs.
+ */
+@Serializable
+data class CallUpdate(
+    val callId: String,
+    val phase: CallPhase,
+    val seq: Int = 0,
+    val answerSdp: String? = null,
+    val chatId: String? = null,
+    val title: String? = null,
+    val caption: String? = null,
+    val captionIsVoice: Boolean = false,
+    val thinking: Boolean = false,
+    val working: String? = null,
+    val error: String? = null,
+    val model: String? = null,
+    val contextPercent: Int? = null,
+)
+
+/** The event-channel message types the phone acts on; the watch keeps the rest (audio deltas and the like) to itself. */
+val CALL_EVENT_TYPES = setOf(
+    "session.started",
+    "session.input_transcript.delta",
+    "session.output_transcript.delta",
+    "session.delegation.created",
+    "session.closed",
+    "error",
+)
 
 /** How every message on [WearPaths] is written. Unknown fields are skipped, so either app can be the newer. */
 object WearJson {
