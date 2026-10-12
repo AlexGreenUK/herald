@@ -399,6 +399,18 @@ fun historyToMessages(rows: List<SessionMessage>, liveSessionId: String? = null)
 /** Bot Mode's tool for messaging another bot. */
 const val MESSAGE_AGENT_TOOL = "message_agent"
 
+/** What a running tool is doing, in words: "terminal" reads as "Running a command"; other tools as "Using <name>". */
+fun toolInProgress(name: String): String = when (name) {
+    "terminal", "shell", "bash" -> "Running a command"
+    "read_file", "file_read" -> "Reading a file"
+    "write_file", "patch", "edit_file" -> "Editing a file"
+    "web_search", "search" -> "Searching the web"
+    "web_extract", "browser", "fetch" -> "Reading a web page"
+    "delegate_task" -> "Working with subagents"
+    MESSAGE_AGENT_TOOL -> "Messaging another bot"
+    else -> "Using ${name.replace('_', ' ')}"
+}
+
 /** The bot a `message_agent` call is addressed to (`target`, with or without its `@`). */
 fun messageTarget(arguments: kotlinx.serialization.json.JsonElement?): String? {
     val obj = when (arguments) {

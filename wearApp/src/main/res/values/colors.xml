@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The brand mark keeps its own blue, as on the phone. -->
+    <color name="launcher_background">#0053FD</color>
+</resources>
