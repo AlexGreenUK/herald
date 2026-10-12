@@ -263,7 +263,7 @@ Agent tools that run on the phone: a gateway plugin registers them, Herald answe
 - [x] Do Not Disturb, ringer and volume (read and set). A change asks first in a notification (Allow does it from the tap, Deny or a swipe refuses, no answer in 110 s refuses), and the result is read back. From Android 15 an app only turns off a Do Not Disturb it turned on, so the agent is told that up front
 - [x] Changes ask on the phone first; the page asks for what a tool needs (notifications, Do Not Disturb access) when it's switched on
 - [x] Set alarms and timers (in the phone's clock app, after Allow; the user sees and cancels them there)
-- [ ] App screen time (Usage Access)
+- [x] App screen time (Usage Access): per app, screen-on time and unlocks, today or up to a week by day
 - [ ] Open URLs, maps, apps or the share sheet
 - [ ] Write to the clipboard
 - [ ] Location and geofences ("when I get home…")
