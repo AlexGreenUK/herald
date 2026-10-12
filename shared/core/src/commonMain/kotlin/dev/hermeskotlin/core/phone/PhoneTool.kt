@@ -1,5 +1,6 @@
 package dev.hermeskotlin.core.phone
 
+import dev.hermeskotlin.core.push.PluginUpdate
 import dev.hermeskotlin.core.settings.AppSettings
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -42,6 +43,11 @@ interface PhoneToolRunner {
 data class PhoneToolUse(val tool: PhoneTool, val atMillis: Long, val error: String?)
 
 /** Where phone tools stand with the gateway, as a line under the Phone tools switch. */
-data class PhoneToolsStatus(val state: State = State.Off, val detail: String? = null) {
-    enum class State { Off, Offline, Working, NotInstalled, On, Failed }
+data class PhoneToolsStatus(
+    val state: State = State.Off,
+    val detail: String? = null,
+    /** A newer gateway plugin, waiting for the user to update to it. */
+    val update: PluginUpdate? = null,
+) {
+    enum class State { Off, Offline, Working, NotInstalled, Outdated, On, Failed }
 }

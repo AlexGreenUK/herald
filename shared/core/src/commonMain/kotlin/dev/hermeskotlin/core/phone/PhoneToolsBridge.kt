@@ -6,6 +6,7 @@ import dev.hermeskotlin.core.connection.GatewayConnection
 import dev.hermeskotlin.core.gateway.GatewayRepository
 import dev.hermeskotlin.core.network.HermesJson
 import dev.hermeskotlin.core.phone.PhoneToolsStatus.State
+import dev.hermeskotlin.core.push.KnownPhone
 import dev.hermeskotlin.core.push.PhoneRequest
 import dev.hermeskotlin.core.push.PluginState
 import dev.hermeskotlin.core.push.PushApi
@@ -68,8 +69,21 @@ class PhoneToolsBridge(
     /** The latest uses, newest first, for as long as the app runs. */
     val recent: StateFlow<List<PhoneToolUse>> = _recent.asStateFlow()
 
-    /** Bumped by [setUp]: the next report may install the plugin. Spent only by a report that ran. */
-    private val setUps = MutableStateFlow(0)
+    private val _phones = MutableStateFlow<List<KnownPhone>>(emptyList())
+
+    /** The phones the gateway knows, in the order calls no phone started try them; empty until fetched. */
+    val phones: StateFlow<List<KnownPhone>> = _phones.asStateFlow()
+    private val phonesLock = Mutex()
+    private var listedOn: JsonRpcClient? = null
+
+    /** Whether the gateway's plugin lists phones ([PushApi.PHONE_LIST_PLUGIN_VERSION]). */
+    private var canListPhones = false
+
+    /** What the user asked of the gateway's plugin: [n] counts the asks, [update] when the last was Update. */
+    private data class Ask(val n: Int = 0, val update: Boolean = false)
+
+    /** Bumped by [setUp] and [updatePlugin]: the next report may install the plugin. Spent only by a report that ran. */
+    private val setUps = MutableStateFlow(Ask())
     private var setUpsDone = 0
 
     /** This phone's phone-tools identity: an id and the secret that binds it on the gateway, kept together. */
@@ -90,7 +104,8 @@ class PhoneToolsBridge(
         scope.launch {
             val client = connection.state.map { (it as? ConnectionState.Connected)?.client }.distinctUntilChanged()
             val enabled = settings.settings.filterNotNull().map { it.enabledPhoneTools() }.distinctUntilChanged()
-            combine(client, enabled, setUps) { c, on, setUp -> Triple(c, on, setUp) }.collectLatest { (c, on, setUp) ->
+            // A plugin update from Notifications anywhere: look again, so the page doesn't still offer it.
+            combine(client, enabled, setUps, api.updates) { c, on, setUp, _ -> Triple(c, on, setUp) }.collectLatest { (c, on, setUp) ->
                 refuseSwitchedOff(on)
                 serve(c, on, setUp)
             }
@@ -98,7 +113,10 @@ class PhoneToolsBridge(
     }
 
     /** Installs or turns on the plugin when the gateway lacks it, then reports the tools. */
-    fun setUp() = setUps.update { it + 1 }
+    fun setUp() = setUps.update { Ask(it.n + 1) }
+
+    /** The user asked for the newer plugin the status offers. */
+    fun updatePlugin() = setUps.update { Ask(it.n + 1, update = true) }
 
     /** A push said a call waits: fetch it now. */
     fun wake() {
@@ -109,30 +127,28 @@ class PhoneToolsBridge(
         }
     }
 
-    private suspend fun serve(client: JsonRpcClient?, on: Set<PhoneTool>, setUp: Int) {
+    private suspend fun serve(client: JsonRpcClient?, on: Set<PhoneTool>, setUp: Ask) {
+        // Another connection may be another gateway: its phones aren't these. A switch flipped keeps them.
+        if (client !== listedOn) _phones.value = emptyList()
+        listedOn = client
         if (client == null) {
             _status.value = PhoneToolsStatus(if (on.isEmpty()) State.Off else State.Offline)
             return
         }
         if (on.isEmpty()) {
             // Told once, so the gateway stops offering them; a phone that never had any isn't announced.
-            if (store.get(reportedKey()) == "1") report(on, install = false)
+            if (store.get(reportedKey()) == "1") report(on, install = false, update = false)
             _status.value = PhoneToolsStatus(State.Off)
             return
         }
-        var attempt = 0
-        while (true) {
-            val install = setUp > setUpsDone
-            val reported = report(on, install)
-            // Spent once a report with it ran to the end, not when a reconnect or a switch cut it short.
-            if (install) setUpsDone = setUp
-            if (reported) break
-            // Not installed waits for Set up; anything else (a timeout, a refusal) is tried again.
-            if (_status.value.state == State.NotInstalled) return
-            delay(RETRY_MS[attempt.coerceAtMost(RETRY_MS.lastIndex)])
-            attempt++
-        }
         coroutineScope {
+            // From the start: the turn sent while the report is on its way is the one about to call a tool.
+            val teller = launch { tellWhereTurnsComeFrom(client) }
+            if (!reportUntilDone(on, setUp)) {
+                teller.cancel()
+                return@coroutineScope
+            }
+            launch { phonesCall { api.phoneList(it.id, it.key) } }
             launch {
                 client.events
                     .filter { it.type == "tool.start" && toolName(it.payload)?.startsWith(TOOL_PREFIX) == true }
@@ -153,24 +169,121 @@ class PhoneToolsBridge(
         }
     }
 
-    /** Tells the gateway what's on. False when it can't take phone tools (no plugin, refused, unreachable). */
-    private suspend fun report(on: Set<PhoneTool>, install: Boolean): Boolean {
+    /** Reports until the gateway took it; false when it waits for the user (no plugin, or one too old). */
+    private suspend fun reportUntilDone(on: Set<PhoneTool>, setUp: Ask): Boolean {
+        var attempt = 0
+        while (true) {
+            val install = setUp.n > setUpsDone
+            val reported = report(on, install, update = install && setUp.update)
+            // Spent once a report with it ran to the end, not when a reconnect or a switch cut it short.
+            if (install) setUpsDone = setUp.n
+            if (reported) return true
+            // Set up or Update waits for the user; anything else (a timeout, a refusal) is tried again.
+            if (_status.value.state in WAITS_FOR_USER) return false
+            delay(RETRY_MS[attempt.coerceAtMost(RETRY_MS.lastIndex)])
+            attempt++
+        }
+    }
+
+    /**
+     * Each turn this phone sends is told to the gateway with its chat connection, so the agent's phone tool calls
+     * in it come to this phone and not to another one with the same tool on. Every turn, not once per connection:
+     * another phone may have sent on the same chat since. Not told (a dropped link), the call goes to the first
+     * phone in the user's order with the tool on.
+     */
+    private suspend fun tellWhereTurnsComeFrom(client: JsonRpcClient) {
+        // Replayed sends from before this started (a tool switched, which restarts this) are old news: telling
+        // them again would take a chat back from a phone that sent on it since.
+        val since = client.clockMillis() - REPLAY_WINDOW_MS
+        client.sent.collect { request ->
+            if (!request.method.startsWith(TURN_PREFIX) || request.atMillis < since) return@collect
+            val sid = request.sessionId?.takeIf { it.isNotBlank() } ?: return@collect
+            val me = identity()
+            try {
+                api.phoneHere(me.id, me.key, sid)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // The call falls back to the first phone in the user's order with the tool on.
+            }
+        }
+    }
+
+    /** Asks the gateway for the phones list again (the page opened). */
+    fun refreshPhones() {
+        scope.launch { phonesCall { api.phoneList(it.id, it.key) } }
+    }
+
+    /** Moves phone [id] one place up ([by] -1) or down (+1) in the order calls no phone started try them. */
+    fun movePhone(id: String, by: Int) {
+        scope.launch {
+            phonesCall { me ->
+                val ids = _phones.value.map { it.id }.toMutableList()
+                val from = ids.indexOf(id)
+                val to = from + by
+                // Gone or already at the end: nothing to send, the list stands.
+                if (from < 0 || to !in ids.indices) return@phonesCall _phones.value
+                ids.add(to, ids.removeAt(from))
+                api.phoneOrder(me.id, me.key, ids)
+            }
+        }
+    }
+
+    /** Forgets another phone on the gateway: one the user doesn't have any more. */
+    fun removePhone(id: String) {
+        scope.launch { phonesCall { api.phoneRemove(it.id, it.key, id) } }
+    }
+
+    /**
+     * Runs one phones-list call while phone tools are on with the gateway, one at a time (each works on the list
+     * the one before left), and keeps the list it answers. A refusal leaves the list and says so.
+     */
+    private suspend fun phonesCall(call: suspend (Identity) -> List<KnownPhone>?) = phonesLock.withLock {
+        // An older plugin has no list: the page offers the update instead.
+        if (_status.value.state != State.On || !canListPhones) return@withLock
+        val gateway = listedOn
+        val got = try {
+            call(identity())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
+        }
+        // Another gateway since: this list isn't its.
+        if (listedOn !== gateway) return@withLock
+        if (got != null) {
+            _phones.value = got
+        } else if (_status.value.state == State.On) {
+            _status.update { it.copy(detail = "The gateway didn't take the change to the phones list.") }
+        }
+    }
+
+    /** Tells the gateway what's on. False when it can't take phone tools (no plugin, too old, refused, unreachable). */
+    private suspend fun report(on: Set<PhoneTool>, install: Boolean, update: Boolean): Boolean {
         try {
             if (on.isNotEmpty()) _status.value = PhoneToolsStatus(State.Working)
-            val plugin = api.prepare(install, PushApi.MIN_PHONE_PLUGIN_VERSION) {
+            // Turning everything off must reach even a plugin too old to use: else it keeps offering the tools.
+            val minimum = if (on.isEmpty()) PushApi.MIN_PLUGIN_VERSION else PushApi.MIN_PHONE_PLUGIN_VERSION
+            val plugin = api.prepare(install, minimum, update) {
                 if (on.isNotEmpty()) _status.value = PhoneToolsStatus(State.Working, it)
             }
-            when (plugin) {
+            val ready = when (plugin) {
                 PluginState.Missing -> {
                     _status.value = PhoneToolsStatus(if (on.isEmpty()) State.Off else State.NotInstalled)
+                    return false
+                }
+                is PluginState.Outdated -> {
+                    _status.value = if (on.isEmpty()) PhoneToolsStatus(State.Off) else PhoneToolsStatus(State.Outdated, update = plugin.update)
                     return false
                 }
                 is PluginState.Failed -> {
                     _status.value = PhoneToolsStatus(State.Failed, plugin.reason)
                     return false
                 }
-                is PluginState.Ready -> Unit
+                is PluginState.Ready -> plugin
             }
+            canListPhones = ready.info.versionAtLeast(PushApi.PHONE_LIST_PLUGIN_VERSION)
+            if (!canListPhones) _phones.value = emptyList()
             val me = identity()
             val offered = api.phoneTools(me.id, me.key, deviceName(), on.map { it.id }.sorted(), pushId()) ?: return false
             store.put(reportedKey(), if (on.isEmpty()) "0" else "1")
@@ -178,6 +291,7 @@ class PhoneToolsBridge(
             _status.value = PhoneToolsStatus(
                 State.On,
                 if (missing.isEmpty()) null else "The gateway's plugin doesn't know ${missing.joinToString { it.title }} yet.",
+                ready.update,
             )
             return true
         } catch (e: CancellationException) {
@@ -296,6 +410,12 @@ class PhoneToolsBridge(
     companion object {
         const val TOOL_PREFIX = "phone_"
 
+        /** The requests that start a turn: `prompt.submit`, `prompt.btw` and the like. */
+        const val TURN_PREFIX = "prompt."
+
+        /** A send this much older than the start of telling is replayed history, not the turn about to run. */
+        const val REPLAY_WINDOW_MS = 5_000L
+
         /** For chats this phone doesn't watch: how long a call may wait before the phone looks. */
         const val POLL_MS = 15_000L
 
@@ -309,6 +429,7 @@ class PhoneToolsBridge(
         const val RUN_LIMIT_MS = 125_000L
         const val MAX_RECENT = 20
         const val SWITCHED_OFF = "The user turned this tool off on the phone."
+        private val WAITS_FOR_USER = setOf(State.NotInstalled, State.Outdated)
         private const val MAX_ANSWERED = 200
         private const val ID_BYTES = 16
         private const val KEY_BYTES = 32

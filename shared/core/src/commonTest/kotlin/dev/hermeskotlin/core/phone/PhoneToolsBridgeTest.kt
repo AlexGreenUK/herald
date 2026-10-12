@@ -10,6 +10,7 @@ import dev.hermeskotlin.core.gateway.SavedGateway
 import dev.hermeskotlin.core.storage.KeyValueStore
 import dev.hermeskotlin.core.network.HermesJson
 import dev.hermeskotlin.core.network.createHttpClient
+import dev.hermeskotlin.core.push.PluginUpdate
 import dev.hermeskotlin.core.push.PushApi
 import dev.hermeskotlin.core.push.PushGateway
 import dev.hermeskotlin.core.push.PushKeys
@@ -65,7 +66,7 @@ class PhoneToolsBridgeTest {
     }
 
     /** What the gateway's herald-push plugin answers, with its phone tool calls kept in memory. */
-    private class Plugin(var installed: Boolean = true, var version: String = PushApi.MIN_PHONE_PLUGIN_VERSION) {
+    private class Plugin(var installed: Boolean = true, var version: String = PushApi.PLUGIN_VERSION) {
         val reports = mutableListOf<List<String>>()
         val reportBodies = mutableListOf<JsonObject>()
         val keys = mutableSetOf<String>()
@@ -73,6 +74,10 @@ class PhoneToolsBridgeTest {
         val waiting = mutableListOf<JsonObject>()
         val answers = mutableMapOf<String, JsonObject>()
         val installs = mutableListOf<JsonObject>()
+        val heres = mutableListOf<String>()
+
+        /** The phones it knows, in order: others the test adds, and each phone that reports. */
+        val phones = mutableListOf<String>()
 
         /** How many `phone tools` reports to fail before taking one. */
         var failReports = 0
@@ -98,7 +103,7 @@ class PhoneToolsBridgeTest {
                         "plugins.manage" -> {
                             installs += params
                             installed = true
-                            version = PushApi.MIN_PHONE_PLUGIN_VERSION
+                            version = PushApi.PLUGIN_VERSION
                             """{"ok":true}"""
                         }
                         "command.dispatch" -> if (!installed) null else command(params["arg"]!!.jsonPrimitive.content)
@@ -125,7 +130,25 @@ class PhoneToolsBridgeTest {
                 words[0] == "phone" -> {
                     val body = HermesJson.parseToJsonElement(words[2]).jsonObject
                     keys += body["key"]!!.jsonPrimitive.content
-                    ids += body["device_id"]!!.jsonPrimitive.content
+                    val me = body["device_id"]!!.jsonPrimitive.content
+                    ids += me
+                    val listing = {
+                        buildJsonObject {
+                            put("ok", true)
+                            put(
+                                "phones",
+                                JsonArray(
+                                    phones.map { id ->
+                                        buildJsonObject {
+                                            put("id", id)
+                                            put("name", if (id == me) "Pixel" else "Phone $id")
+                                            put("me", id == me)
+                                        }
+                                    },
+                                ),
+                            )
+                        }
+                    }
                     when (words[1]) {
                         "tools" -> if (failReports > 0) {
                             failReports--
@@ -137,10 +160,27 @@ class PhoneToolsBridgeTest {
                             val tools = body["tools"]!!.jsonArray.map { it.jsonPrimitive.content }
                             reports += tools
                             reportBodies += body
+                            if (me !in phones) phones += me
                             buildJsonObject {
                                 put("ok", true)
                                 put("tools", JsonArray(tools.map(::JsonPrimitive)))
                             }
+                        }
+                        "here" -> {
+                            heres += body["sid"]!!.jsonPrimitive.content
+                            buildJsonObject { put("ok", true) }
+                        }
+                        "list" -> listing()
+                        "order" -> {
+                            val first = body["ids"]!!.jsonArray.map { it.jsonPrimitive.content }
+                            val rest = phones - first.toSet()
+                            phones.clear()
+                            phones += first + rest
+                            listing()
+                        }
+                        "remove" -> {
+                            phones -= body["id"]!!.jsonPrimitive.content
+                            listing()
                         }
                         "pending" -> buildJsonObject {
                             put("ok", true)
@@ -327,12 +367,60 @@ class PhoneToolsBridgeTest {
     }
 
     @Test
-    fun anOldPluginIsReplaced() = runTest {
+    fun anOldPluginWaitsForTheUserToUpdateIt() = runTest {
         val s = setup(Runner(), on = listOf(PhoneTool.Battery))
         val plugin = Plugin(version = "0.2.0")
         connect(s, plugin)
+        until { s.bridge.status.value.state == PhoneToolsStatus.State.Outdated }
+        delay(PhoneToolsBridge.POLL_MS * 2)
+        // Nothing installed and nothing reported: the user hasn't asked for the update.
+        assertTrue(plugin.installs.isEmpty())
+        assertTrue(plugin.reports.isEmpty())
+        assertEquals(PluginUpdate("0.2.0", PushApi.PLUGIN_VERSION, needed = true), s.bridge.status.value.update)
+        s.bridge.updatePlugin()
         until { s.bridge.status.value.state == PhoneToolsStatus.State.On }
         assertEquals(true, plugin.installs.single()["force"]?.jsonPrimitive?.content?.toBoolean())
+        assertNull(s.bridge.status.value.update)
+    }
+
+    @Test
+    fun aPluginWithoutThePhonesListWorksAndOffersTheUpdate() = runTest {
+        val s = setup(Runner(), on = listOf(PhoneTool.Battery))
+        val plugin = Plugin(version = PushApi.MIN_PHONE_PLUGIN_VERSION)
+        plugin.call("e".repeat(32), PhoneTool.Battery.id)
+        connect(s, plugin)
+        until { plugin.answers.isNotEmpty() }
+        s.bridge.refreshPhones()
+        delay(1_000)
+        assertTrue(plugin.installs.isEmpty())
+        assertEquals(PluginUpdate(PushApi.MIN_PHONE_PLUGIN_VERSION, PushApi.PLUGIN_VERSION, needed = false), s.bridge.status.value.update)
+        // Not asked for a list it can't give, and no error for it.
+        assertTrue(s.bridge.phones.value.isEmpty())
+        assertNull(s.bridge.status.value.detail)
+    }
+
+    @Test
+    fun turningEverythingOffReachesAPluginTooOldToUse() = runTest {
+        val s = setup(Runner(), on = listOf(PhoneTool.Battery))
+        val plugin = Plugin()
+        connect(s, plugin)
+        until { plugin.reports.isNotEmpty() }
+        plugin.version = "0.2.0"
+        s.settings.update { it.copy(phoneToolsOn = emptyList()) }
+        until { plugin.reports.last().isEmpty() }
+        until { s.bridge.status.value.state == PhoneToolsStatus.State.Off }
+    }
+
+    @Test
+    fun aPluginNewerThanTheReviewedOneIsLeftAlone() = runTest {
+        val s = setup(Runner(), on = listOf(PhoneTool.Battery))
+        val plugin = Plugin(version = "9.0.0")
+        connect(s, plugin)
+        until { s.bridge.status.value.state == PhoneToolsStatus.State.On }
+        s.bridge.updatePlugin()
+        delay(1_000)
+        assertTrue(plugin.installs.isEmpty())
+        assertNull(s.bridge.status.value.update)
     }
 
     @Test
@@ -375,6 +463,46 @@ class PhoneToolsBridgeTest {
         connect(other, second)
         until { second.reports.isNotEmpty() }
         assertNull(second.reportBodies.single()["push_id"])
+    }
+
+    @Test
+    fun everyTurnThisPhoneSendsIsToldWithItsChatConnection() = runTest {
+        val s = setup(Runner(), on = listOf(PhoneTool.Battery))
+        val plugin = Plugin()
+        connect(s, plugin)
+        val client = (s.connection.state.value as ConnectionState.Connected).client
+        // Sent before the report is taken: still told, as it's the turn about to call a tool.
+        client.request("prompt.submit", buildJsonObject { put("session_id", "s1") })
+        until { plugin.heres == listOf("s1") }
+        until { plugin.reports.isNotEmpty() }
+        // Every turn: another phone may have sent on the same chat in between.
+        client.request("prompt.submit", buildJsonObject { put("session_id", "s1") })
+        client.request("session.resume", buildJsonObject { put("session_id", "s2") })
+        client.request("prompt.btw", buildJsonObject { put("session_id", "s3") })
+        until { plugin.heres.size == 3 }
+        delay(1_000)
+        assertEquals(listOf("s1", "s1", "s3"), plugin.heres)
+    }
+
+    @Test
+    fun thePhonesAreListedReorderedAndRemoved() = runTest {
+        val s = setup(Runner(), on = listOf(PhoneTool.Battery))
+        val plugin = Plugin().apply { phones += listOf("old", "tablet") }
+        connect(s, plugin)
+        until { s.bridge.phones.value.size == 3 }
+        val me = s.bridge.phones.value.single { it.me }.id
+        assertEquals(listOf("old", "tablet", me), s.bridge.phones.value.map { it.id })
+
+        s.bridge.movePhone(me, -1)
+        until { plugin.phones == listOf("old", me, "tablet") }
+        s.bridge.movePhone(me, -1)
+        until { s.bridge.phones.value.first().id == me }
+        // Already first: nothing to move, nothing sent.
+        s.bridge.movePhone(me, -1)
+        s.bridge.removePhone("old")
+        until { s.bridge.phones.value.map { it.id } == listOf(me, "tablet") }
+        assertEquals(listOf(me, "tablet"), plugin.phones)
+        assertNull(s.bridge.status.value.detail)
     }
 
     @Test
