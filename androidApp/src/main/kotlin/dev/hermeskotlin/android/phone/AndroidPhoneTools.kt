@@ -19,12 +19,15 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
 /** The phone tools on Android: each reads or does what the agent asked, through the platform's own APIs. */
-class AndroidPhoneTools(private val context: Context) : PhoneToolRunner {
+class AndroidPhoneTools(private val context: Context, confirmations: PhoneConfirmations) : PhoneToolRunner {
+
+    private val sound = SoundTool(context, confirmations)
 
     override suspend fun run(tool: PhoneTool, args: JsonObject, session: String): JsonElement = withContext(Dispatchers.Default) {
         when (tool) {
             PhoneTool.Battery -> battery()
             PhoneTool.Network -> network()
+            PhoneTool.Sound -> sound.run(args)
         }
     }
 
