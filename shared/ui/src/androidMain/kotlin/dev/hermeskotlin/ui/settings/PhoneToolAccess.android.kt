@@ -2,11 +2,14 @@ package dev.hermeskotlin.ui.settings
 
 import android.Manifest
 import android.app.Activity
+import android.app.AppOpsManager
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
+import android.os.Process
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -38,6 +41,7 @@ private class AndroidPhoneToolAccess(private val context: Context, private val a
     override fun missing(tool: PhoneTool): String? = when {
         tool in ASKS && !notificationsOn() -> "Turn on Herald's notifications: changes are asked there."
         tool == PhoneTool.Sound && !policyAccess() -> "Allow Herald to change Do Not Disturb."
+        tool == PhoneTool.ScreenTime && !usageAccess() -> "Give Herald Usage access, to see which apps you use."
         else -> null
     }
 
@@ -45,6 +49,11 @@ private class AndroidPhoneToolAccess(private val context: Context, private val a
         when {
             tool in ASKS && !notificationsOn() -> requestNotifications()
             tool == PhoneTool.Sound && !policyAccess() -> open(Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS))
+            tool == PhoneTool.ScreenTime && !usageAccess() -> {
+                // Herald's own switch where Android has a page for it (10 and later), else the list of apps.
+                val list = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
+                if (!open(Intent(list).setData(Uri.fromParts("package", context.packageName, null)))) open(list)
+            }
         }
     }
 
@@ -70,10 +79,26 @@ private class AndroidPhoneToolAccess(private val context: Context, private val a
 
     private fun policyAccess() = context.getSystemService(NotificationManager::class.java)?.isNotificationPolicyAccessGranted == true
 
-    private fun open(intent: Intent) {
+    private fun usageAccess(): Boolean {
+        val ops = context.getSystemService(AppOpsManager::class.java) ?: return false
+        val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ops.unsafeCheckOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), context.packageName)
+        } else {
+            @Suppress("DEPRECATION")
+            ops.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), context.packageName)
+        }
+        return if (mode == AppOpsManager.MODE_DEFAULT) {
+            context.checkSelfPermission(Manifest.permission.PACKAGE_USAGE_STATS) == PackageManager.PERMISSION_GRANTED
+        } else {
+            mode == AppOpsManager.MODE_ALLOWED
+        }
+    }
+
+    /** Whether Android had a page for [intent]. */
+    private fun open(intent: Intent): Boolean {
         // In Herald's own task, so Back from the settings page comes back here and not into a Settings app left open.
         if (context !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        runCatching { context.startActivity(intent) }
+        return runCatching { context.startActivity(intent) }.isSuccess
     }
 
     private companion object {
