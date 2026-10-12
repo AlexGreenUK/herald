@@ -17,6 +17,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
@@ -24,6 +25,14 @@ import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.edit
+import androidx.core.net.toUri
+import androidx.health.connect.client.HealthConnectClient
+import androidx.health.connect.client.HealthConnectFeatures
+import androidx.health.connect.client.PermissionController
+import androidx.health.connect.client.permission.HealthPermission
+import androidx.health.connect.client.records.HeartRateRecord
+import androidx.health.connect.client.records.SleepSessionRecord
+import androidx.health.connect.client.records.StepsRecord
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import dev.hermeskotlin.core.phone.PhoneTool
@@ -35,10 +44,37 @@ actual fun rememberPhoneToolAccess(): PhoneToolAccess {
     var version by remember { mutableIntStateOf(0) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { version++ }
     val prompt = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { version++ }
-    return remember(version) { AndroidPhoneToolAccess(context) { prompt.launch(it) } }
+    val healthPrompt = rememberLauncherForActivityResult(PermissionController.createRequestPermissionResultContract()) { version++ }
+    // Health Connect only says what it allows asynchronously; null until it has.
+    val health by produceState<HealthState?>(null, version) { value = healthState(context) }
+    return remember(version, health) {
+        AndroidPhoneToolAccess(context, health, ask = { prompt.launch(it) }, askHealth = { healthPrompt.launch(it) })
+    }
 }
 
-private class AndroidPhoneToolAccess(private val context: Context, private val ask: (Array<String>) -> Unit) : PhoneToolAccess {
+/** Whether the phone has Health Connect, what Herald may read there, and whether reading while closed exists. */
+private class HealthState(val status: Int, val granted: Set<String>, val background: Boolean)
+
+private suspend fun healthState(context: Context): HealthState {
+    val status = HealthConnectClient.getSdkStatus(context)
+    if (status != HealthConnectClient.SDK_AVAILABLE) return HealthState(status, emptySet(), false)
+    val client = HealthConnectClient.getOrCreate(context)
+    return runCatching {
+        HealthState(
+            status,
+            client.permissionController.getGrantedPermissions(),
+            client.features.getFeatureStatus(HealthConnectFeatures.FEATURE_READ_HEALTH_DATA_IN_BACKGROUND) ==
+                HealthConnectFeatures.FEATURE_STATUS_AVAILABLE,
+        )
+    }.getOrElse { HealthState(status, emptySet(), false) }
+}
+
+private class AndroidPhoneToolAccess(
+    private val context: Context,
+    private val health: HealthState?,
+    private val ask: (Array<String>) -> Unit,
+    private val askHealth: (Set<String>) -> Unit,
+) : PhoneToolAccess {
 
     override fun missing(tool: PhoneTool): String? = when {
         tool in ASKS && !notificationsOn() -> "Turn on Herald's notifications: changes are asked there."
@@ -50,6 +86,16 @@ private class AndroidPhoneToolAccess(private val context: Context, private val a
             "Allow location all the time: places are watched while Herald is closed. Choose \"Allow all the time\"."
         tool == PhoneTool.Calendar && (!granted(READ_CALENDAR) || !granted(WRITE_CALENDAR)) -> "Allow Herald to use your calendar."
         tool == PhoneTool.Contacts && !granted(READ_CONTACTS) -> "Allow Herald to read your contacts."
+        tool == PhoneTool.Health -> when {
+            health == null -> null
+            health.status == HealthConnectClient.SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED -> "Update Health Connect, where the data comes from."
+            // Before Android 14 it's an app of its own, from the Play Store.
+            health.status != HealthConnectClient.SDK_AVAILABLE && Build.VERSION.SDK_INT in Build.VERSION_CODES.P until Build.VERSION_CODES.UPSIDE_DOWN_CAKE ->
+                "Install Health Connect, where the data comes from."
+            health.status != HealthConnectClient.SDK_AVAILABLE -> "This phone has no Health Connect."
+            health.granted.none { it in HEALTH_READS } -> "Allow Herald to read steps, sleep or heart rate in Health Connect."
+            else -> null
+        }
         else -> null
     }
 
@@ -65,6 +111,14 @@ private class AndroidPhoneToolAccess(private val context: Context, private val a
             tool == PhoneTool.Geofences && needsBackground() -> prompt(BACKGROUND)
             tool == PhoneTool.Calendar && (!granted(READ_CALENDAR) || !granted(WRITE_CALENDAR)) -> prompt(READ_CALENDAR, WRITE_CALENDAR)
             tool == PhoneTool.Contacts && !granted(READ_CONTACTS) -> prompt(READ_CONTACTS)
+            tool == PhoneTool.Health && health != null && health.status != HealthConnectClient.SDK_AVAILABLE &&
+                (
+                    health.status == HealthConnectClient.SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED ||
+                        Build.VERSION.SDK_INT in Build.VERSION_CODES.P until Build.VERSION_CODES.UPSIDE_DOWN_CAKE
+                    ) ->
+                open(Intent(Intent.ACTION_VIEW, "market://details?id=$HEALTH_CONNECT&url=healthconnect%3A%2F%2Fonboarding".toUri()))
+            // Health Connect's own screen: the user picks which of the three.
+            tool == PhoneTool.Health && health?.status == HealthConnectClient.SDK_AVAILABLE -> askHealth(HEALTH_READS)
             tool == PhoneTool.Sound && !policyAccess() -> open(Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS))
             tool == PhoneTool.ScreenTime && !usageAccess() -> {
                 // Herald's own switch where Android has a page for it (10 and later), else the list of apps.
@@ -77,12 +131,21 @@ private class AndroidPhoneToolAccess(private val context: Context, private val a
     override fun optional(tool: PhoneTool): String? = when {
         tool == PhoneTool.Location && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
             (granted(FINE) || granted(COARSE)) && !granted(BACKGROUND) -> "Also while Herald is closed (optional)"
+        // Some of the three allowed: the rest stay one tap away, before reading while closed.
+        tool == PhoneTool.Health && health != null && health.granted.any { it in HEALTH_READS } && !health.granted.containsAll(HEALTH_READS) ->
+            "Also steps, sleep or heart rate (optional)"
+        tool == PhoneTool.Health && health != null && health.background && health.granted.any { it in HEALTH_READS } &&
+            HealthPermission.PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND !in health.granted -> "Also while Herald is closed (optional)"
         else -> null
     }
 
     override fun requestOptional(tool: PhoneTool) {
         // Android 11 and later answer this one with Herald's location page, where "Allow all the time" is a choice.
         if (tool == PhoneTool.Location && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) prompt(BACKGROUND)
+        if (tool == PhoneTool.Health && health != null) {
+            val rest = HEALTH_READS - health.granted
+            askHealth(rest.ifEmpty { setOf(HealthPermission.PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND) })
+        }
     }
 
     private fun granted(permission: String) = ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
@@ -155,6 +218,12 @@ private class AndroidPhoneToolAccess(private val context: Context, private val a
         const val READ_CALENDAR = Manifest.permission.READ_CALENDAR
         const val WRITE_CALENDAR = Manifest.permission.WRITE_CALENDAR
         const val READ_CONTACTS = Manifest.permission.READ_CONTACTS
+        const val HEALTH_CONNECT = "com.google.android.apps.healthdata"
+        val HEALTH_READS = setOf(
+            HealthPermission.getReadPermission(StepsRecord::class),
+            HealthPermission.getReadPermission(SleepSessionRecord::class),
+            HealthPermission.getReadPermission(HeartRateRecord::class),
+        )
 
         @SuppressLint("InlinedApi") // Only asked on Android 10 and later.
         const val BACKGROUND = Manifest.permission.ACCESS_BACKGROUND_LOCATION

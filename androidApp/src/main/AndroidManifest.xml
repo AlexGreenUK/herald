@@ -33,6 +33,14 @@
     <uses-permission android:name="android.permission.WRITE_CALENDAR" />
     <!-- The Contacts phone tool looks people up by name, number or email; it never writes. -->
     <uses-permission android:name="android.permission.READ_CONTACTS" />
+    <!--
+        The Health phone tool reads these three from Health Connect, each as the user allows there; while Herald is
+        closed too only if the user also allows that, from its own row under the Health switch.
+    -->
+    <uses-permission android:name="android.permission.health.READ_STEPS" />
+    <uses-permission android:name="android.permission.health.READ_SLEEP" />
+    <uses-permission android:name="android.permission.health.READ_HEART_RATE" />
+    <uses-permission android:name="android.permission.health.READ_HEALTH_DATA_IN_BACKGROUND" />
     <!-- Location is one optional tool: a phone or tablet without GPS still installs Herald. -->
     <uses-feature
         android:name="android.hardware.location"
@@ -93,6 +101,8 @@
             <action android:name="android.intent.action.SEND" />
             <data android:mimeType="text/plain" />
         </intent>
+        <!-- The Health phone tool: Health Connect, an app of its own before Android 14. -->
+        <package android:name="com.google.android.apps.healthdata" />
     </queries>
 
     <!--
@@ -156,6 +166,32 @@
                 android:name="android.app.shortcuts"
                 android:resource="@xml/shortcuts" />
         </activity>
+
+        <!--
+            Health Connect's "privacy policy" link for Herald: the README's Privacy section, in the browser. Invisible.
+            The alias is for Android 14 and later, the activity's own filter for Health Connect as an app before that.
+        -->
+        <activity
+            android:name=".phone.HealthPrivacyActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE" />
+            </intent-filter>
+        </activity>
+        <activity-alias
+            android:name=".HealthPermissionsUsage"
+            android:exported="true"
+            android:permission="android.permission.START_VIEW_PERMISSION_USAGE"
+            android:targetActivity=".phone.HealthPrivacyActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW_PERMISSION_USAGE" />
+                <category android:name="android.intent.category.HEALTH_PERMISSIONS" />
+            </intent-filter>
+        </activity-alias>
 
         <!-- Wakes the app after a reboot or an update, so Notifications anywhere listens again. -->
         <receiver
