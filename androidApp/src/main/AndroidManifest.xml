@@ -176,6 +176,23 @@
             android:name=".notify.NotificationActionReceiver"
             android:exported="false" />
 
+        <!--
+            Messages from Herald's watch app (the Data Layer delivers only from an app with this package name and
+            signing key): what's asked there goes to Hermes from here.
+        -->
+        <service
+            android:name=".wear.WearBridgeService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED" />
+                <action android:name="com.google.android.gms.wearable.CHANNEL_EVENT" />
+                <data
+                    android:host="*"
+                    android:pathPrefix="/herald/"
+                    android:scheme="wear" />
+            </intent-filter>
+        </service>
+
         <service
             android:name=".notify.VoiceCallService"
             android:exported="false"
