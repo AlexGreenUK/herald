@@ -81,7 +81,7 @@ object VoiceAnswers {
         val holdsOff = words.first() in QUESTION_STARTS || asksBack || words.none { it !in UNSURE } ||
             words.none { it !in NOTED } || words.any { it in HOLD_ON } || HOLD_PHRASES.any { " $it " in said } ||
             // "One minute" is putting it off, unless it's in an answer ("every one minute").
-            said.trim() in HOLD_ALONE
+            said.trim() in HOLD_ALONE || asksForTime(words)
         if (holdsOff) return false
         return when (request) {
             // "I don't know what that does" isn't a no; "um, yes" is a yes.
@@ -133,6 +133,11 @@ object VoiceAnswers {
 
     private fun String.containsPhrase(phrase: String): Boolean = " $this ".contains(" $phrase ")
 
+    /** "Give me five minutes", "give me a couple of seconds": a wait, however long. */
+    private fun asksForTime(words: List<String>) = words.windowed(2).withIndex().any { (i, pair) ->
+        pair == listOf("give", "me") && words.drop(i + 2).take(4).any { it in TIME_WORDS }
+    }
+
     private fun filler(word: String) = word in FILLERS || FILLER_SOUND.matches(word)
 
     private fun number(word: String): Int? = word.toIntOrNull() ?: NUMBERS[word]
@@ -172,13 +177,13 @@ object VoiceAnswers {
     /** Ways of putting it off, of not knowing or of not having heard, that aren't an answer. */
     private val HOLD_PHRASES = listOf(
         "just a second", "just a minute", "just one second", "just one minute", "give me a second", "give me a minute",
-        "give me one second", "give me one minute", "give me two seconds", "give me two minutes", "give me a few seconds",
-        "give me a few minutes", "give me a moment", "missed that", "come again",
+        "missed that", "come again",
         "let me think", "let me see", "let me check", "let me look", "let's see", "lets see",
         "not sure", "don't know", "dont know", "do not know", "don't remember", "no idea", "no clue", "not certain",
         "didn't catch", "didn't hear", "one more time", "say again", "again please", "tell me", "remind me",
         "options again", "read the options", "list the options",
     )
+    private val TIME_WORDS = setOf("second", "seconds", "sec", "secs", "minute", "minutes", "min", "mins", "moment")
     /** Said on its own, a wait. */
     private val HOLD_ALONE = setOf(
         "one second", "one minute", "two seconds", "two minutes", "a few seconds", "a few minutes", "a second", "a minute",

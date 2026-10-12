@@ -145,6 +145,7 @@ class VoiceAnswersTest {
             "give me a second", "say the options again", "do I need to pick", "I'm not sure", "let me think", "I don't know",
             "I do not know", "dunno", "idk", "I didn't catch that", "one more time", "maybe", "hmm, maybe", "hang on",
             "when does it run", "two seconds", "give me two minutes", "sorry, I missed that", "come again", "Got it", "cool",
+            "give me five minutes", "give me 5 minutes", "give me a couple of seconds", "give me a moment",
         ).forEach { assertFalse(VoiceAnswers.takesAsAnswer(color, it), it) }
         // A question without choices takes a plain yes.
         val push = InputRequest.Clarify("srq-4", listOf(ClarifyQuestion(null, "Push it?")))
