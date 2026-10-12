@@ -20,3 +20,11 @@ internal fun JsonObject.int(name: String): Int? {
     if (value !is JsonPrimitive || value.isString) throw PhoneToolException("$name must be a whole number.")
     return value.content.toIntOrNull() ?: throw PhoneToolException("$name must be a whole number.")
 }
+
+/** The agent's [name] argument as true or false; null when left out. */
+internal fun JsonObject.boolean(name: String): Boolean? {
+    val value = get(name)
+    if (value == null || value == JsonNull) return null
+    if (value !is JsonPrimitive || value.isString) throw PhoneToolException("$name must be true or false.")
+    return value.content.toBooleanStrictOrNull() ?: throw PhoneToolException("$name must be true or false.")
+}
