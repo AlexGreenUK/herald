@@ -67,6 +67,10 @@ internal class CalendarTool(private val context: Context, private val confirmati
         val where = "${CalendarContract.Instances.VISIBLE} = 1 AND " +
             "${CalendarContract.Instances.STATUS} IS NOT ${CalendarContract.Events.STATUS_CANCELED}"
         var total = 0
+        var listed = 0
+        // What the listed events take as JSON: the whole answer must fit what the gateway takes back at once.
+        var size = 0
+        var full = false
         return buildJsonObject {
             put("from", from.format(LOCAL))
             put("to", to.format(LOCAL))
@@ -76,24 +80,31 @@ internal class CalendarTool(private val context: Context, private val confirmati
                 )?.use { c ->
                     while (c.moveToNext()) {
                         total++
-                        if (total > MAX_EVENTS) continue
+                        if (full || listed >= MAX_EVENTS) continue
                         val allDay = c.getInt(4) == 1
-                        addJsonObject {
+                        val event = buildJsonObject {
                             put("event_id", c.getLong(0).toString())
-                            put("title", c.text(1) ?: "(no title)")
+                            put("title", (c.text(1) ?: "(no title)").short())
                             put("start", shown(c.getLong(2), allDay))
                             // An all-day event's last day, as people count it; the provider's end is the day after.
                             put("end", shown(c.getLong(3), allDay, last = true))
                             if (allDay) put("all_day", true)
-                            c.text(5)?.let { put("location", it) }
-                            c.text(6)?.let { put("calendar", it) }
+                            c.text(5)?.let { put("location", it.short()) }
+                            c.text(6)?.let { put("calendar", it.short()) }
                             if (c.text(7) != null) put("repeats", true)
                             if (c.getInt(8) == CalendarContract.Attendees.ATTENDEE_STATUS_DECLINED) put("declined", true)
                         }
+                        // The gateway's JSON adds a space after each : and , that this one doesn't.
+                        size += event.toString().length + 2 * event.size + 2
+                        // The first ones in order, never a gap: past the limit, the rest are only counted.
+                        full = size > MAX_LIST_CHARS
+                        if (full) continue
+                        add(event)
+                        listed++
                     }
                 }
             }
-            if (total > MAX_EVENTS) put("note", "Only the first $MAX_EVENTS of $total events; ask for a shorter range for the rest.")
+            if (listed < total) put("note", "Only the first $listed of $total events; ask for a shorter range for the rest.")
         }
     }
 
@@ -343,11 +354,24 @@ internal class CalendarTool(private val context: Context, private val confirmati
 
     private fun at(time: LocalDateTime) = "${day(time)}, ${time.format(HOUR)}"
 
+    /** At most [MAX_LISTED] characters, never cutting an emoji in half. */
+    private fun String.short(): String {
+        if (length <= MAX_LISTED) return this
+        val cut = if (this[MAX_LISTED - 2].isHighSurrogate()) MAX_LISTED - 2 else MAX_LISTED - 1
+        return take(cut) + "…"
+    }
+
     private fun Cursor.text(i: Int): String? = if (isNull(i)) null else getString(i)?.takeIf { it.isNotBlank() }
 
     private companion object {
         const val MAX_DAYS = 31L
         const val MAX_EVENTS = 100
+
+        /** Characters of a title, place or calendar in a list. */
+        const val MAX_LISTED = 150
+
+        /** The listed events' JSON: under the gateway's 60 000 characters, with room for the rest of the answer. */
+        const val MAX_LIST_CHARS = 55_000
         const val MAX_TITLE = 200
         // Short enough that the question shows all of it.
         const val MAX_NOTES = 500
