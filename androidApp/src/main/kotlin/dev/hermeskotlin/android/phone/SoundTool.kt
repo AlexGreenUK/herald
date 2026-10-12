@@ -62,6 +62,10 @@ internal class SoundTool(private val context: Context, private val confirmations
         val stream = streamName?.let { STREAMS[it] ?: throw PhoneToolException("stream must be ring, notification, media or alarm.") }
         if (dnd == null && ringer == null && stream == null) throw PhoneToolException("Nothing to change: give dnd, ringer, or stream and volume.")
         if (volume != null && volume !in 0..100) throw PhoneToolException("volume is a percent, 0 to 100.")
+        if (ringer != null && ringer != AudioManager.RINGER_MODE_NORMAL && streamName in RINGER_STREAMS && volume != 0) {
+            // A ring volume above 0 is a normal ringer, and a quiet ringer mutes it: both can't be true.
+            throw PhoneToolException("A silent or vibrating ringer can't have a $streamName volume above 0. Set one or the other.")
+        }
         if ((dnd != null || ringer != null) && !notifications.isNotificationPolicyAccessGranted) {
             throw PhoneToolException("Herald isn't allowed to change Do Not Disturb. The user can allow it in Settings → Phone tools.")
         }
@@ -95,6 +99,11 @@ internal class SoundTool(private val context: Context, private val confirmations
         val kept = buildList {
             args.string("dnd")?.let { if (now["dnd"]?.jsonPrimitive?.content != it) add("Do Not Disturb") }
             args.string("ringer")?.let { if (now["ringer"]?.jsonPrimitive?.content != it) add("the ringer") }
+            if (stream != null && volume != null) {
+                // Within one step: a phone has few, so 30% is 33% on a 15-step stream.
+                val step = 100.0 / audio.getStreamMaxVolume(stream).coerceAtLeast(1)
+                if (kotlin.math.abs(percent(stream) - volume) > step) add("the $streamName volume")
+            }
         }
         if (kept.isNotEmpty()) {
             throw PhoneToolException("The user allowed it, but Android kept ${kept.joinToString(" and ")} as it was: $now")
@@ -114,6 +123,9 @@ internal class SoundTool(private val context: Context, private val confirmations
     private companion object {
         /** How long Android takes to settle a sound change before it's read back. */
         const val SETTLE_MS = 400L
+
+        /** Streams the ringer mode rules: on most phones the notification volume follows the ring volume. */
+        val RINGER_STREAMS = setOf("ring", "notification")
 
         val STREAMS = linkedMapOf(
             "ring" to AudioManager.STREAM_RING,

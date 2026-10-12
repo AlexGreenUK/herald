@@ -72,9 +72,6 @@ class PhoneConfirmations(private val context: Context) {
         }
     }
 
-    /** Whether a question can reach the user now. */
-    fun canAsk(): Boolean = cantAsk() == null
-
     /**
      * Shows [what] (a sentence: "Set an alarm for 7:00") and waits. Runs [action] on the tap of Allow, from an
      * activity; throws [PhoneToolException] when the user denies, doesn't answer before the agent stops waiting,
@@ -99,7 +96,7 @@ class PhoneConfirmations(private val context: Context) {
         }
     }
 
-    @SuppressLint("MissingPermission") // canAsk checks it.
+    @SuppressLint("MissingPermission") // cantAsk checks it.
     private fun post(id: Int, key: String, what: String): Boolean {
         val allow = PendingIntent.getActivity(
             context, id,
