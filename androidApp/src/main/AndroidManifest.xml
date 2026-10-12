@@ -16,6 +16,8 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- The Sound phone tool: Do Not Disturb and the ringer, once the user grants Do Not Disturb access. -->
     <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
+    <!-- The Alarms phone tool hands an alarm or a timer to the clock app. -->
+    <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
 
     <!-- The assistant names the app it was called up over; apps are hidden from Herald unless it says which it looks up. -->
     <queries>
@@ -26,6 +28,13 @@
         <!-- Dictation on the phone picks a speech recognizer other than Herald's own. -->
         <intent>
             <action android:name="android.speech.RecognitionService" />
+        </intent>
+        <!-- The Alarms phone tool checks there's a clock app before it asks the user. -->
+        <intent>
+            <action android:name="android.intent.action.SET_ALARM" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SET_TIMER" />
         </intent>
     </queries>
 
