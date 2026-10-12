@@ -60,6 +60,16 @@ class WatchStore(context: Context) {
         }
     }
 
+    private val _live = MutableStateFlow(prefs.getBoolean(LIVE, true))
+
+    /** Talk live, in a voice call, when the gateway can; off, the watch listens and sends what it heard. */
+    val live: StateFlow<Boolean> = _live.asStateFlow()
+
+    fun setLive(on: Boolean) {
+        _live.value = on
+        prefs.edit { putBoolean(LIVE, on) }
+    }
+
     fun setSpeak(on: Boolean) {
         _speak.value = on
         prefs.edit { putBoolean(SPEAK, on) }
@@ -75,6 +85,7 @@ class WatchStore(context: Context) {
         const val MODEL = "chat_model"
         const val CONTEXT = "chat_context"
         const val SPEAK = "speak"
+        const val LIVE = "live"
         const val LAST_REPLY = "last_reply"
         const val MAX_KEPT = 400
     }

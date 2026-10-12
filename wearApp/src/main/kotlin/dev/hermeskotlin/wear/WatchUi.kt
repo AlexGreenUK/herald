@@ -6,6 +6,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -49,9 +50,9 @@ import androidx.wear.compose.material3.Button
 import androidx.wear.compose.material3.ButtonDefaults
 import androidx.wear.compose.material3.CircularProgressIndicator
 import androidx.wear.compose.material3.ColorScheme
-import androidx.wear.compose.material3.EdgeButton
-import androidx.wear.compose.material3.EdgeButtonSize
+import androidx.wear.compose.material3.FilledIconButton
 import androidx.wear.compose.material3.Icon
+import androidx.wear.compose.material3.IconButtonDefaults
 import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.ScreenScaffold
 import androidx.wear.compose.material3.SwitchButton
@@ -126,8 +127,9 @@ fun HeraldWatchApp(
                     )
                 }
                 composable(CHATS) {
-                    ChatsScreen(link = link, store = store, onPicked = { nav.popBackStack() })
+                    ChatsScreen(link = link, store = store, onPicked = { nav.popBackStack() }, onSettings = { nav.navigate(SETTINGS) })
                 }
+                composable(SETTINGS) { SettingsScreen(link = link, store = store) }
             }
         }
     }
@@ -202,10 +204,14 @@ private fun TalkScreen(
     val chat by store.chat.collectAsState()
     val speaking by speech.speaking.collectAsState()
     val mic by listening.collectAsState()
+    val callState by link.call.collectAsState()
     val listState = rememberTransformingLazyColumnState()
     val current = turn
+    val call = callState
+    val inCall = call?.active == true
     val running = current?.running == true
     val mood = when {
+        call != null -> callMood(call)
         mic.recording -> OrbMood.Listening
         current?.update?.phase == ReplyPhase.WaitingOnPhone -> OrbMood.Waiting
         running -> OrbMood.Working
@@ -215,6 +221,9 @@ private fun TalkScreen(
     }
     val onOrb = {
         when {
+            // In a call the orb is the mute button; End is at the bottom.
+            inCall && call.stage == CallStage.Live -> link.toggleMute()
+            inCall -> link.endCall()
             mic.recording -> onFinishRecording()
             running || speaking -> link.stop()
             else -> onMic()
@@ -227,11 +236,28 @@ private fun TalkScreen(
     val content: @Composable (PaddingValues) -> Unit = { contentPadding ->
         TransformingLazyColumn(state = listState, contentPadding = contentPadding, modifier = Modifier.fillMaxSize()) {
             item {
-                val orbSize by animateFloatAsState(if (current == null || mic.recording) 84f else 68f, tween(350), label = "orb")
-                Box(Modifier.fillMaxWidth().padding(top = 4.dp), contentAlignment = Alignment.Center) {
+                // Smaller once there's more to show: a turn, or a call with its End button.
+                val big = mic.recording || (call == null && current == null)
+                val orbSize by animateFloatAsState(if (big) 84f else 68f, tween(350), label = "orb")
+                // In a call, as on a phone: mute on the left, hang up on the right, the orb between them.
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (inCall) {
+                        CallButton(
+                            icon = if (call.muted) R.drawable.ic_mic_off else R.drawable.ic_mic,
+                            label = if (call.muted) "Unmute" else "Mute",
+                            color = if (call.muted) Text1 else Surface2,
+                            tint = if (call.muted) Color.Black else Color.White,
+                            enabled = call.stage == CallStage.Live,
+                            onClick = link::toggleMute,
+                        )
+                    }
                     HeraldOrb(
                         mood = mood,
-                        level = mic.level,
+                        level = call?.level ?: mic.level,
                         context = chat.contextPercent?.let { it / 100f },
                         modifier = Modifier
                             .size(orbSize.dp)
@@ -239,39 +265,83 @@ private fun TalkScreen(
                             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, role = Role.Button, onClick = onOrb)
                             .semantics {
                                 contentDescription = when {
+                                    inCall && call.stage == CallStage.Live -> if (call.muted) "Unmute" else "Mute"
+                                    inCall -> "Hang up"
                                     mic.recording -> "Done talking"
                                     running || speaking -> "Stop"
                                     else -> "Talk to Hermes"
                                 } + chat.contextPercent?.let { ", context $it% full" }.orEmpty()
                             },
                     )
+                    if (inCall) CallButton(R.drawable.ic_call_end, "End call", Danger, Color.White, enabled = true, onClick = link::endCall)
                 }
             }
             item { ChatTitle(chat.title ?: if (chat.id == null) "New chat" else "Chat", onChats) }
-            item { Caption(caption(mood, current, mic, phone), mood) }
+            item { Caption(if (call != null) callCaption(call) else caption(mood, current, mic, phone), mood) }
             val micError = mic.error
             if (micError != null) item { Notice(micError, onClick = onDismissListeningError) }
-            if (current != null && !mic.recording) {
+            if (call != null) {
+                // The latest words of the call: yours quoted, the voice's as the reply.
+                call.caption?.let { words -> item { if (call.captionIsVoice) Reply(words) else Said(words) } }
+            } else if (current != null && !mic.recording) {
                 current.said?.let { said -> item { Said(said) } }
                 val update = current.update
                 if (update.text.isNotBlank()) item { Reply(update.text) }
             }
+            // A mic after a finished reply, so a long one needn't be scrolled back up to answer. A small button in
+            // the list, not an edge button: that one only opens up once the list is scrolled to its end.
+            if (!inCall && (call != null || current != null) && !running && !speaking && !mic.recording) {
+                item {
+                    Box(Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 8.dp), contentAlignment = Alignment.Center) {
+                        FilledIconButton(
+                            onClick = onMic,
+                            colors = IconButtonDefaults.filledIconButtonColors(containerColor = HeraldBlue, contentColor = Color.White),
+                        ) {
+                            Icon(painterResource(R.drawable.ic_mic), contentDescription = "Reply", tint = Color.White)
+                        }
+                    }
+                }
+            }
         }
     }
-    // Reply at the end of a finished turn; before the first ask the orb alone is the mic.
-    if (current != null && !running && !speaking && !mic.recording) {
-        ScreenScaffold(
-            scrollState = listState,
-            modifier = Modifier.halo(mood),
-            edgeButton = {
-                EdgeButton(onClick = onMic, buttonSize = EdgeButtonSize.Medium) {
-                    Icon(painterResource(R.drawable.ic_mic), contentDescription = "Reply")
-                }
-            },
-        ) { contentPadding -> content(contentPadding) }
-    } else {
-        ScreenScaffold(scrollState = listState, modifier = Modifier.halo(mood)) { contentPadding -> content(contentPadding) }
+    ScreenScaffold(scrollState = listState, modifier = Modifier.halo(mood)) { contentPadding -> content(contentPadding) }
+}
+
+/** A round button beside the orb in a call. */
+@Composable
+private fun CallButton(icon: Int, label: String, color: Color, tint: Color, enabled: Boolean, onClick: () -> Unit) {
+    FilledIconButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.size(40.dp),
+        colors = IconButtonDefaults.filledIconButtonColors(containerColor = color, contentColor = tint),
+    ) {
+        Icon(painterResource(icon), contentDescription = label, modifier = Modifier.size(20.dp), tint = tint)
     }
+}
+
+/** The orb in a call: working while it connects or Hermes is on a request, the voice's waves, or your voice. */
+internal fun callMood(call: WatchCallState): OrbMood = when (call.stage) {
+    CallStage.Starting, CallStage.Connecting -> OrbMood.Working
+    CallStage.Live -> when {
+        call.muted -> OrbMood.Idle
+        call.thinking -> OrbMood.Working
+        call.speaking -> OrbMood.Speaking
+        else -> OrbMood.Listening
+    }
+    CallStage.Ended -> if (call.error != null) OrbMood.Failed else OrbMood.Idle
+}
+
+/** What a call is doing, under the orb. */
+internal fun callCaption(call: WatchCallState): String = when (call.stage) {
+    CallStage.Starting -> "Starting the call…"
+    CallStage.Connecting -> "Connecting…"
+    CallStage.Live -> when {
+        call.muted -> "Muted"
+        call.thinking -> call.working?.let { "Hermes: $it" } ?: "Hermes is on it…"
+        else -> "Live"
+    }
+    CallStage.Ended -> call.error ?: "Call ended"
 }
 
 /** What's going on, under the orb. */
@@ -377,10 +447,9 @@ private fun Modifier.halo(mood: OrbMood): Modifier = drawBehind {
 }
 
 @Composable
-private fun ChatsScreen(link: WatchLink, store: WatchStore, onPicked: () -> Unit) {
+private fun ChatsScreen(link: WatchLink, store: WatchStore, onPicked: () -> Unit, onSettings: () -> Unit) {
     val list by link.chats.collectAsState()
     val chat by store.chat.collectAsState()
-    val speak by store.speak.collectAsState()
     val listState = rememberTransformingLazyColumnState()
     LaunchedEffect(Unit) { link.refreshChats() }
 
@@ -389,17 +458,28 @@ private fun ChatsScreen(link: WatchLink, store: WatchStore, onPicked: () -> Unit
             item {
                 Text("Chats", modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp), style = geist(17, FontWeight.SemiBold), textAlign = TextAlign.Center)
             }
+            // Settings at the top, beside New chat: under a long list of chats they'd be a long way down.
             item {
-                Button(
-                    onClick = {
-                        link.newChat()
-                        onPicked()
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = HeraldBlue, contentColor = Color.White, iconColor = Color.White),
-                    icon = { Icon(painterResource(R.drawable.ic_add), contentDescription = null) },
-                    label = { Text("New chat", style = geist(15, FontWeight.Medium, Color.White)) },
-                )
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Button(
+                        onClick = {
+                            link.newChat()
+                            onPicked()
+                        },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(containerColor = HeraldBlue, contentColor = Color.White),
+                        label = {
+                            Text("New chat", modifier = Modifier.fillMaxWidth(), style = geist(15, FontWeight.Medium, Color.White), textAlign = TextAlign.Center, maxLines = 1)
+                        },
+                    )
+                    FilledIconButton(
+                        onClick = onSettings,
+                        modifier = Modifier.size(48.dp),
+                        colors = IconButtonDefaults.filledIconButtonColors(containerColor = Surface2, contentColor = Text1),
+                    ) {
+                        Icon(painterResource(R.drawable.ic_settings), contentDescription = "Settings", tint = Text1)
+                    }
+                }
             }
             val current = list
             val error = current?.error
@@ -420,16 +500,40 @@ private fun ChatsScreen(link: WatchLink, store: WatchStore, onPicked: () -> Unit
                     }
                 }
             }
-            item {
-                SwitchButton(
-                    checked = speak,
-                    onCheckedChange = store::setSpeak,
-                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
-                    label = { Text("Read replies aloud", style = geist(14, FontWeight.Medium)) },
-                )
-            }
         }
     }
+}
+
+/** How the watch talks: live in a call (when the gateway can), and whether replies are read aloud. */
+@Composable
+private fun SettingsScreen(link: WatchLink, store: WatchStore) {
+    val speak by store.speak.collectAsState()
+    val live by store.live.collectAsState()
+    val liveVoice by link.liveVoice.collectAsState()
+    val listState = rememberTransformingLazyColumnState()
+    ScreenScaffold(scrollState = listState, modifier = Modifier.halo(OrbMood.Idle)) { contentPadding ->
+        TransformingLazyColumn(state = listState, contentPadding = contentPadding, modifier = Modifier.fillMaxSize()) {
+            item {
+                Text("Settings", modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp), style = geist(17, FontWeight.SemiBold), textAlign = TextAlign.Center)
+            }
+            // One short line each, and what it means under it: longer labels wrap on a round screen.
+            if (liveVoice) {
+                item { VoiceSwitch("Talk live", "As a voice call", live, store::setLive) }
+            }
+            item { VoiceSwitch("Read aloud", "Every reply", speak, store::setSpeak) }
+        }
+    }
+}
+
+@Composable
+private fun VoiceSwitch(label: String, detail: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    SwitchButton(
+        checked = checked,
+        onCheckedChange = onChange,
+        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+        label = { Text(label, style = geist(14, FontWeight.Medium), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+        secondaryLabel = { Text(detail, style = geist(12, color = Text2), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+    )
 }
 
 /** One chat: its title and how long ago it was active; the one the watch talks in has a blue dot. */
@@ -480,3 +584,4 @@ internal fun activityLine(phase: ReplyPhase, activity: String?): String = activi
 
 private const val TALK = "talk"
 private const val CHATS = "chats"
+private const val SETTINGS = "settings"
