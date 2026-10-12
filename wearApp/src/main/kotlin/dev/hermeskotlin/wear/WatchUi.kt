@@ -40,6 +40,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.wear.compose.foundation.CurvedTextStyle
+import androidx.wear.compose.foundation.curvedComposable
 import androidx.wear.compose.foundation.lazy.TransformingLazyColumn
 import androidx.wear.compose.foundation.lazy.rememberTransformingLazyColumnState
 import androidx.wear.compose.material3.AppScaffold
@@ -55,6 +57,8 @@ import androidx.wear.compose.material3.ScreenScaffold
 import androidx.wear.compose.material3.SwitchButton
 import androidx.wear.compose.material3.Text
 import androidx.wear.compose.material3.TimeText
+import androidx.wear.compose.material3.timeTextCurvedText
+import androidx.wear.compose.material3.timeTextSeparator
 import androidx.wear.compose.navigation.SwipeDismissableNavHost
 import androidx.wear.compose.navigation.composable
 import androidx.wear.compose.navigation.rememberSwipeDismissableNavController
@@ -106,7 +110,7 @@ fun HeraldWatchApp(
     onDismissListeningError: () -> Unit,
 ) {
     MaterialTheme(colorScheme = HeraldColors) {
-        AppScaffold(timeText = { TimeText() }) {
+        AppScaffold(timeText = { EdgeStatus(link, store) }) {
             val nav = rememberSwipeDismissableNavController()
             SwipeDismissableNavHost(navController = nav, startDestination = TALK) {
                 composable(TALK) {
@@ -128,6 +132,55 @@ fun HeraldWatchApp(
         }
     }
 }
+
+/**
+ * The clock along the top edge, then a dot for how the phone stands (green: connected to the gateway; amber:
+ * getting there; red: no phone, no Herald or signed out) and the chat's model once a turn has named it.
+ */
+@Composable
+private fun EdgeStatus(link: WatchLink, store: WatchStore) {
+    val phone by link.phone.collectAsState()
+    val chat by store.chat.collectAsState()
+    val dot = phoneDot(phone)
+    val model = chat.model?.let(::shortModel)
+    TimeText { time ->
+        timeTextCurvedText(time)
+        if (dot != null || model != null) timeTextSeparator()
+        if (dot != null) {
+            curvedComposable {
+                Box(
+                    Modifier
+                        .padding(horizontal = 3.dp)
+                        .size(6.dp)
+                        .background(dot, CircleShape)
+                        .semantics { contentDescription = phoneDotLabel(phone) },
+                )
+            }
+        }
+        if (model != null) timeTextCurvedText(model, CurvedTextStyle(color = Muted, fontSize = 11.sp, fontFamily = Geist, fontWeight = FontWeight.Medium))
+    }
+}
+
+private val Connected = Color(0xFF3FB950)
+
+private fun phoneDot(phone: PhoneState): Color? = when (phone) {
+    PhoneState.Ready -> Connected
+    PhoneState.Reconnecting -> Amber
+    PhoneState.NotConnected, PhoneState.NoHerald, PhoneState.SignedOut, PhoneState.Unreachable -> Danger
+    PhoneState.Unknown -> null
+}
+
+private fun phoneDotLabel(phone: PhoneState): String = when (phone) {
+    PhoneState.Ready -> "Connected"
+    PhoneState.Reconnecting -> "Reconnecting"
+    else -> "Not connected"
+}
+
+/** The model's name, short enough for the edge beside the clock. */
+internal fun shortModel(name: String): String =
+    if (name.length <= MAX_EDGE_MODEL) name else name.take(MAX_EDGE_MODEL - 1).trimEnd() + "…"
+
+private const val MAX_EDGE_MODEL = 12
 
 /**
  * The orb in the middle is the mic: tap it to talk, tap it again to stop Hermes or its voice. Above it the chat
@@ -179,6 +232,7 @@ private fun TalkScreen(
                     HeraldOrb(
                         mood = mood,
                         level = mic.level,
+                        context = chat.contextPercent?.let { it / 100f },
                         modifier = Modifier
                             .size(orbSize.dp)
                             .clip(CircleShape)
@@ -188,7 +242,7 @@ private fun TalkScreen(
                                     mic.recording -> "Done talking"
                                     running || speaking -> "Stop"
                                     else -> "Talk to Hermes"
-                                }
+                                } + chat.contextPercent?.let { ", context $it% full" }.orEmpty()
                             },
                     )
                 }
@@ -412,7 +466,8 @@ private fun phoneProblem(phone: PhoneState): String? = when (phone) {
     PhoneState.NotConnected -> WatchLink.NOT_CONNECTED
     PhoneState.NoHerald -> WatchLink.NO_HERALD
     PhoneState.SignedOut -> "Sign in to Herald on your phone first."
-    PhoneState.Unknown, PhoneState.Ready -> null
+    PhoneState.Unreachable -> "Herald can't reach your gateway. Check it on your phone."
+    PhoneState.Unknown, PhoneState.Ready, PhoneState.Reconnecting -> null
 }
 
 internal fun activityLine(phase: ReplyPhase, activity: String?): String = activity ?: when (phase) {

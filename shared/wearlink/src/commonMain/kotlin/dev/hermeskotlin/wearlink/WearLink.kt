@@ -175,6 +175,10 @@ data class ReplyUpdate(
     val activity: String? = null,
     val error: String? = null,
     val speech: ReplySpeech = ReplySpeech.Off,
+    /** The chat's model, as people call it ("Claude Sonnet 4.5"), once the gateway has said. */
+    val model: String? = null,
+    /** How full the model's context window is, 0–100, once the gateway has said. */
+    val contextPercent: Int? = null,
 )
 
 /** One of the recent chats, for picking which one the watch talks in. [activityAt] is in epoch seconds. */
@@ -185,9 +189,12 @@ data class WatchChat(val id: String, val title: String, val activityAt: Double? 
 @Serializable
 data class ChatList(val chats: List<WatchChat> = emptyList(), val error: String? = null)
 
-/** Whether Herald on the phone is signed in to a gateway, and connected to it now. */
+/**
+ * Whether Herald on the phone is signed in to a gateway, and [connected]: connected to it, or ready to connect
+ * when asked; false while it's (re)connecting or failing to. [failed]: it gave up, and won't connect on its own.
+ */
 @Serializable
-data class PhoneStatus(val signedIn: Boolean, val connected: Boolean)
+data class PhoneStatus(val signedIn: Boolean, val connected: Boolean, val failed: Boolean = false)
 
 /** How every message on [WearPaths] is written. Unknown fields are skipped, so either app can be the newer. */
 object WearJson {

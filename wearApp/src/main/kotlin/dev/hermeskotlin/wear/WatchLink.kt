@@ -49,6 +49,12 @@ enum class PhoneState {
     /** Herald is there, signed in to no gateway. */
     SignedOut,
 
+    /** Herald is signed in, but not connected to its gateway right now; an ask waits for it a little. */
+    Reconnecting,
+
+    /** Herald gave up on its gateway (a setting or the server is wrong); asking won't help until that's fixed. */
+    Unreachable,
+
     Ready,
 }
 
@@ -156,7 +162,14 @@ class WatchLink(
         when (path) {
             WearPaths.REPLY -> WearJson.decode<ReplyUpdate>(data)?.let(::onReply)
             WearPaths.CHATS -> WearJson.decode<ChatList>(data)?.let { _chats.value = it }
-            WearPaths.STATUS -> WearJson.decode<PhoneStatus>(data)?.let { _phone.value = if (it.signedIn) PhoneState.Ready else PhoneState.SignedOut }
+            WearPaths.STATUS -> WearJson.decode<PhoneStatus>(data)?.let {
+                _phone.value = when {
+                    !it.signedIn -> PhoneState.SignedOut
+                    it.connected -> PhoneState.Ready
+                    it.failed -> PhoneState.Unreachable
+                    else -> PhoneState.Reconnecting
+                }
+            }
         }
     }
 
@@ -181,7 +194,8 @@ class WatchLink(
         }
         if (!taken) return
         _phone.value = PhoneState.Ready
-        update.chatId?.let { store.setChat(it, update.title ?: store.chat.value.title) }
+        update.chatId?.let { store.adoptChat(it, update.title ?: store.chat.value.title) }
+        store.setStats(update.model, update.contextPercent)
         if (update.phase == ReplyPhase.Done) {
             if (update.text.isNotBlank()) {
                 store.lastReply = update.text

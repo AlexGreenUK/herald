@@ -4,7 +4,9 @@ import dev.hermeskotlin.core.chat.ApprovalChoice
 import dev.hermeskotlin.core.chat.ChatMessage
 import dev.hermeskotlin.core.chat.ChatState
 import dev.hermeskotlin.core.chat.InputRequest
+import dev.hermeskotlin.core.chat.SessionUsage
 import dev.hermeskotlin.core.chat.ToolActivity
+import dev.hermeskotlin.core.models.displayModelName
 import dev.hermeskotlin.wearlink.ReplyPhase
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -63,6 +65,22 @@ class WatchTurnTest {
         val state = ChatState(messages = earlier + ChatMessage.User("u1", "hi") + ChatMessage.Assistant("a1", "one") + ChatMessage.Assistant("a2", "two"))
         assertEquals("two", replyAfter(state)?.text)
         assertNull(replyAfter(ChatState(messages = earlier + ChatMessage.User("u1", "hi"))))
+    }
+
+    @Test
+    fun theContextIsTheGatewaysFigureElseWorkedOutFromTheTokens() {
+        assertEquals(36, contextPercentOf(ChatState(usage = SessionUsage(contextUsed = 10, contextMax = 100, contextPercent = 36))))
+        assertEquals(25, contextPercentOf(ChatState(usage = SessionUsage(contextUsed = 50_000, contextMax = 200_000))))
+        assertNull(contextPercentOf(ChatState(usage = SessionUsage(contextUsed = 50_000, contextMax = 0))))
+        assertNull(contextPercentOf(ChatState()))
+    }
+
+    @Test
+    fun theModelGoesToTheWatchOnlyOnceTheGatewayNamedIt() {
+        val progress = progressOf(ChatState(model = "claude-sonnet-4-5", usage = SessionUsage(contextPercent = 12)))
+        assertEquals(displayModelName("claude-sonnet-4-5"), progress.model)
+        assertEquals(12, progress.contextPercent)
+        assertNull(modelOf(ChatState(model = " ")))
     }
 
     @Test

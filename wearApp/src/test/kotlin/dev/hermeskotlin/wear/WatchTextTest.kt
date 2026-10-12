@@ -32,4 +32,17 @@ class WatchTextTest {
         assertEquals("Writing it down…", activityLine(ReplyPhase.Transcribing, null))
         assertEquals("Waiting for you on your phone", activityLine(ReplyPhase.WaitingOnPhone, null))
     }
+
+    @Test
+    fun aLongModelNameIsCutToFitBesideTheClock() {
+        assertEquals("GPT-5", shortModel("GPT-5"))
+        assertEquals("Claude Sonn…", shortModel("Claude Sonnet 4.5 Thinking"))
+    }
+
+    @Test
+    fun theContextRingWarnsAsTheChatFillsUp() {
+        assertEquals(HeraldBlueText, contextTint(0.5f))
+        assertEquals(Amber, contextTint(0.8f))
+        assertEquals(Danger, contextTint(0.95f))
+    }
 }

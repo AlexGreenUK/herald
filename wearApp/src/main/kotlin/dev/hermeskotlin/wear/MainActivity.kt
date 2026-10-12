@@ -11,9 +11,12 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
@@ -54,7 +57,15 @@ class MainActivity : ComponentActivity() {
                 onDismissListeningError = { listening.value = Listening() },
             )
         }
-        app.link.refreshPhone()
+        // How the phone stands, for the dot at the top edge: asked again now and then while the app is in sight.
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                while (true) {
+                    app.link.refreshPhone()
+                    delay(PHONE_CHECK_MS)
+                }
+            }
+        }
         if (savedInstanceState == null) handle(intent)
     }
 
@@ -128,6 +139,7 @@ class MainActivity : ComponentActivity() {
     companion object {
         const val EXTRA_LISTEN = "listen"
         private const val EXTRA_DEBUG_ASK = "ask"
+        private const val PHONE_CHECK_MS = 30_000L
 
         /** For a PendingIntent, which starts it in its own task (it's singleTask) and to its onNewIntent when open. */
         fun listenIntent(context: Context): Intent = Intent(context, MainActivity::class.java).putExtra(EXTRA_LISTEN, true)

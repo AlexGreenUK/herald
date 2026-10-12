@@ -12,6 +12,7 @@ import dev.hermeskotlin.core.connection.ConnectionState
 import dev.hermeskotlin.core.connection.GatewayConnection
 import dev.hermeskotlin.core.gateway.GatewayRepository
 import dev.hermeskotlin.core.gateway.GatewayUrl
+import dev.hermeskotlin.core.models.displayModelName
 import dev.hermeskotlin.core.network.ApiResult
 import dev.hermeskotlin.core.network.errorMessage
 import dev.hermeskotlin.core.profiles.ProfileStore
@@ -158,8 +159,11 @@ class WatchRelay(
     fun status(node: String) {
         scope.launch {
             val saved = gateways.current()
-            val signedIn = saved != null && auth.hasStoredSession(saved.gatewayUrl)
-            val status = PhoneStatus(signedIn, signedIn && connection.state.value is ConnectionState.Connected)
+            val state = connection.state.value
+            val signedIn = saved != null && auth.hasStoredSession(saved.gatewayUrl) && state !is ConnectionState.SessionExpired
+            // Idle counts: Herald connects when asked, it just holds no connection while in the background.
+            val reachable = state is ConnectionState.Connected || state is ConnectionState.Idle
+            val status = PhoneStatus(signedIn, signedIn && reachable, failed = signedIn && state is ConnectionState.Failed)
             outbox.sendSafely(node, WearPaths.STATUS, WearJson.encode(status))
         }
     }
@@ -199,7 +203,9 @@ class WatchRelay(
         suspend fun fail(message: String) = tell(last.copy(phase = ReplyPhase.Failed, error = message, activity = null))
 
         val saved = gateways.current()
-        if (saved == null || !auth.hasStoredSession(saved.gatewayUrl)) return fail(SIGNED_OUT)
+        if (saved == null || !auth.hasStoredSession(saved.gatewayUrl) || connection.state.value is ConnectionState.SessionExpired) {
+            return fail(SIGNED_OUT)
+        }
         val gateway = saved.gatewayUrl
         val profile = profiles.get(gateway)
         connection.start(gateway)
@@ -233,7 +239,17 @@ class WatchRelay(
         // Its own job, joined, so its last tell can't race the final one below for the next seq.
         val streaming = scope.launch {
             session.state.map(::progressOf).distinctUntilChanged().conflate().collect { progress ->
-                tell(last.copy(phase = progress.phase, chatId = progress.chatId, title = progress.title, text = progress.text, activity = progress.activity))
+                tell(
+                    last.copy(
+                        phase = progress.phase,
+                        chatId = progress.chatId,
+                        title = progress.title,
+                        text = progress.text,
+                        activity = progress.activity,
+                        model = progress.model,
+                        contextPercent = progress.contextPercent,
+                    ),
+                )
                 delay(UPDATE_EVERY_MS)
             }
         }
@@ -247,7 +263,13 @@ class WatchRelay(
         val state = session.state.value
         state.storedSessionId?.let(::holdChat)
         val reply = replyAfter(state)
-        val done = last.copy(chatId = state.storedSessionId ?: last.chatId, title = state.title, activity = null)
+        val done = last.copy(
+            chatId = state.storedSessionId ?: last.chatId,
+            title = state.title,
+            activity = null,
+            model = modelOf(state) ?: last.model,
+            contextPercent = contextPercentOf(state) ?: last.contextPercent,
+        )
         if (reply?.outcome == TurnOutcome.Error) {
             return tell(done.copy(phase = ReplyPhase.Failed, text = clipForWatch(reply.text), error = reply.error ?: "The turn failed."))
         }
@@ -349,7 +371,27 @@ class WatchRelay(
 }
 
 /** The turn as the watch shows it while it runs. */
-internal data class TurnProgress(val phase: ReplyPhase, val chatId: String?, val title: String?, val text: String, val activity: String?)
+internal data class TurnProgress(
+    val phase: ReplyPhase,
+    val chatId: String?,
+    val title: String?,
+    val text: String,
+    val activity: String?,
+    val model: String? = null,
+    val contextPercent: Int? = null,
+)
+
+/** The chat's model by the name people know it, for the watch's edge. */
+internal fun modelOf(state: ChatState): String? = state.model?.takeIf { it.isNotBlank() }?.let(::displayModelName)
+
+/** How full the context window is, 0–100: the gateway's own figure, else worked out from the tokens. */
+internal fun contextPercentOf(state: ChatState): Int? {
+    val usage = state.usage ?: return null
+    usage.contextPercent?.let { return it.coerceIn(0, 100) }
+    val used = usage.contextUsed ?: return null
+    val max = usage.contextMax?.takeIf { it > 0 } ?: return null
+    return (used * 100 / max).toInt().coerceIn(0, 100)
+}
 
 /** Where the turn for the last prompt stands in [state]. */
 internal fun progressOf(state: ChatState): TurnProgress {
@@ -366,7 +408,7 @@ internal fun progressOf(state: ChatState): TurnProgress {
         state.running || reply != null -> ReplyPhase.Working
         else -> ReplyPhase.Sending
     }
-    return TurnProgress(phase, state.storedSessionId, state.title, clipForWatch(reply?.text.orEmpty()), activity)
+    return TurnProgress(phase, state.storedSessionId, state.title, clipForWatch(reply?.text.orEmpty()), activity, modelOf(state), contextPercentOf(state))
 }
 
 /**

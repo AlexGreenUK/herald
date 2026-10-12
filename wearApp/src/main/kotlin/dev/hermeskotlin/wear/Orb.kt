@@ -63,10 +63,12 @@ fun orbTint(mood: OrbMood): Color = when (mood) {
 /**
  * Herald's voice orb, as on the phone's voice screen: a lit ball with five bars inside two soft rings. The outer
  * ring breathes and swells with your voice; the bars rise as you talk and wave while the reply is read; an arc
- * circles it while Hermes works.
+ * circles it while Hermes works. A thin ring at the rim fills clockwise with how full the chat's [context] is
+ * (0–1, null: not known yet), amber then red as it nears the end, when it's time for a new chat.
  */
 @Composable
-fun HeraldOrb(mood: OrbMood, level: Float, modifier: Modifier = Modifier) {
+fun HeraldOrb(mood: OrbMood, level: Float, modifier: Modifier = Modifier, context: Float? = null) {
+    val fill by animateFloatAsState(context?.coerceIn(0f, 1f) ?: 0f, tween(600), label = "context")
     val tint by animateColorAsState(orbTint(mood), label = "tint")
     val time by rememberInfiniteTransition(label = "orb").animateFloat(
         initialValue = 0f,
@@ -110,6 +112,17 @@ fun HeraldOrb(mood: OrbMood, level: Float, modifier: Modifier = Modifier) {
             val x = center.x + (i - 2) * (bar + gap) - bar / 2
             drawRoundRect(Color.White.copy(alpha = BAR_ALPHAS[i]), topLeft = Offset(x, center.y - h / 2), size = Size(bar, h), cornerRadius = CornerRadius(bar / 2))
         }
+        if (context != null) {
+            val width = 2.dp.toPx()
+            // Inside the rim: the orb is clipped to its circle.
+            val rim = outer - width / 2f - 0.5.dp.toPx()
+            val topLeft = Offset(center.x - rim, center.y - rim)
+            val box = Size(rim * 2, rim * 2)
+            drawCircle(Color.White.copy(alpha = 0.1f), radius = rim, style = Stroke(width))
+            if (fill > 0f) {
+                drawArc(contextTint(fill), startAngle = -90f, sweepAngle = 360f * fill, useCenter = false, topLeft = topLeft, size = box, style = Stroke(width, cap = StrokeCap.Round))
+            }
+        }
         if (circling) {
             val ring = outer * 0.84f
             rotate(time * 360f) {
@@ -125,6 +138,13 @@ fun HeraldOrb(mood: OrbMood, level: Float, modifier: Modifier = Modifier) {
             }
         }
     }
+}
+
+/** The context ring's color: Herald blue, amber from three quarters full, red from nine tenths. */
+internal fun contextTint(fill: Float): Color = when {
+    fill >= 0.9f -> Danger
+    fill >= 0.75f -> Amber
+    else -> HeraldBlueText
 }
 
 private val BAR_HEIGHTS = listOf(18, 34, 24, 40, 20)

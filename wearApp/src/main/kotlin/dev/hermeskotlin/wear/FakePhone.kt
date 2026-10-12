@@ -40,7 +40,7 @@ class FakePhone(private val scope: CoroutineScope, private val deliver: (String,
             var seq = 0
             val chatId = ask.chatId ?: "sample-chat"
             fun tell(update: ReplyUpdate) = deliver(WearPaths.REPLY, WearJson.encode(update.copy(seq = ++seq)))
-            val base = ReplyUpdate(ask.id, ReplyPhase.Sending, chatId = chatId, title = "Weekend plans", heard = heard)
+            val base = ReplyUpdate(ask.id, ReplyPhase.Sending, chatId = chatId, title = "Weekend plans", heard = heard, model = "Sample model", contextPercent = 34)
             if (heard != null) {
                 tell(base.copy(phase = ReplyPhase.Transcribing))
                 delay(700)
