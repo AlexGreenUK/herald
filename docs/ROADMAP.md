@@ -266,7 +266,8 @@ Agent tools that run on the phone: a gateway plugin registers them, Herald answe
 - [x] App screen time (Usage Access): per app, screen-on time and unlocks, today or up to a week by day
 - [x] Open URLs, maps, apps or the share sheet (after Allow; a link's real site is shown first, lookalike and hidden-character links refused)
 - [x] Write to the clipboard (after Allow; up to 300 characters, all shown in the question; hidden characters refused; the clipboard is never read)
-- [ ] Location and geofences ("when I get home…")
+- [x] Location (Android's own location service, no Google services; precise or approximate as the user allows; while Herald is open, or also while closed if the user allows that from its own row)
+- [ ] Geofences ("when I get home…")
 - [ ] Calendar (read, add, move events)
 - [ ] Contacts lookup
 - [ ] Health data (steps, sleep, heart rate; Health Connect)
