@@ -97,7 +97,7 @@ class ChatNotifications(private val context: Context) {
     interface AlsoRings {
         /**
          * Rings for [call] there too; true when it tries, so this phone's call isn't shown there as well. Should it
-         * not ring after all, it calls [watchDidntRing].
+         * not ring after all, it calls [showOnWatch].
          */
         fun ring(call: Ringing): Boolean
 
@@ -266,27 +266,31 @@ class ChatNotifications(private val context: Context) {
         }
         _ringing.update { it + (request.id to call) }
         // Herald on the watch rings itself, with an Answer that talks there: this phone's call isn't shown on it too,
-        // unless the watch doesn't say it rings ([watchDidntRing]).
+        // unless the watch doesn't say it rings ([showOnWatch]).
         val watchRings = alsoRings?.ring(call) == true
         manager.notify(request.id, CALL_ID, callNotification(call, localOnly = watchRings))
         HandlerCompat.postDelayed(main, { decline(request.id) }, call.timer, RING_MS)
         return true
     }
 
-    /** Herald on the watch was rung for [requestId] and didn't say it rings: this phone's call shows there after all. */
+    /**
+     * Whether this phone's call for [requestId] shows on the watch too: it does once Herald there didn't say it
+     * rings, and stops again should it say so late. Ringing on as it is, from where it got to.
+     */
     @SuppressLint("MissingPermission") // It's only ever posted when canPost.
-    fun watchDidntRing(requestId: String) {
+    fun showOnWatch(requestId: String, show: Boolean) {
         if (Looper.myLooper() != Looper.getMainLooper()) {
-            main.post { watchDidntRing(requestId) }
+            main.post { showOnWatch(requestId, show) }
             return
         }
         val call = _ringing.value[requestId] ?: return
-        manager.notify(requestId, CALL_ID, callNotification(call, localOnly = false))
+        manager.notify(requestId, CALL_ID, callNotification(call, localOnly = !show, again = true))
         // Answered meanwhile, off this thread: it's not put back.
         if (requestId !in _ringing.value) manager.cancel(requestId, CALL_ID)
     }
 
-    private fun callNotification(call: Ringing, localOnly: Boolean): Notification {
+    /** [again]: an update of the call already ringing, which goes on as it was instead of starting over. */
+    private fun callNotification(call: Ringing, localOnly: Boolean, again: Boolean = false): Notification {
         val request = call.request
         val title = call.title
         val caller = Person.Builder().setName(title?.takeIf { it.isNotBlank() } ?: "Hermes").setImportant(true).build()
@@ -321,6 +325,7 @@ class ChatNotifications(private val context: Context) {
             // Should Herald be gone before it rings out, Android takes it down itself.
             .setTimeoutAfter(RING_MS + RING_GRACE_MS)
             .setLocalOnly(localOnly)
+            .setOnlyAlertOnce(again)
         return builder.build()
             // Rings on, as a call does, until it's answered, declined or rung out; else the ringtone plays once.
             .apply { flags = flags or Notification.FLAG_INSISTENT }

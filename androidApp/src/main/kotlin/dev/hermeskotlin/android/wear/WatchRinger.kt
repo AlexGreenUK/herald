@@ -56,6 +56,9 @@ class WatchRinger(
     /** The requests a watch said it rings for. */
     private val ringingOn: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
+    /** The requests whose phone call shows on the watch, since none said in time that it rings. */
+    private val phoneCallShown: MutableSet<String> = ConcurrentHashMap.newKeySet()
+
     fun start() {
         notifications.alsoRings = this
         capabilities.addListener({ info -> found(info.nodes.mapTo(HashSet()) { it.id }) }, WearCapabilities.WATCH)
@@ -103,18 +106,23 @@ class WatchRinger(
             // No watch said it rings (no Herald there any more, its notifications off, on a call): the phone's call
             // shows there instead.
             delay(RING_ON_MS)
-            if (rung.containsKey(request.id) && request.id !in ringingOn) notifications.watchDidntRing(request.id)
+            if (rung.containsKey(request.id) && request.id !in ringingOn && phoneCallShown.add(request.id)) {
+                // Said just now, in between: it rings there after all.
+                if (request.id in ringingOn) phoneCallShown -= request.id else notifications.showOnWatch(request.id, show = true)
+            }
         }
         return true
     }
 
-    /** Herald on a watch rings for [on]. */
+    /** Herald on a watch rings for [on]; should that come late, the phone's call shown there meanwhile goes. */
     fun ringsOn(on: RingOn) {
-        if (rung.containsKey(on.requestId)) ringingOn += on.requestId
+        if (!rung.containsKey(on.requestId) || !ringingOn.add(on.requestId)) return
+        if (phoneCallShown.remove(on.requestId)) notifications.showOnWatch(on.requestId, show = false)
     }
 
     override fun stop(requestId: String) {
         ringingOn -= requestId
+        phoneCallShown -= requestId
         val to = rung.remove(requestId) ?: return
         scope.launch { to.forEach { send(it, WearPaths.RING_END, WearJson.encode(RingEnd(requestId))) } }
     }
@@ -122,6 +130,7 @@ class WatchRinger(
     /** Picked up or declined on watch [node]: any other watch stops ringing, and so does the phone. */
     fun endedOnWatch(node: String, end: RingEnd) {
         ringingOn -= end.requestId
+        phoneCallShown -= end.requestId
         val others = rung.remove(end.requestId).orEmpty() - node
         scope.launch { others.forEach { send(it, WearPaths.RING_END, WearJson.encode(RingEnd(end.requestId))) } }
         if (end.answered) notifications.answeredOnWatch(end.requestId) else notifications.declinedOnWatch(end.requestId)

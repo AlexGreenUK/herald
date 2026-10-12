@@ -214,10 +214,11 @@ class WatchRelay(
     }
 
     /**
-     * Whether the gateway was last found to talk live, without asking it: for deciding at once whether the watch
-     * rings. Right after a switch it can still be the last gateway's, until [checkLiveVoice] looks.
+     * Whether the signed-in gateway was last found to talk live, without asking it: for deciding at once whether the
+     * watch rings. Not yet asked (just switched to), it doesn't, until [checkLiveVoice] finds out.
      */
-    val talksLive: Boolean get() = liveVoice?.second == true
+    val talksLive: Boolean
+        get() = liveVoice?.let { it.second && it.first == gateways.list.value.current?.gatewayUrl } == true
 
     /** Asks the gateway whether it talks live, unless that was asked lately, so [talksLive] is fresh for the next call. */
     fun checkLiveVoice() {
