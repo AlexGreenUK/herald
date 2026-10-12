@@ -213,6 +213,22 @@ class WatchRelay(
         return on
     }
 
+    /**
+     * Whether the gateway was last found to talk live, without asking it: for deciding at once whether the watch
+     * rings. Right after a switch it can still be the last gateway's, until [checkLiveVoice] looks.
+     */
+    val talksLive: Boolean get() = liveVoice?.second == true
+
+    /** Asks the gateway whether it talks live, unless that was asked lately, so [talksLive] is fresh for the next call. */
+    fun checkLiveVoice() {
+        scope.launch {
+            val saved = gateways.current()
+            // Another gateway's answer, or none signed in: it doesn't talk live until it says so.
+            if (liveVoice?.first != saved?.gatewayUrl) liveVoice = null
+            if (saved != null && auth.hasStoredSession(saved.gatewayUrl)) liveVoiceOn(saved.gatewayUrl) else liveVoice = null
+        }
+    }
+
     /** What a call just found out of [gateway]'s live voice, so the watch is told it next, not minutes on. */
     fun liveVoiceIs(gateway: GatewayUrl, on: Boolean) {
         liveVoice = gateway to on
