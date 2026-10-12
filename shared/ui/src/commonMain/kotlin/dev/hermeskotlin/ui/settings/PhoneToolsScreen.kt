@@ -33,6 +33,7 @@ import com.composables.icons.lucide.BatteryMedium
 import com.composables.icons.lucide.ChevronDown
 import com.composables.icons.lucide.ChevronRight
 import com.composables.icons.lucide.ChevronUp
+import com.composables.icons.lucide.ClipboardCopy
 import com.composables.icons.lucide.ExternalLink
 import com.composables.icons.lucide.Hourglass
 import com.composables.icons.lucide.Lucide
@@ -369,4 +370,5 @@ internal val PhoneTool.icon: ImageVector
         PhoneTool.Alarms -> Lucide.AlarmClock
         PhoneTool.ScreenTime -> Lucide.Hourglass
         PhoneTool.Open -> Lucide.ExternalLink
+        PhoneTool.Clipboard -> Lucide.ClipboardCopy
     }
