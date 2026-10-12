@@ -493,6 +493,17 @@ class LiveConversationTest {
         voice.stopChat()
     }
 
+    @Test
+    fun aYesAfterAnUmIsTakenAsTheYes() = runTest {
+        val (socket, _, call, voice) = callWithATurn()
+        socket.push("""{"jsonrpc":"2.0","id":"srq-1","method":"approval","params":{"session_id":"rt9","command":"rm -rf build","choices":["once","deny"]}}""")
+        call.sent.first { sent -> sent.any { it["content"]?.jsonPrimitive?.contentOrNull?.contains("rm -rf build") == true } }
+        call.receive("""{"type":"session.input_transcript.delta","delta":"Um, yes.","start_ms":2000,"end_ms":2600}""")
+        val answer = socket.answers.first { it.isNotEmpty() }.single()
+        assertEquals("once", answer["result"]!!.jsonObject["choice"]!!.jsonPrimitive.content)
+        voice.stopChat()
+    }
+
     /** Hears each of [said] in turn, then nothing more. [onRecord] is told as each starts. */
     private class Saying(vararg said: String, val onRecord: () -> Unit = {}) : VoiceRecorder {
         val left = ArrayDeque(said.toList())

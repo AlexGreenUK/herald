@@ -136,7 +136,7 @@ class VoiceAnswersTest {
         listOf(
             "Green", "Blue please", "the second one", "I think red", "um, blue", "Umm… blue", "how about blue", "tell it red",
             "give me red", "do the first one", "sorry, the blue one", "when the tests pass", "use a second account",
-            "none of the options", "poll every one minute", "second",
+            "none of the options", "poll every one minute", "second", "give me one of each", "give me a few examples",
         ).forEach { assertTrue(VoiceAnswers.takesAsAnswer(color, it), it) }
         // A question back, a hedge or not knowing is the voice's to talk through.
         listOf(
@@ -159,6 +159,10 @@ class VoiceAnswersTest {
         assertTrue(VoiceAnswers.takesAsAnswer(onceOnly, "Okay"))
         assertTrue(VoiceAnswers.takesAsAnswer(onceOnly, "um, yes"))
         assertTrue(VoiceAnswers.takesAsAnswer(onceOnly, "sorry, yes"))
+        // Both steps judge it alike: what's taken is what's granted.
+        assertEquals(ApprovalChoice.Once, VoiceAnswers.approval(onceOnly, "Um, yes."))
+        assertEquals(ApprovalChoice.Once, VoiceAnswers.approval(onceOnly, "Okay"))
+        assertNull(VoiceAnswers.approval(onceOnly, "Okay, can you run it"))
         // Not knowing isn't a no.
         listOf("I don't know what that does", "no wait, let me think", "not sure")
             .forEach { assertFalse(VoiceAnswers.takesAsAnswer(onceOnly, it), it) }

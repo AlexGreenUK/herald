@@ -41,7 +41,8 @@ object VoiceAnswers {
      * grant word in passing ("okay, let me think", "show it in the chat") is asked again.
      */
     fun approval(request: InputRequest.Approval, transcript: String): ApprovalChoice? {
-        val words = words(transcript)
+        // "Um, yes" is yes; a lone "okay" is one too.
+        val words = words(transcript).let { all -> all.dropWhile(::filler).ifEmpty { all } }
         if (words.isEmpty()) return null
         val choice = when {
             words.any { it in DENY || it.endsWith("n't") } -> ApprovalChoice.Deny
@@ -67,7 +68,7 @@ object VoiceAnswers {
      */
     fun takesAsAnswer(request: InputRequest, transcript: String): Boolean {
         // "Um, blue" is blue.
-        val words = words(transcript).dropWhile { it in FILLERS || FILLER_SOUND.matches(it) }
+        val words = words(transcript).dropWhile(::filler)
         if ('?' in transcript) return false
         // A lone "okay" grants an approval, and is no answer to a question.
         if (words.isEmpty()) return request is InputRequest.Approval && approval(request, transcript) != null
@@ -84,7 +85,7 @@ object VoiceAnswers {
         if (holdsOff) return false
         return when (request) {
             // "I don't know what that does" isn't a no; "um, yes" is a yes.
-            is InputRequest.Approval -> approval(request, words.joinToString(" ")) != null
+            is InputRequest.Approval -> approval(request, transcript) != null
             is InputRequest.Clarify -> {
                 val question = request.questions.singleOrNull() ?: return false
                 // A bare "okay" while they think names none of the choices.
@@ -132,6 +133,8 @@ object VoiceAnswers {
 
     private fun String.containsPhrase(phrase: String): Boolean = " $this ".contains(" $phrase ")
 
+    private fun filler(word: String) = word in FILLERS || FILLER_SOUND.matches(word)
+
     private fun number(word: String): Int? = word.toIntOrNull() ?: NUMBERS[word]
 
     private val WHITESPACE = Regex("\\s+")
@@ -169,7 +172,8 @@ object VoiceAnswers {
     /** Ways of putting it off, of not knowing or of not having heard, that aren't an answer. */
     private val HOLD_PHRASES = listOf(
         "just a second", "just a minute", "just one second", "just one minute", "give me a second", "give me a minute",
-        "give me one", "give me two", "give me a few", "missed that", "come again",
+        "give me one second", "give me one minute", "give me two seconds", "give me two minutes", "give me a few seconds",
+        "give me a few minutes", "give me a moment", "missed that", "come again",
         "let me think", "let me see", "let me check", "let me look", "let's see", "lets see",
         "not sure", "don't know", "dont know", "do not know", "don't remember", "no idea", "no clue", "not certain",
         "didn't catch", "didn't hear", "one more time", "say again", "again please", "tell me", "remind me",
