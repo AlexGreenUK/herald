@@ -68,14 +68,19 @@ class RingActivity : ComponentActivity() {
         }
         // Unlocking to answer one: it's that one.
         if (answering) return
-        ring.value = next
-        watching?.cancel()
-        // Over elsewhere (answered on the phone, rung out): the screen goes with it.
-        watching = lifecycleScope.launch {
-            app.rings.ringing.first { next.requestId !in it }
-            if (!answering) finish()
-        }
+        hold(next)
         if (answerNow && intent.getBooleanExtra(EXTRA_ANSWER, false)) answerWhenShown = true
+    }
+
+    private fun hold(shown: WatchRing) {
+        ring.value = shown
+        watching?.cancel()
+        // Over elsewhere (answered on the phone, rung out): the screen goes with it, or shows another still ringing.
+        watching = lifecycleScope.launch {
+            val left = app.rings.ringing.first { shown.requestId !in it }
+            if (answering) return@launch
+            left.values.firstOrNull()?.let(::hold) ?: finish()
+        }
     }
 
     override fun onResume() {

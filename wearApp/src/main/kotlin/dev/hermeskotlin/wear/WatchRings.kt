@@ -9,6 +9,9 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import androidx.core.os.HandlerCompat
 import androidx.core.app.NotificationChannelCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -27,6 +30,10 @@ import kotlinx.coroutines.flow.update
 class WatchRings(private val context: Context) {
 
     private val manager = NotificationManagerCompat.from(context)
+    private val main = Handler(Looper.getMainLooper())
+
+    /** The rings stopped lately, which never come back. */
+    private val ended = LinkedHashSet<String>()
 
     private val _ringing = MutableStateFlow<Map<String, WatchRing>>(emptyMap())
 
@@ -91,6 +98,8 @@ class WatchRings(private val context: Context) {
             .apply { flags = flags or Notification.FLAG_INSISTENT }
         _ringing.update { it + (ring.requestId to ring) }
         manager.notify(ring.requestId, NOTIFICATION_ID, notification)
+        // Rung out here too, should the phone's word that it's over never come: the ring screen goes with it.
+        HandlerCompat.postDelayed(main, { stop(ring.requestId) }, ring.requestId, MAX_RING_MS)
         // Wear's system UI only buzzes for a full-screen intent, so the ring screen is opened here as well.
         try {
             context.startActivity(RingActivity.intent(context, ring, answer = false).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
@@ -106,6 +115,8 @@ class WatchRings(private val context: Context) {
      */
     fun restore(ring: WatchRing): Boolean {
         if (ring.requestId in _ringing.value) return true
+        // Stopped in this run: its notification may still be listed for a moment after it was cancelled.
+        if (synchronized(ended) { ring.requestId in ended }) return false
         val on = manager.activeNotifications.any { it.tag == ring.requestId && it.id == NOTIFICATION_ID }
         if (on) _ringing.update { it + (ring.requestId to ring) }
         return on
@@ -113,6 +124,11 @@ class WatchRings(private val context: Context) {
 
     /** Over: answered, declined, or ended on the phone. The ring, if it was still on. */
     fun stop(requestId: String): WatchRing? {
+        synchronized(ended) {
+            ended += requestId
+            if (ended.size > MAX_ENDED) ended.remove(ended.first())
+        }
+        main.removeCallbacksAndMessages(requestId)
         manager.cancel(requestId, NOTIFICATION_ID)
         var ring: WatchRing? = null
         _ringing.update {
@@ -126,6 +142,7 @@ class WatchRings(private val context: Context) {
         const val CHANNEL = "calls"
         const val NOTIFICATION_ID = 7
         const val MAX_RING_MS = 60_000L
+        const val MAX_ENDED = 32
         val VIBRATION = longArrayOf(0, 700, 500, 700, 500, 700)
     }
 }
