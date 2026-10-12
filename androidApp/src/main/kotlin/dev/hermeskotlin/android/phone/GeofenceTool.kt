@@ -11,6 +11,7 @@ import dev.hermeskotlin.core.phone.WatchedPlace
 import dev.hermeskotlin.core.phone.forQuestion
 import dev.hermeskotlin.core.phone.hidden
 import dev.hermeskotlin.core.profiles.ProfileStore
+import dev.hermeskotlin.core.profiles.ProfilesApi
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -47,8 +48,8 @@ class ChatTargets(
 }
 
 /**
- * `phone_geofence`: places the phone watches. Adding one asks first and shows exactly what will be sent and where;
- * listing and removing don't, since they only show or take away. Watching needs precise location all the time,
+ * `phone_geofence`: places the phone watches. Adding one asks first and shows exactly what will be sent and where,
+ * and removing one asks too; listing doesn't. Watching needs precise location all the time,
  * since the place matters most while Herald is closed.
  */
 internal class GeofenceTool(
@@ -66,14 +67,19 @@ internal class GeofenceTool(
     }
 
     /**
-     * The places the calling agent may see and remove: those added on the gateway Herald is signed in to, and in the
-     * calling chat's profile when Herald knows it. Another gateway's or profile's places are none of its business.
+     * The places the calling agent may see and remove: those added on the gateway Herald is signed in to, in the
+     * calling chat's profile. A call from no chat on this phone (a scheduled job, Desktop) sees the default profile's
+     * only. Another gateway's or profile's places are none of its business.
      */
     private suspend fun visible(session: String): List<WatchedPlace> {
         val target = chats.of(session)
         val gateway = target?.gateway ?: chats.gateway() ?: return emptyList()
-        return places.places.value.filter { it.gateway == gateway && (target == null || it.profile == target.profile) }
+        val profile = profileOf(target?.profile)
+        return places.places.value.filter { it.gateway == gateway && profileOf(it.profile) == profile }
     }
+
+    /** No profile picked and the one named "default" are the same profile. */
+    private fun profileOf(name: String?): String? = name?.takeUnless { it == ProfilesApi.DEFAULT }
 
     private suspend fun list(session: String): JsonObject {
         val shown = visible(session)
@@ -102,7 +108,11 @@ internal class GeofenceTool(
     private suspend fun remove(args: JsonObject, session: String): JsonObject {
         val id = args.string("id") ?: throw PhoneToolException("id is needed: take it from action=list.")
         val place = visible(session).firstOrNull { it.id == id } ?: throw PhoneToolException("No watched place has that id.")
-        places.remove(id)
+        // The user allowed the place: only the user takes it back.
+        val event = if (place.arriving) "arrive at" else "leave"
+        confirmations.confirm("Stop watching ${forQuestion(place.name)}? Nothing is sent any more when you $event it.", TITLE_REMOVE) {
+            places.remove(id)
+        }
         return buildJsonObject {
             put("removed", true)
             put("name", place.name)
@@ -137,6 +147,10 @@ internal class GeofenceTool(
         val lat = args.double("latitude")
         val lon = args.double("longitude")
         if ((lat == null) != (lon == null)) throw PhoneToolException("latitude and longitude go together; leave both out for where the phone is now.")
+        // Where the phone is goes back to the agent: that's the Location tool's, and only while it's on.
+        if (lat == null && !places.locationOn()) {
+            throw PhoneToolException("Give latitude and longitude: the Location tool is off, so the phone doesn't say where it is.")
+        }
         if (lat != null && lon != null && (lat !in -90.0..90.0 || lon !in -180.0..180.0)) {
             throw PhoneToolException("latitude or longitude is out of range.")
         }
@@ -199,5 +213,6 @@ internal class GeofenceTool(
         const val MIN_RADIUS = 100
         const val MAX_RADIUS = 5000
         const val TITLE = "The agent wants to watch a place"
+        const val TITLE_REMOVE = "The agent wants to stop watching a place"
     }
 }
