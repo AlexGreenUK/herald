@@ -28,6 +28,9 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <!-- Only if the user also allows location while Herald is closed, from its own row under the Location switch. -->
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+    <!-- The Calendar phone tool: reads events, and adds or moves one after the user allows it. -->
+    <uses-permission android:name="android.permission.READ_CALENDAR" />
+    <uses-permission android:name="android.permission.WRITE_CALENDAR" />
     <!-- Location is one optional tool: a phone or tablet without GPS still installs Herald. -->
     <uses-feature
         android:name="android.hardware.location"
