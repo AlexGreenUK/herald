@@ -77,7 +77,7 @@ class PhoneConfirmations(private val context: Context) {
      * activity; throws [PhoneToolException] when the user denies, doesn't answer before the agent stops waiting,
      * or can't be asked.
      */
-    suspend fun confirm(what: String, action: (Activity) -> Unit) {
+    suspend fun confirm(what: String, title: String = CHANGE, action: (Activity) -> Unit) {
         val key = "c" + ids.incrementAndGet()
         val pending = Pending(action, CompletableDeferred())
         waiting[key] = pending
@@ -85,7 +85,7 @@ class PhoneConfirmations(private val context: Context) {
         try {
             createChannel()
             cantAsk()?.let { throw PhoneToolException(it) }
-            if (!post(id, key, what)) throw PhoneToolException("Android didn't show the question, so the phone couldn't ask the user.")
+            if (!post(id, key, title, what)) throw PhoneToolException("Android didn't show the question, so the phone couldn't ask the user.")
             // Well inside the agent's wait: an Allow it would never hear of must not change the phone.
             withTimeout(ANSWER_MS) { pending.done.await() }
         } catch (e: TimeoutCancellationException) {
@@ -97,7 +97,7 @@ class PhoneConfirmations(private val context: Context) {
     }
 
     @SuppressLint("MissingPermission") // cantAsk checks it.
-    private fun post(id: Int, key: String, what: String): Boolean {
+    private fun post(id: Int, key: String, title: String, what: String): Boolean {
         val allow = PendingIntent.getActivity(
             context, id,
             Intent(context, PhoneActionActivity::class.java).putExtra(EXTRA_KEY, key).putExtra(EXTRA_ID, id)
@@ -112,7 +112,7 @@ class PhoneConfirmations(private val context: Context) {
         val notification = NotificationCompat.Builder(context, CHANNEL)
             .setSmallIcon(R.drawable.ic_notification)
             .setColor(ContextCompat.getColor(context, R.color.notification_accent))
-            .setContentTitle("The agent wants to change your phone")
+            .setContentTitle(title)
             .setContentText(what)
             .setStyle(NotificationCompat.BigTextStyle().bigText(what))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
@@ -128,6 +128,9 @@ class PhoneConfirmations(private val context: Context) {
     companion object {
         private const val CHANNEL = "phone_tools"
         private const val TAG = "phone_tool"
+
+        /** The question's title for a change to the phone's own settings. */
+        const val CHANGE = "The agent wants to change your phone"
         internal const val EXTRA_KEY = "phone_tool_key"
         internal const val EXTRA_ID = "phone_tool_id"
 
