@@ -18,7 +18,11 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -26,12 +30,15 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.composables.icons.lucide.AlarmClock
 import com.composables.icons.lucide.BatteryMedium
+import com.composables.icons.lucide.ChevronDown
 import com.composables.icons.lucide.ChevronRight
+import com.composables.icons.lucide.ChevronUp
 import com.composables.icons.lucide.ExternalLink
 import com.composables.icons.lucide.Hourglass
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.ShieldCheck
 import com.composables.icons.lucide.Smartphone
+import com.composables.icons.lucide.Trash2
 import com.composables.icons.lucide.Volume2
 import com.composables.icons.lucide.Wifi
 import com.composables.icons.lucide.Wrench
@@ -43,11 +50,17 @@ import dev.hermeskotlin.core.phone.PhoneToolUse
 import dev.hermeskotlin.core.phone.PhoneToolsStatus
 import dev.hermeskotlin.core.phone.PhoneToolsStatus.State
 import dev.hermeskotlin.core.phone.enabledPhoneTools
+import dev.hermeskotlin.core.push.KnownPhone
 import dev.hermeskotlin.core.settings.AppSettings
 import dev.hermeskotlin.designsystem.background
 import dev.hermeskotlin.designsystem.body
 import dev.hermeskotlin.designsystem.bodySmall
 import dev.hermeskotlin.designsystem.colors
+import dev.hermeskotlin.designsystem.components.Button
+import dev.hermeskotlin.designsystem.components.ButtonSize
+import dev.hermeskotlin.designsystem.components.ButtonVariant
+import dev.hermeskotlin.designsystem.components.Dialog
+import dev.hermeskotlin.designsystem.components.IconButton
 import dev.hermeskotlin.designsystem.components.halo
 import dev.hermeskotlin.designsystem.danger
 import dev.hermeskotlin.designsystem.text
@@ -65,8 +78,11 @@ fun PhoneToolsScreen(onBack: () -> Unit, viewModel: PhoneToolsViewModel = koinVi
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val status by viewModel.status.collectAsStateWithLifecycle()
     val recent by viewModel.recent.collectAsStateWithLifecycle()
+    val phones by viewModel.phones.collectAsStateWithLifecycle()
     val access = rememberPhoneToolAccess()
     PlatformBackHandler(enabled = true, onBack = onBack)
+    // Other phones change the list (a new one reports, one is used): fresh each time the page opens.
+    LaunchedEffect(Unit) { viewModel.refreshPhones() }
     PhoneToolsView(
         settings = settings,
         status = status,
@@ -79,6 +95,10 @@ fun PhoneToolsScreen(onBack: () -> Unit, viewModel: PhoneToolsViewModel = koinVi
             if (on && access.missing(tool) != null) access.request(tool)
         },
         onSetUp = viewModel::setUp,
+        phones = phones,
+        onMovePhone = viewModel::movePhone,
+        onRemovePhone = viewModel::removePhone,
+        onUpdatePlugin = viewModel::updatePlugin,
         missing = access::missing,
         onAllow = access::request,
     )
@@ -94,10 +114,29 @@ internal fun PhoneToolsView(
     onAll: (Boolean) -> Unit,
     onTool: (PhoneTool, Boolean) -> Unit,
     onSetUp: () -> Unit,
+    phones: List<KnownPhone> = emptyList(),
+    onMovePhone: (String, Int) -> Unit = { _, _ -> },
+    onRemovePhone: (String) -> Unit = {},
+    onUpdatePlugin: () -> Unit = {},
     missing: (PhoneTool) -> String? = { null },
     onAllow: (PhoneTool) -> Unit = {},
     nowMillis: Long = Clock.System.now().toEpochMilliseconds(),
 ) {
+    var removing by remember { mutableStateOf<KnownPhone?>(null) }
+    var installAsked by remember { mutableStateOf(false) }
+    PluginInstallDialog(
+        visible = installAsked,
+        feature = "Phone tools",
+        what = "It offers the agent the tools you turn on here, and passes their calls to this phone.",
+        onDismiss = { installAsked = false },
+    ) {
+        installAsked = false
+        onAll(true)
+    }
+    RemovePhoneDialog(removing, onDismiss = { removing = null }) {
+        onRemovePhone(it.id)
+        removing = null
+    }
     Box(
         Modifier
             .fillMaxSize()
@@ -126,12 +165,18 @@ internal fun PhoneToolsView(
                         title = "Let the agent use this phone",
                         detail = statusLine(settings, status),
                         checked = settings.phoneTools,
-                        onCheckedChange = onAll,
+                        // On installs code on the gateway: said first, done only once the user agrees.
+                        onCheckedChange = { on -> if (on) installAsked = true else onAll(false) },
                         icon = Lucide.Smartphone,
                     )
                     if (settings.phoneTools && status.state in setOf(State.NotInstalled, State.Failed)) {
                         Divider()
                         ActionRow("Set up on the gateway", Lucide.Wrench, onSetUp)
+                    }
+                    val update = status.update
+                    if (settings.phoneTools && update != null) {
+                        Divider()
+                        PluginUpdateRow(update, onUpdatePlugin)
                     }
                 }
                 if (settings.phoneTools) {
@@ -152,6 +197,32 @@ internal fun PhoneToolsView(
                                 Divider()
                                 ActionRow("Allow on this phone", Lucide.ShieldCheck) { onAllow(tool) }
                             }
+                        }
+                    }
+                    // Only once the gateway knows this phone: the list is the gateway's.
+                    if (status.state == State.On && phones.isNotEmpty()) {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Section("Phones") {
+                                phones.forEachIndexed { i, phone ->
+                                    if (i > 0) Divider()
+                                    PhoneRow(
+                                        phone = phone,
+                                        canUp = i > 0,
+                                        canDown = i < phones.lastIndex,
+                                        nowMillis = nowMillis,
+                                        onMove = { by -> onMovePhone(phone.id, by) },
+                                        onRemove = { removing = phone },
+                                    )
+                                }
+                            }
+                            Text(
+                                "A chat you send from a phone uses that phone. Scheduled jobs and chats from Desktop or the " +
+                                    "dashboard use the first phone in this list with the tool on. A phone you remove comes " +
+                                    "back if Herald on it is still signed in with phone tools on.",
+                                style = Theme[typography][bodySmall],
+                                color = Theme[colors][textTertiary],
+                                modifier = Modifier.padding(horizontal = 6.dp),
+                            )
                         }
                     }
                 }
@@ -181,8 +252,77 @@ internal fun statusLine(settings: AppSettings, status: PhoneToolsStatus): String
         State.Offline -> "Waiting to connect to the gateway."
         State.Working -> status.detail ?: "Setting up with the gateway…"
         State.NotInstalled -> "Needs the herald-push plugin on the gateway."
+        State.Outdated -> status.update?.let {
+            "The gateway's herald-push plugin is ${it.installed}; phone tools need ${it.available}. Update it below."
+        } ?: "The gateway's herald-push plugin is too old."
         State.Failed -> status.detail ?: "The gateway refused."
     }
+}
+
+/** One phone the gateway knows: what it has on and when it was used, with its place in the order. */
+@Composable
+private fun PhoneRow(
+    phone: KnownPhone,
+    canUp: Boolean,
+    canDown: Boolean,
+    nowMillis: Long,
+    onMove: (Int) -> Unit,
+    onRemove: () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(start = 14.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconTile(Lucide.Smartphone)
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Text(
+                if (phone.me) "${phone.name} · This phone" else phone.name,
+                style = Theme[typography][body],
+                color = Theme[colors][text],
+            )
+            Text(phoneDetail(phone, nowMillis), style = Theme[typography][bodySmall], color = Theme[colors][textTertiary])
+        }
+        Row {
+            IconButton(Lucide.ChevronUp, "Move ${phone.name} up", onClick = { onMove(-1) }, enabled = canUp, iconSize = 18.dp)
+            IconButton(Lucide.ChevronDown, "Move ${phone.name} down", onClick = { onMove(1) }, enabled = canDown, iconSize = 18.dp)
+            // This phone goes away by turning phone tools off; removing it here would only last until its next report.
+            if (!phone.me) IconButton(Lucide.Trash2, "Remove ${phone.name}", onClick = onRemove, iconSize = 18.dp)
+        }
+    }
+}
+
+/** "3 tools on · used 2h ago". */
+private fun phoneDetail(phone: KnownPhone, nowMillis: Long): String {
+    val tools = when (phone.tools.size) {
+        0 -> "No tools on"
+        1 -> "1 tool on"
+        else -> "${phone.tools.size} tools on"
+    }
+    val (what, at) = if (phone.used > 0) "used" to phone.used else "seen" to phone.seen
+    if (at <= 0) return tools
+    val ago = relativeTime(at.toDouble(), nowMillis).let { if (it == "now") "just now" else "$it ago" }
+    return "$tools · $what $ago"
+}
+
+/** Asks before forgetting [phone] on the gateway. */
+@Composable
+private fun RemovePhoneDialog(phone: KnownPhone?, onDismiss: () -> Unit, onRemove: (KnownPhone) -> Unit) {
+    // Kept while the dialog fades out, so its text doesn't go blank first.
+    var shown by remember { mutableStateOf(phone) }
+    if (phone != null) shown = phone
+    val p = shown ?: return
+    Dialog(
+        visible = phone != null,
+        onDismissRequest = onDismiss,
+        title = "Remove ${p.name}?",
+        message = "The agent stops using its phone tools, and calls waiting for it are refused. If Herald on that " +
+            "phone is still signed in with phone tools on, it comes back the next time it connects.",
+        actions = {
+            Button("Cancel", onClick = onDismiss, variant = ButtonVariant.Ghost, size = ButtonSize.Small)
+            Button("Remove", onClick = { onRemove(p) }, variant = ButtonVariant.Danger, size = ButtonSize.Small)
+        },
+    )
 }
 
 @Composable

@@ -6,6 +6,7 @@ import dev.hermeskotlin.core.phone.PhoneTool
 import dev.hermeskotlin.core.phone.PhoneToolUse
 import dev.hermeskotlin.core.phone.PhoneToolsBridge
 import dev.hermeskotlin.core.phone.PhoneToolsStatus
+import dev.hermeskotlin.core.push.KnownPhone
 import dev.hermeskotlin.core.settings.AppSettings
 import dev.hermeskotlin.core.settings.SettingsStore
 import kotlinx.coroutines.flow.SharingStarted
@@ -35,4 +36,16 @@ class PhoneToolsViewModel(
     }
 
     fun setUp() = bridge.setUp()
+
+    /** The user asked for the newer plugin the page offers. */
+    fun updatePlugin() = bridge.updatePlugin()
+
+    /** The phones the gateway knows, in the order calls no phone started try them. */
+    val phones: StateFlow<List<KnownPhone>> = bridge.phones
+
+    fun refreshPhones() = bridge.refreshPhones()
+
+    fun movePhone(id: String, by: Int) = bridge.movePhone(id, by)
+
+    fun removePhone(id: String) = bridge.removePhone(id)
 }

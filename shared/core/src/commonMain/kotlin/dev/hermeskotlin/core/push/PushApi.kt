@@ -5,6 +5,10 @@ import dev.hermeskotlin.core.connection.GatewayConnection
 import dev.hermeskotlin.core.network.HermesJson
 import dev.hermeskotlin.core.rpc.JsonRpcClient
 import dev.hermeskotlin.core.rpc.RpcException
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
@@ -12,6 +16,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
@@ -40,10 +45,20 @@ data class PushPluginReply(
     }
 }
 
+/**
+ * A newer herald-push plugin than the gateway runs: [installed] there, [available] as this Herald was reviewed
+ * with. [needed] when this Herald can't work with the installed one. Shown to the user, installed only when asked.
+ */
+data class PluginUpdate(val installed: String, val available: String, val needed: Boolean)
+
 /** Where the gateway's herald-push plugin stands after [PushApi.prepare]. */
 sealed interface PluginState {
-    data class Ready(val info: PushPluginReply) : PluginState
+    /** Usable; [update] when a newer one is available. */
+    data class Ready(val info: PushPluginReply, val update: PluginUpdate? = null) : PluginState
     data object Missing : PluginState
+
+    /** Too old for this Herald, and not updated because the user hasn't asked to. */
+    data class Outdated(val update: PluginUpdate) : PluginState
     data class Failed(val reason: String?) : PluginState
 }
 
@@ -66,6 +81,21 @@ private data class PhoneReply(
     val error: String? = null,
     val tools: List<String> = emptyList(),
     val requests: List<PhoneRequest> = emptyList(),
+    val phones: List<KnownPhone> = emptyList(),
+)
+
+/**
+ * A phone the gateway knows for phone tools, as `phone list` shows it: its [name], the [tools] it has on, when it
+ * was [seen] last and [used] for a message last (the gateway's epoch seconds), and whether it's this phone ([me]).
+ */
+@Serializable
+data class KnownPhone(
+    val id: String,
+    val name: String = "Phone",
+    val tools: List<String> = emptyList(),
+    val seen: Long = 0,
+    val used: Long = 0,
+    val me: Boolean = false,
 )
 
 /**
@@ -77,6 +107,13 @@ private data class PhoneReply(
 class PushApi(private val connection: GatewayConnection) {
 
     private val preparing = Mutex()
+    private val _updates = MutableStateFlow(0)
+
+    /**
+     * Counts the plugin updates installed: push and phone tools share the plugin, so one updating it tells the
+     * other to look again instead of still offering the update.
+     */
+    val updates: StateFlow<Int> = _updates.asStateFlow()
 
     /** The plugin's state, or null when it isn't installed (or is off) on this gateway. */
     suspend fun info(): PushPluginReply? = command("info")
@@ -132,12 +169,15 @@ class PushApi(private val connection: GatewayConnection) {
 
     /**
      * The plugin, ready: switched on when it was only disabled, installed when missing (only with [install]),
-     * and reinstalled at the reviewed commit when older than [minimum]. [onStep] says what it's doing. One at a
-     * time: push and phone tools both prepare on connect, and two installs must not race on the gateway.
+     * and reinstalled at the reviewed commit only with [update], which the user asks for: code on their gateway
+     * never changes behind their back. Older than [minimum] without it, it's [PluginState.Outdated]. [onStep]
+     * says what it's doing. One at a time: push and phone tools both prepare on connect, and two installs must
+     * not race on the gateway.
      */
     suspend fun prepare(
         install: Boolean,
         minimum: String = MIN_PLUGIN_VERSION,
+        update: Boolean = false,
         onStep: (String) -> Unit = {},
     ): PluginState = preparing.withLock {
         var info = info()
@@ -152,17 +192,20 @@ class PushApi(private val connection: GatewayConnection) {
                 info = info()
             }
         }
-        if (info != null && info.ok && !info.versionAtLeast(minimum)) {
-            onStep("Updating the gateway's plugin…")
+        if (update && info != null && info.ok && !info.versionAtLeast(PLUGIN_VERSION)) {
+            onStep("Updating the gateway's plugin to $PLUGIN_VERSION…")
             install(force = true)
+            _updates.update { it + 1 }
             info = info()
             if (info != null && info.ok && !info.versionAtLeast(minimum)) {
-                return@withLock PluginState.Failed("The gateway's herald-push plugin is too old (${info.version}). Update it there.")
+                return@withLock PluginState.Failed("The gateway's herald-push plugin is still ${info.version}. Update it there.")
             }
         }
         when {
             info == null -> PluginState.Missing
             !info.ok -> PluginState.Failed(info.error)
+            !info.versionAtLeast(minimum) -> PluginState.Outdated(PluginUpdate(info.version ?: "unknown", PLUGIN_VERSION, needed = true))
+            !info.versionAtLeast(PLUGIN_VERSION) -> PluginState.Ready(info, PluginUpdate(info.version ?: "unknown", PLUGIN_VERSION, needed = false))
             else -> PluginState.Ready(info)
         }
     }
@@ -183,6 +226,36 @@ class PushApi(private val connection: GatewayConnection) {
         val reply = output("phone tools $body")?.let(::phoneReply) ?: return null
         if (!reply.ok) throw RpcException(0, reply.error ?: "The gateway refused the phone tools.")
         return reply.tools
+    }
+
+    /** This phone sends turns on chat connection [sid]: the agent's phone tool calls from them come here. */
+    suspend fun phoneHere(deviceId: String, key: String, sid: String): Boolean {
+        val body = buildJsonObject {
+            put("device_id", deviceId)
+            put("key", key)
+            put("sid", sid)
+        }
+        return output("phone here $body")?.let(::phoneReply)?.ok == true
+    }
+
+    /** Every phone the gateway knows, in the order calls no phone started (cron jobs) try them; null when refused. */
+    suspend fun phoneList(deviceId: String, key: String): List<KnownPhone>? = phones("list", deviceId, key) {}
+
+    /** Puts the phones [ids] first, in that order; returns the list as it is then. */
+    suspend fun phoneOrder(deviceId: String, key: String, ids: List<String>): List<KnownPhone>? =
+        phones("order", deviceId, key) { put("ids", JsonArray(ids.map(::JsonPrimitive))) }
+
+    /** Forgets another phone, [id]; returns the list as it is then. */
+    suspend fun phoneRemove(deviceId: String, key: String, id: String): List<KnownPhone>? =
+        phones("remove", deviceId, key) { put("id", id) }
+
+    private suspend fun phones(op: String, deviceId: String, key: String, more: JsonObjectBuilder.() -> Unit): List<KnownPhone>? {
+        val body = buildJsonObject {
+            put("device_id", deviceId)
+            put("key", key)
+            more()
+        }
+        return output("phone $op $body")?.let(::phoneReply)?.takeIf { it.ok }?.phones
     }
 
     /** The tool calls waiting for this phone, or null without the plugin. */
@@ -241,13 +314,19 @@ class PushApi(private val connection: GatewayConnection) {
         const val PLUGIN_REPO = "https://github.com/Giton22/hermes-herald-push"
 
         /** The plugin commit this Herald was built and reviewed against. */
-        const val PLUGIN_REF = "72e1d8677a9d79acae2ca591bfac288f71d12546"
+        const val PLUGIN_REF = "2ca36ecf0429edea2e28f0b14505407c38a70216"
 
-        /** The oldest plugin this Herald works with; an older copy is reinstalled at [PLUGIN_REF]. */
+        /** The version at [PLUGIN_REF]: an older copy on the gateway is offered this as an update. */
+        const val PLUGIN_VERSION = "0.3.1"
+
+        /** The oldest plugin this Herald works with; an older copy waits for the user to update it. */
         const val MIN_PLUGIN_VERSION = "0.1.1"
 
-        /** The oldest plugin with phone tools as this Herald speaks them (a key per phone). */
-        const val MIN_PHONE_PLUGIN_VERSION = "0.2.1"
+        /** The oldest plugin with phone tools as this Herald speaks them (calls go to the phone the chat is on). */
+        const val MIN_PHONE_PLUGIN_VERSION = "0.3.0"
+
+        /** The oldest plugin that lists, orders and removes phones; older ones work without the list. */
+        const val PHONE_LIST_PLUGIN_VERSION = "0.3.1"
         private const val NOT_A_COMMAND = 4018
         private const val INSTALL_TIMEOUT_MS = 180_000L
     }
@@ -284,6 +363,6 @@ interface PushKeys {
 }
 
 /** Whether a gateway was told about this phone, as a short status line. */
-data class PushStatus(val state: State = State.Unknown, val detail: String? = null) {
-    enum class State { Unknown, Off, NotInstalled, Working, On, Failed }
+data class PushStatus(val state: State = State.Unknown, val detail: String? = null, val update: PluginUpdate? = null) {
+    enum class State { Unknown, Off, NotInstalled, Outdated, Working, On, Failed }
 }
