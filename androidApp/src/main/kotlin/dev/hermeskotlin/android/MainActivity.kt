@@ -24,6 +24,8 @@ import androidx.lifecycle.lifecycleScope
 import androidx.core.content.pm.ShortcutManagerCompat
 import dev.hermeskotlin.android.notify.BotShortcuts
 import dev.hermeskotlin.android.notify.ChatNotifications
+import dev.hermeskotlin.android.phone.PhoneConfirmations
+import dev.hermeskotlin.ui.settings.PhoneQuestion
 import dev.hermeskotlin.core.chat.AppLink
 import dev.hermeskotlin.core.chat.ChatHost
 import dev.hermeskotlin.core.chat.ChatLinks
@@ -37,6 +39,8 @@ import dev.hermeskotlin.ui.App
 import dev.hermeskotlin.ui.chat.readAttachments
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.filterNotNull
@@ -67,6 +71,9 @@ class MainActivity : FragmentActivity() {
     /** Set when the lock closes, so the unlock prompt shows by itself once, not again after a cancel. */
     private var promptOnResume = false
 
+    /** Between onResume and onPause: what the user is looking at. */
+    private val resumed = MutableStateFlow(false)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
@@ -80,8 +87,19 @@ class MainActivity : FragmentActivity() {
         askForNotificationsOnFirstTurn()
         if (savedInstanceState == null) handleIntent(intent)
         val browser = InAppBrowser(this) { windowPrefs.getBoolean(KEY_DARK, false) }
+        askPhoneQuestionsInApp()
         setContent {
             val locked by appLock.locked.collectAsState()
+            val asked by PhoneConfirmations.asking.collectAsState()
+            val question = asked.firstOrNull()?.let { q ->
+                PhoneQuestion(
+                    key = q.key,
+                    title = q.title,
+                    what = q.what,
+                    allow = { PhoneConfirmations.allow(q.key, this) },
+                    deny = { PhoneConfirmations.deny(q.key) },
+                )
+            }
             CompositionLocalProvider(LocalUriHandler provides remember { browser }) {
                 App(
                     appVersion = BuildConfig.VERSION_NAME,
@@ -92,6 +110,7 @@ class MainActivity : FragmentActivity() {
                     },
                     locked = locked,
                     onUnlock = lockGate::ask,
+                    phoneQuestion = question,
                 )
             }
         }
@@ -188,9 +207,23 @@ class MainActivity : FragmentActivity() {
 
     override fun onResume() {
         super.onResume()
+        resumed.value = true
         if (promptOnResume) {
             promptOnResume = false
             lockGate.ask()
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        resumed.value = false
+    }
+
+    /** Phone tools ask in a dialog here while the app is in front and unlocked, else in a notification. */
+    private fun askPhoneQuestionsInApp() {
+        lifecycleScope.launch {
+            combine(resumed, appLock.locked) { front, locked -> front && !locked }
+                .collect { PhoneConfirmations.inApp.value = it }
         }
     }
 
