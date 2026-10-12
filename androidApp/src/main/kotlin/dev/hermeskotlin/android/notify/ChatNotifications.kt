@@ -184,8 +184,8 @@ class ChatNotifications(private val context: Context) {
             .setCategory(NotificationCompat.CATEGORY_REMINDER)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setSubText(title)
-        // [quiet]: picked up on the watch, which asks it on the call. It waits here in case that call doesn't
-        // get it answered, without a sound, and without showing on the watch over the call.
+        // [quiet]: asked on a call from the watch. It waits here in case that call doesn't get it answered,
+        // without a sound, and without showing on the watch over the call.
         if (quiet) builder.setSilent(true).setLocalOnly(true)
         when (request) {
             is InputRequest.Approval -> {

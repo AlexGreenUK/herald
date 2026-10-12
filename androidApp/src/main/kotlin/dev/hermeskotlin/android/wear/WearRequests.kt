@@ -26,7 +26,10 @@ class WearRequests(private val relay: WatchRelay, private val notifications: Cha
             relay.session.flatMapLatest { it?.state ?: flowOf(null) }.collect { state ->
                 val open = state?.inputRequests.orEmpty()
                 for (request in open) {
-                    if (request.id !in posted && notifications.postRequest(state?.storedSessionId, state?.title, request)) posted += request.id
+                    if (request.id in posted) continue
+                    // On a live call from the watch the voice asks it: it waits here without a sound, and off the
+                    // watch, in case the call doesn't get it answered.
+                    if (notifications.postRequest(state?.storedSessionId, state?.title, request, quiet = relay.onCall)) posted += request.id
                 }
                 val ids = open.mapTo(HashSet()) { it.id }
                 posted.filter { it !in ids }.forEach {
