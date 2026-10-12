@@ -61,7 +61,8 @@ class WatchNotifier(
             combine(watcher.chats, visibility.visible, settings.settings) { chats, visible, prefs -> Triple(chats, visible, prefs ?: AppSettings()) }
                 .collect { (chats, visible, prefs) ->
                     val open = openChat()
-                    val waiting = chats.values.filter { it.storedId != open && bots.botWithChat(it.storedId) == null }
+                    val side = host.sideChats.value
+                    val waiting = chats.values.filter { it.storedId != open && it.storedId !in side && bots.botWithChat(it.storedId) == null }
                     if (visible) {
                         notified.clear()
                     } else if (prefs.notifyRequests) {
@@ -83,7 +84,7 @@ class WatchNotifier(
             watcher.turnEnds.collect { end ->
                 val prefs = settings.settings.value ?: AppSettings()
                 if (visibility.visible.value || !prefs.notifyReplies) return@collect
-                if (end.outcome == TurnOutcome.Interrupted || end.storedId == openChat()) return@collect
+                if (end.outcome == TurnOutcome.Interrupted || end.storedId == openChat() || end.storedId in host.sideChats.value) return@collect
                 if (bots.botWithChat(end.storedId) != null) return@collect
                 // A room member's turn: its reply is the room's line, which RoomNotifier tells.
                 if (rooms.isRoomTurn(end.title)) return@collect

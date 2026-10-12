@@ -161,6 +161,7 @@ import com.composables.icons.lucide.CloudOff
 import com.composables.icons.lucide.ListEnd
 import com.composables.icons.lucide.Info
 import dev.hermeskotlin.core.chat.MESSAGE_AGENT_TOOL
+import dev.hermeskotlin.core.chat.toolInProgress
 import dev.hermeskotlin.core.bots.Bot
 import dev.hermeskotlin.core.bots.handle
 import dev.hermeskotlin.core.bots.mentionQuery
@@ -2436,17 +2437,7 @@ internal fun toolDone(tool: ToolActivity): LiveStep {
 /** The status of a turn started by a bot-to-bot delivery finishing (tools/bot_mode_dm.py's runner). */
 private val BOT_DELIVERY_STATUS = Regex("""Background Process Finished:.*(?:bot_mode_dm\.py|--run-delivery)""", RegexOption.IGNORE_CASE)
 
-/** "terminal" reads as "Running a command", and so on; other tools as "Using <name>". */
-private fun String.toolVerb(): String = when (this) {
-    "terminal", "shell", "bash" -> "Running a command"
-    "read_file", "file_read" -> "Reading a file"
-    "write_file", "patch", "edit_file" -> "Editing a file"
-    "web_search", "search" -> "Searching the web"
-    "web_extract", "browser", "fetch" -> "Reading a web page"
-    "delegate_task" -> "Working with subagents"
-    MESSAGE_AGENT_TOOL -> "Messaging another bot"
-    else -> "Using ${replace('_', ' ')}"
-}
+private fun String.toolVerb(): String = toolInProgress(this)
 
 /** A passing message, like where a file was saved. */
 @Composable
