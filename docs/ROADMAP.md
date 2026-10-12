@@ -265,7 +265,7 @@ Agent tools that run on the phone: a gateway plugin registers them, Herald answe
 - [x] Set alarms and timers (in the phone's clock app, after Allow; the user sees and cancels them there)
 - [x] App screen time (Usage Access): per app, screen-on time and unlocks, today or up to a week by day
 - [x] Open URLs, maps, apps or the share sheet (after Allow; a link's real site is shown first, lookalike and hidden-character links refused)
-- [ ] Write to the clipboard
+- [x] Write to the clipboard (after Allow; up to 300 characters, all shown in the question; hidden characters refused; the clipboard is never read)
 - [ ] Location and geofences ("when I get home…")
 - [ ] Calendar (read, add, move events)
 - [ ] Contacts lookup

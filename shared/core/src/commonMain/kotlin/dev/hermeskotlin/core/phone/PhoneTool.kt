@@ -16,6 +16,7 @@ enum class PhoneTool(val id: String, val title: String, val detail: String) {
     Alarms("phone_alarm", "Alarms and timers", "Sets one in your clock app after you allow it."),
     ScreenTime("phone_screen_time", "Screen time", "Which apps you used and for how long, screen-on time and unlocks, up to a week back."),
     Open("phone_open", "Open links, maps and apps", "Opens a link, a place, an app or the share sheet after you allow it."),
+    Clipboard("phone_clipboard", "Copy to the clipboard", "Puts text on your clipboard after you allow it. Never reads what's there."),
     ;
 
     companion object {

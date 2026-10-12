@@ -103,7 +103,7 @@ private class AndroidPhoneToolAccess(private val context: Context, private val a
 
     private companion object {
         /** Tools that ask before changing the phone, in a notification on this channel (PhoneConfirmations). */
-        val ASKS = setOf(PhoneTool.Sound, PhoneTool.Alarms, PhoneTool.Open)
+        val ASKS = setOf(PhoneTool.Sound, PhoneTool.Alarms, PhoneTool.Open, PhoneTool.Clipboard)
         const val CHANNEL = "phone_tools"
 
         /** Whether the notification prompt was shown in this process, to tell "never asked" from "refused for good". */
