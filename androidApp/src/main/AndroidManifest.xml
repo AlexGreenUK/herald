@@ -23,6 +23,21 @@
     <uses-permission
         android:name="android.permission.PACKAGE_USAGE_STATS"
         tools:ignore="ProtectedPermissions" />
+    <!-- The Location phone tool, while Herald is open; the user picks precise or approximate. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <!-- Only if the user also allows location while Herald is closed, from its own row under the Location switch. -->
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+    <!-- Location is one optional tool: a phone or tablet without GPS still installs Herald. -->
+    <uses-feature
+        android:name="android.hardware.location"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.location.gps"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.location.network"
+        android:required="false" />
 
     <!-- The assistant names the app it was called up over; apps are hidden from Herald unless it says which it looks up. -->
     <queries>

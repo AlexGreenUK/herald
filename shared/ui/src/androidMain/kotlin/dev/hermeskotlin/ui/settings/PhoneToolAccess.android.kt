@@ -1,6 +1,7 @@
 package dev.hermeskotlin.ui.settings
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.AppOpsManager
 import android.app.NotificationManager
@@ -42,18 +43,49 @@ private class AndroidPhoneToolAccess(private val context: Context, private val a
         tool in ASKS && !notificationsOn() -> "Turn on Herald's notifications: changes are asked there."
         tool == PhoneTool.Sound && !policyAccess() -> "Allow Herald to change Do Not Disturb."
         tool == PhoneTool.ScreenTime && !usageAccess() -> "Give Herald Usage access, to see which apps you use."
+        tool == PhoneTool.Location && !granted(FINE) && !granted(COARSE) -> "Allow Herald to use this phone's location."
         else -> null
     }
 
     override fun request(tool: PhoneTool) {
         when {
             tool in ASKS && !notificationsOn() -> requestNotifications()
+            // Both, so the prompt offers precise or approximate: the user picks.
+            tool == PhoneTool.Location && !granted(FINE) && !granted(COARSE) -> prompt(FINE, COARSE)
             tool == PhoneTool.Sound && !policyAccess() -> open(Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS))
             tool == PhoneTool.ScreenTime && !usageAccess() -> {
                 // Herald's own switch where Android has a page for it (10 and later), else the list of apps.
                 val list = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
                 if (!open(Intent(list).setData(Uri.fromParts("package", context.packageName, null)))) open(list)
             }
+        }
+    }
+
+    override fun optional(tool: PhoneTool): String? = when {
+        tool == PhoneTool.Location && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+            (granted(FINE) || granted(COARSE)) && !granted(BACKGROUND) -> "Also while Herald is closed (optional)"
+        else -> null
+    }
+
+    override fun requestOptional(tool: PhoneTool) {
+        // Android 11 and later answer this one with Herald's location page, where "Allow all the time" is a choice.
+        if (tool == PhoneTool.Location && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) prompt(BACKGROUND)
+    }
+
+    private fun granted(permission: String) = ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+
+    /** The permission prompt, or Herald's page in Android's settings once the prompt was refused for good. */
+    private fun prompt(vararg permissions: String) {
+        val first = permissions.first()
+        val activity = context as? Activity
+        // Kept across restarts: a refused-for-good prompt shows nothing, so the first tap after one would do nothing.
+        val store = context.getSharedPreferences(ASKED_STORE, Context.MODE_PRIVATE)
+        val asked = store.getStringSet(ASKED, emptySet()).orEmpty()
+        if (activity == null || first !in asked || ActivityCompat.shouldShowRequestPermissionRationale(activity, first)) {
+            store.edit().putStringSet(ASKED, asked + first).apply()
+            ask(arrayOf(*permissions))
+        } else {
+            open(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).setData(Uri.fromParts("package", context.packageName, null)))
         }
     }
 
@@ -105,6 +137,15 @@ private class AndroidPhoneToolAccess(private val context: Context, private val a
         /** Tools that ask before changing the phone, in a notification on this channel (PhoneConfirmations). */
         val ASKS = setOf(PhoneTool.Sound, PhoneTool.Alarms, PhoneTool.Open, PhoneTool.Clipboard)
         const val CHANNEL = "phone_tools"
+        const val FINE = Manifest.permission.ACCESS_FINE_LOCATION
+        const val COARSE = Manifest.permission.ACCESS_COARSE_LOCATION
+
+        @SuppressLint("InlinedApi") // Only asked on Android 10 and later.
+        const val BACKGROUND = Manifest.permission.ACCESS_BACKGROUND_LOCATION
+
+        /** Permissions prompted for, to tell "never asked" from "refused for good". */
+        const val ASKED_STORE = "phone_tool_access"
+        const val ASKED = "asked"
 
         /** Whether the notification prompt was shown in this process, to tell "never asked" from "refused for good". */
         var askedBefore = false
