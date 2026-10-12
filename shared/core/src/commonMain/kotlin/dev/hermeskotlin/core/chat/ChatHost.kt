@@ -11,6 +11,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 
 /**
  * Owns the one open [ChatSession] for the whole app rather than for a screen, so a running turn keeps
@@ -26,6 +27,18 @@ class ChatHost(
 ) {
     private val _session = MutableStateFlow<ChatSession?>(null)
     val session: StateFlow<ChatSession?> = _session.asStateFlow()
+
+    private val _sideChats = MutableStateFlow<Set<String>>(emptySet())
+
+    /**
+     * Stored ids of chats this device runs outside the open one, with their own [ChatSession] (the watch's).
+     * Their owner tells their replies; the watcher and its notifications leave them alone, as for the open chat.
+     */
+    val sideChats: StateFlow<Set<String>> = _sideChats.asStateFlow()
+
+    fun holdSideChat(storedId: String) = _sideChats.update { it + storedId }
+
+    fun releaseSideChat(storedId: String) = _sideChats.update { it - storedId }
 
     private var gateway: GatewayUrl? = null
     private var profile: String? = null

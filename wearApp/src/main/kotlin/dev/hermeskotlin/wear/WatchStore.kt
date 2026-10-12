@@ -1,0 +1,81 @@
+package dev.hermeskotlin.wear
+
+import android.content.Context
+import androidx.core.content.edit
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+
+/**
+ * The chat the watch talks in (null id: the next ask starts one), with its [model] and how full its context is
+ * ([contextPercent]) as the last turn there told.
+ */
+data class WatchChatChoice(val id: String?, val title: String?, val model: String? = null, val contextPercent: Int? = null)
+
+/** What the watch remembers between launches: its chat, whether replies are read aloud, and the last reply (for the tile). */
+class WatchStore(context: Context) {
+
+    private val prefs = context.getSharedPreferences("herald_watch", Context.MODE_PRIVATE)
+
+    private val _chat = MutableStateFlow(
+        WatchChatChoice(
+            prefs.getString(CHAT_ID, null),
+            prefs.getString(CHAT_TITLE, null),
+            prefs.getString(MODEL, null),
+            prefs.getInt(CONTEXT, -1).takeIf { it >= 0 },
+        ),
+    )
+    val chat: StateFlow<WatchChatChoice> = _chat.asStateFlow()
+
+    private val _speak = MutableStateFlow(prefs.getBoolean(SPEAK, true))
+    val speak: StateFlow<Boolean> = _speak.asStateFlow()
+
+    /** Picked here: another chat forgets the last one's model and context. */
+    fun setChat(id: String?, title: String?) = save(id, title, keepStats = id == _chat.value.id)
+
+    /** Named in a reply: a new chat getting its id keeps what its turn told. */
+    fun adoptChat(id: String, title: String?) {
+        val now = _chat.value
+        save(id, title, keepStats = id == now.id || now.id == null)
+    }
+
+    private fun save(id: String?, title: String?, keepStats: Boolean) {
+        val now = _chat.value
+        save(WatchChatChoice(id, title?.takeIf { it.isNotBlank() }, now.model.takeIf { keepStats }, now.contextPercent.takeIf { keepStats }))
+    }
+
+    fun setStats(model: String?, contextPercent: Int?) {
+        val now = _chat.value
+        save(now.copy(model = model ?: now.model, contextPercent = contextPercent ?: now.contextPercent))
+    }
+
+    private fun save(choice: WatchChatChoice) {
+        if (choice == _chat.value) return
+        _chat.value = choice
+        prefs.edit {
+            putString(CHAT_ID, choice.id)
+            putString(CHAT_TITLE, choice.title)
+            putString(MODEL, choice.model)
+            putInt(CONTEXT, choice.contextPercent ?: -1)
+        }
+    }
+
+    fun setSpeak(on: Boolean) {
+        _speak.value = on
+        prefs.edit { putBoolean(SPEAK, on) }
+    }
+
+    var lastReply: String?
+        get() = prefs.getString(LAST_REPLY, null)
+        set(value) = prefs.edit { putString(LAST_REPLY, value?.take(MAX_KEPT)) }
+
+    private companion object {
+        const val CHAT_ID = "chat_id"
+        const val CHAT_TITLE = "chat_title"
+        const val MODEL = "chat_model"
+        const val CONTEXT = "chat_context"
+        const val SPEAK = "speak"
+        const val LAST_REPLY = "last_reply"
+        const val MAX_KEPT = 400
+    }
+}

@@ -1,0 +1,225 @@
+package dev.hermeskotlin.wearlink
+
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+
+/**
+ * The Data Layer paths Herald's phone and watch apps talk on. The watch asks and the phone answers: the phone
+ * holds the gateway connection, so the watch never stores a gateway address or a sign-in.
+ *
+ * Messages carry JSON ([WearJson]). Audio, too large for a message, goes over a channel whose path says what
+ * it holds ([recordingPath], [speechPath]).
+ */
+object WearPaths {
+    /** Watch → phone: a [WatchAsk]. */
+    const val ASK = "/herald/ask"
+
+    /** Watch → phone: a [WatchStop], to end the running turn. */
+    const val STOP = "/herald/stop"
+
+    /** Watch → phone, empty: asks for the recent chats. Phone → watch: a [ChatList]. */
+    const val CHATS = "/herald/chats"
+
+    /** Watch → phone, empty: asks how the phone stands. Phone → watch: a [PhoneStatus]. */
+    const val STATUS = "/herald/status"
+
+    /** Phone → watch: a [ReplyUpdate], again each time the turn moves on. */
+    const val REPLY = "/herald/reply"
+
+    /** Every path above and below starts with this; the apps' listeners filter on it. */
+    const val PREFIX = "/herald/"
+
+    private const val RECORDING = "/herald/recording/"
+    private const val SPEECH = "/herald/speech/"
+
+    /**
+     * Watch → phone channel: a spoken ask, for the gateway to transcribe. Its stream is a [RecordedAsk]: the
+     * ask and the audio in one piece, so neither can arrive without the other.
+     */
+    fun recordingPath(askId: String): String = RECORDING + encode(askId)
+
+    /** Phone → watch channel: clip [index] of [count] reading the reply to [askId] aloud, as [mimeType]. */
+    fun speechPath(askId: String, index: Int, count: Int, mimeType: String): String =
+        SPEECH + encode(askId) + "/" + index + "/" + count + "/" + encode(mimeType)
+
+    /** Whether [path] is a [recordingPath]. */
+    fun isRecording(path: String): Boolean = path.startsWith(RECORDING) && path.length > RECORDING.length
+
+    /** What a [speechPath] says; null for any other path. */
+    fun parseSpeech(path: String): SpeechClip? {
+        val parts = path.removePrefix(SPEECH).takeIf { it != path }?.split('/') ?: return null
+        if (parts.size != 4 || parts.any { it.isEmpty() }) return null
+        val index = parts[1].toIntOrNull() ?: return null
+        val count = parts[2].toIntOrNull() ?: return null
+        if (index !in 0 until count) return null
+        return SpeechClip(decode(parts[0]), index, count, decode(parts[3]))
+    }
+
+    data class SpeechClip(val askId: String, val index: Int, val count: Int, val mimeType: String)
+
+    // A MIME type has a slash in it, and ids come from the other side: neither may cut the path in the wrong place.
+    private fun encode(part: String): String = buildString {
+        for (c in part) if (c.isLetterOrDigit() || c in "-_.") append(c) else append('%').append(c.code.toString(16).padStart(4, '0'))
+    }
+
+    private fun decode(part: String): String = buildString {
+        var i = 0
+        while (i < part.length) {
+            val c = part[i]
+            if (c == '%' && i + 5 <= part.length) {
+                val code = part.substring(i + 1, i + 5).toIntOrNull(16)
+                if (code != null) {
+                    append(code.toChar())
+                    i += 5
+                    continue
+                }
+            }
+            append(c)
+            i++
+        }
+    }
+}
+
+/** The capability names each app declares (res/values/wear.xml), so each finds the other among the paired nodes. */
+object WearCapabilities {
+    const val PHONE = "herald_phone"
+    const val WATCH = "herald_watch"
+}
+
+/**
+ * Something said or typed on the watch for Hermes. [chatId] is the stored chat it goes to, null for a new one;
+ * the phone names the chat in its [ReplyUpdate]s, and the watch sends the next ask there. A spoken ask comes as
+ * a [RecordedAsk] instead, its [text] blank and [audioType] the recording's type. [speak]: read the reply aloud.
+ */
+@Serializable
+data class WatchAsk(
+    val id: String,
+    val text: String = "",
+    val chatId: String? = null,
+    val speak: Boolean = true,
+    val audioType: String? = null,
+)
+
+/** What a [WearPaths.recordingPath] channel carries: the ask's length (4 bytes, big-endian), the ask, then the audio. */
+object RecordedAsk {
+    fun write(ask: WatchAsk, audio: ByteArray): ByteArray {
+        val header = WearJson.encode(ask)
+        val size = header.size
+        return byteArrayOf((size ushr 24).toByte(), (size ushr 16).toByte(), (size ushr 8).toByte(), size.toByte()) + header + audio
+    }
+
+    /** The ask and its audio; null when [bytes] aren't one. */
+    fun read(bytes: ByteArray): Pair<WatchAsk, ByteArray>? {
+        if (bytes.size < 4) return null
+        val size = (bytes[0].toInt() and 0xFF shl 24) or (bytes[1].toInt() and 0xFF shl 16) or
+            (bytes[2].toInt() and 0xFF shl 8) or (bytes[3].toInt() and 0xFF)
+        if (size <= 0 || size > bytes.size - 4) return null
+        val ask = WearJson.decode<WatchAsk>(bytes.copyOfRange(4, 4 + size)) ?: return null
+        return ask to bytes.copyOfRange(4 + size, bytes.size)
+    }
+}
+
+/** Stop the turn the ask [askId] started. */
+@Serializable
+data class WatchStop(val askId: String)
+
+/** Where a turn the watch asked for stands. */
+@Serializable
+enum class ReplyPhase {
+    /** The gateway is writing down what was said. */
+    Transcribing,
+
+    /** The prompt is on its way and the turn hasn't started. */
+    Sending,
+
+    /** The turn runs; [ReplyUpdate.text] is the reply so far. */
+    Working,
+
+    /** The agent waits on an approval or a question, answered on the phone. */
+    WaitingOnPhone,
+
+    /** The turn ended; [ReplyUpdate.text] is the whole reply. */
+    Done,
+
+    /** It didn't go: [ReplyUpdate.error] says why. */
+    Failed,
+}
+
+/** Whether the reply will be heard. */
+@Serializable
+enum class ReplySpeech {
+    /** Not asked for, or nothing to read. */
+    Off,
+
+    /** The gateway's voice is coming in clips on [WearPaths.speechPath]. */
+    Coming,
+
+    /** The gateway couldn't voice it; the watch reads it with its own voice. */
+    Unavailable,
+}
+
+/**
+ * The turn for the ask [askId] as it stands now; each one replaces the last. [heard] is what the gateway
+ * transcribed from a recording. [activity] is a short line on what the agent is doing ("Running terminal").
+ */
+@Serializable
+data class ReplyUpdate(
+    val askId: String,
+    val phase: ReplyPhase,
+    /** Counts up through one ask's updates, so one that arrives late is told from the newer it would undo. */
+    val seq: Int = 0,
+    val chatId: String? = null,
+    val title: String? = null,
+    val heard: String? = null,
+    val text: String = "",
+    val activity: String? = null,
+    val error: String? = null,
+    val speech: ReplySpeech = ReplySpeech.Off,
+    /** The chat's model, as people call it ("Claude Sonnet 4.5"), once the gateway has said. */
+    val model: String? = null,
+    /** How full the model's context window is, 0–100, once the gateway has said. */
+    val contextPercent: Int? = null,
+)
+
+/** One of the recent chats, for picking which one the watch talks in. [activityAt] is in epoch seconds. */
+@Serializable
+data class WatchChat(val id: String, val title: String, val activityAt: Double? = null)
+
+/** The recent chats, newest first, or [error] when they couldn't be read. */
+@Serializable
+data class ChatList(val chats: List<WatchChat> = emptyList(), val error: String? = null)
+
+/**
+ * Whether Herald on the phone is signed in to a gateway, and [connected]: connected to it, or ready to connect
+ * when asked; false while it's (re)connecting or failing to. [failed]: it gave up, and won't connect on its own.
+ */
+@Serializable
+data class PhoneStatus(val signedIn: Boolean, val connected: Boolean, val failed: Boolean = false)
+
+/** How every message on [WearPaths] is written. Unknown fields are skipped, so either app can be the newer. */
+object WearJson {
+    val json = Json {
+        ignoreUnknownKeys = true
+        encodeDefaults = false
+        explicitNulls = false
+    }
+
+    inline fun <reified T> encode(value: T): ByteArray = json.encodeToString(value).encodeToByteArray()
+
+    /** Null when [bytes] aren't a [T]: a message from a much older or newer app shouldn't crash this one. */
+    inline fun <reified T> decode(bytes: ByteArray): T? = try {
+        json.decodeFromString<T>(bytes.decodeToString())
+    } catch (_: IllegalArgumentException) {
+        null
+    }
+}
+
+/** The most of a reply one message carries; the Data Layer refuses a message much over 100 KB. */
+const val MAX_WATCH_TEXT = 24_000
+
+/** [text] cut to fit in a message, at a word where it can be, with an ellipsis where it was cut. */
+fun clipForWatch(text: String, max: Int = MAX_WATCH_TEXT): String {
+    if (text.length <= max) return text
+    val cut = text.lastIndexOf(' ', max - 1).takeIf { it > max * 3 / 4 } ?: (max - 1)
+    return text.substring(0, cut).trimEnd() + "…"
+}
