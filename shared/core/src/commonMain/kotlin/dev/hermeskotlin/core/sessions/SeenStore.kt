@@ -29,6 +29,15 @@ data class SeenChats(val since: Double, val chats: Map<String, Double> = emptyMa
         val activity = session.activityAt ?: return false
         return activity > (chats[session.id] ?: since) + SEEN_SLACK_SECONDS
     }
+
+    /**
+     * The activity time [session] had when the user last looked at it, for marking where the new messages
+     * start; null when nothing has happened in it since.
+     */
+    fun readUpTo(session: SessionSummary): Double? = if (isUnread(session)) lastLook(session.id) else null
+
+    /** When the user last looked at the chat [sessionId] on this phone, or when tracking began if never. */
+    fun lastLook(sessionId: String): Double = chats[sessionId] ?: since
 }
 
 /** Timestamps from the gateway and this phone's clock round differently. */
@@ -45,15 +54,30 @@ class SeenStore(private val store: KeyValueStore, private val now: () -> Double)
         return loaded.onStart { scope(key) }.map { it[key] }.filterNotNull()
     }
 
+    /**
+     * When the user last looked at [sessionId], for a chat opened from outside the chat list (a notification),
+     * where its summary isn't to hand. Messages after it are new to them.
+     */
+    suspend fun lastLook(gateway: GatewayUrl, sessionId: String, profile: String? = null): Double =
+        mutex.withLock { scopeLocked(key(gateway, profile)) }.lastLook(sessionId)
+
     /** Records that the user has seen [session] as it is now. */
     suspend fun markSeen(gateway: GatewayUrl, session: SessionSummary, profile: String? = null) {
         val activity = session.activityAt ?: return
+        markLooked(gateway, session.id, activity, profile)
+    }
+
+    /**
+     * Records that the user had the chat [sessionId] open with everything up to [at] (epoch seconds) in it,
+     * e.g. when they leave the app on it. Never moves a last look back.
+     */
+    suspend fun markLooked(gateway: GatewayUrl, sessionId: String, at: Double, profile: String? = null) {
         val key = key(gateway, profile)
         mutex.withLock {
             val current = scopeLocked(key)
-            if ((current.chats[session.id] ?: Double.MIN_VALUE) >= activity) return
+            if ((current.chats[sessionId] ?: Double.MIN_VALUE) >= at) return
             // The oldest entries go first; anything dropped counts as read up to `since`, which is fine.
-            val chats = (current.chats + (session.id to activity)).entries.sortedByDescending { it.value }
+            val chats = (current.chats + (sessionId to at)).entries.sortedByDescending { it.value }
                 .take(MAX_REMEMBERED).associate { it.key to it.value }
             val next = current.copy(chats = chats)
             store.put(key, HermesJson.encodeToString(SeenChats.serializer(), next))

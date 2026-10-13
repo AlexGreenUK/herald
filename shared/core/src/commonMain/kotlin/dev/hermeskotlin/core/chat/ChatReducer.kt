@@ -320,7 +320,7 @@ fun historyToMessages(rows: List<SessionMessage>, liveSessionId: String? = null)
                 if (TranscriptRows.isNoise(row.text.trim(), row.displayKind)) return@forEachIndexed
                 TranscriptRows.classify(row.text, row.displayKind, deliveries)?.let { events ->
                     events.forEachIndexed { i, event ->
-                        messages += ChatMessage.Event(if (events.size == 1) key else "$key-$i", event)
+                        messages += ChatMessage.Event(if (events.size == 1) key else "$key-$i", event, timestamp = row.timestamp)
                         replyingTo = (event as? TranscriptEvent.FromBot)?.takeUnless { from ->
                             from.handle?.lowercase() in messagedSinceUser || from.sender.lowercase() in messagedSinceUser
                         }?.sender

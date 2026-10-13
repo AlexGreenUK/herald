@@ -5,7 +5,9 @@ import dev.hermeskotlin.core.storage.InMemoryKeyValueStore
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class SeenStoreTest {
@@ -21,6 +23,18 @@ class SeenStoreTest {
 
         assertFalse(seen.isUnread(session("old", at = 900.0)))
         assertTrue(seen.isUnread(session("new", at = 1_100.0)))
+    }
+
+    @Test
+    fun readUpToIsWhereTheUserLastLookedAndOnlyWhenSomethingIsNew() = runTest {
+        val store = SeenStore(InMemoryKeyValueStore()) { clock }
+        store.markSeen(home, session("s1", at = 1_200.0))
+        val seen = store.seen(home).first()
+
+        assertEquals(1_200.0, seen.readUpTo(session("s1", at = 1_300.0)))
+        assertNull(seen.readUpTo(session("s1", at = 1_200.0)))
+        // Never opened on this phone: everything since tracking started is new.
+        assertEquals(1_000.0, seen.readUpTo(session("s2", at = 1_100.0)))
     }
 
     @Test
@@ -50,5 +64,51 @@ class SeenStoreTest {
         assertFalse(seen.isUnread(session("s1", at = 1_200.0)))
         // The baseline is the first launch's, not this one's.
         assertTrue(seen.isUnread(session("s2", at = 1_300.0)))
+    }
+
+    @Test
+    fun aChatOpenedFromOutsideTheListGetsTheSameLastLookAsFromTheList() = runTest {
+        val store = SeenStore(InMemoryKeyValueStore()) { clock }
+        store.markSeen(home, session("s1", at = 1_200.0))
+        val inList = session("s1", at = 1_500.0)
+
+        // A notification has only the chat's id, not its summary: same answer as the list's.
+        assertEquals(store.seen(home).first().readUpTo(inList), store.lastLook(home, "s1"))
+        assertEquals(1_200.0, store.lastLook(home, "s1"))
+    }
+
+    @Test
+    fun aChatNeverOpenedHereWasLastLookedAtWhenTrackingBegan() = runTest {
+        val store = SeenStore(InMemoryKeyValueStore()) { clock }
+
+        assertEquals(1_000.0, store.lastLook(home, "never-opened"))
+    }
+
+    @Test
+    fun eachProfileKeepsItsOwnLastLook() = runTest {
+        val store = SeenStore(InMemoryKeyValueStore()) { clock }
+        store.markSeen(home, session("s1", at = 1_200.0), profile = "scribe")
+
+        assertEquals(1_200.0, store.lastLook(home, "s1", profile = "scribe"))
+        assertEquals(1_000.0, store.lastLook(home, "s1"))
+    }
+
+    @Test
+    fun leavingTheAppOnAChatRecordsWhatWasOnScreenAsRead() = runTest {
+        val store = SeenStore(InMemoryKeyValueStore()) { clock }
+        store.markLooked(home, "s1", at = 1_300.0)
+
+        assertEquals(1_300.0, store.lastLook(home, "s1"))
+        // The reply that comes in afterwards is new.
+        assertTrue(store.seen(home).first().isUnread(session("s1", at = 1_400.0)))
+    }
+
+    @Test
+    fun aLastLookNeverMovesBack() = runTest {
+        val store = SeenStore(InMemoryKeyValueStore()) { clock }
+        store.markLooked(home, "s1", at = 1_300.0)
+        store.markLooked(home, "s1", at = 1_100.0)
+
+        assertEquals(1_300.0, store.lastLook(home, "s1"))
     }
 }

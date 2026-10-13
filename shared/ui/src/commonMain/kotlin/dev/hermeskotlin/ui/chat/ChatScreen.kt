@@ -25,6 +25,7 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -199,6 +200,7 @@ import com.composeunstyled.theme.Theme
 import com.composeunstyled.theme.rememberColoredIndication
 import dev.hermeskotlin.core.chat.Attachment
 import dev.hermeskotlin.core.chat.ChatMessage
+import dev.hermeskotlin.core.chat.TranscriptEvent
 import dev.hermeskotlin.core.chat.GatewayNotice
 import dev.hermeskotlin.core.chat.ChatState
 import dev.hermeskotlin.core.chat.OutgoingAttachment
@@ -356,6 +358,8 @@ fun ChatScreen(
     LifecycleEventEffect(Lifecycle.Event.ON_STOP) {
         viewModel.voice.onBackground()
         viewModel.onScreen(false)
+        // What's on screen now counts as read, so a reply that comes in while away is new.
+        viewModel.markLooked()
     }
     LifecycleEventEffect(Lifecycle.Event.ON_START) { viewModel.onScreen(true) }
     // A room replacing the chat takes it off screen without a stop.
@@ -418,6 +422,8 @@ fun ChatScreen(
         notice = notice,
         actions = viewModel,
         editing = viewModel.editing.collectAsStateWithLifecycle().value,
+        // Only for the chat it was taken for, not one the screen moved on to (a branch, a fresh start).
+        readUpTo = target.readUpTo?.takeIf { state.storedSessionId == target.storedSessionId },
         onOpenSidebar = onOpenSidebar,
         // Already on an untouched new chat: nothing to start over from.
         onNewChat = onNewChat.takeIf { target.storedSessionId != null || state.messages.isNotEmpty() },
@@ -538,6 +544,8 @@ internal fun ChatView(
     actions: ChatActions,
     /** The prompt being edited in the composer, whose send replaces it. */
     editing: String? = null,
+    /** How far this chat had been read when it was opened (epoch seconds); later messages are marked new. */
+    readUpTo: Double? = null,
     onOpenSidebar: () -> Unit,
     onNewChat: (() -> Unit)?,
     onOpenMenu: (() -> Unit)?,
@@ -653,6 +661,7 @@ internal fun ChatView(
                                 // A saved copy may lack what changed since; edits wait for the gateway's transcript.
                                 canChange = state.canChangeChat(connected && state.savedCopyAt == null),
                                 editing = editing,
+                                readUpTo = readUpTo,
                             )
                         }
                     } else Box(Modifier.fillMaxSize().padding(bottom = dockInset)) {
@@ -1165,6 +1174,8 @@ private fun Messages(
     connected: Boolean,
     canChange: Boolean,
     editing: String?,
+    /** How far the chat had been read when it was opened (epoch seconds); later messages are marked new. */
+    readUpTo: Double? = null,
 ) {
     var confirm by remember { mutableStateOf<Pair<MessageChange, String>?>(null) }
     val lastPrompt = messages.lastOrNull { it is ChatMessage.User }?.key
@@ -1228,6 +1239,43 @@ private fun Messages(
     var seenTail by remember { mutableStateOf(tail) }
     LaunchedEffect(awayFromBottom, tail) { if (!awayFromBottom) seenTail = tail }
     val newBelow = awayFromBottom && tail != seenTail
+    // Where the messages that came since the chat was last read begin. It stays put for the rest of this visit,
+    // so reading on doesn't move or remove it under the reader; the next visit starts from the new last look.
+    // Older pages load first while every loaded message is still new.
+    var unreadFrom by remember(readUpTo) { mutableStateOf<String?>(null) }
+    var unreadPagesLoaded by remember(readUpTo) { mutableStateOf(0) }
+    // The oldest message when a page was last asked for: a reply streaming in reruns this before the page loads.
+    var unreadPageAskedAt by remember(readUpTo) { mutableStateOf<String?>(null) }
+    // Once the user sends from here, what follows is their own conversation, not news to mark or jump to.
+    var unreadSettled by remember(readUpTo) { mutableStateOf(false) }
+    LaunchedEffect(readUpTo, messages, olderMessages, loadingOlder) {
+        if (readUpTo == null || unreadFrom != null || unreadSettled) return@LaunchedEffect
+        if (messages.any { it is ChatMessage.User && it.pending }) {
+            unreadSettled = true
+            return@LaunchedEffect
+        }
+        if (loadingOlder) return@LaunchedEffect
+        val key = when (val step = unreadLineStep(messages, readUpTo, olderMessages, unreadPagesLoaded)) {
+            UnreadLineStep.LoadOlder -> {
+                val oldest = messages.firstOrNull()?.key
+                if (oldest != unreadPageAskedAt) {
+                    unreadPageAskedAt = oldest
+                    unreadPagesLoaded++
+                    actions.loadOlder()
+                }
+                return@LaunchedEffect
+            }
+            UnreadLineStep.None -> return@LaunchedEffect
+            is UnreadLineStep.Above -> step.key
+        }
+        unreadFrom = key
+        val index = messages.indexOfFirst { it.key == key }
+        if (index >= 0) {
+            // Opened at the line instead of the end, so reading starts where it was left.
+            pinned = false
+            listState.scrollToItem(index)
+        }
+    }
     val unservable = remember(messages) { unservableEchoes(messages) }
     Box(Modifier.fillMaxSize()) {
         LazyColumn(
@@ -1239,62 +1287,69 @@ private fun Messages(
             itemsIndexed(messages, key = { _, it -> it.key }) { index, message ->
                 // Rows of one exchange with another bot are tied together by a line in that bot's colour.
                 val partner = partners.getOrNull(index)
-                val linkedAbove = partner != null && partners.getOrNull(index - 1) == partner
-                val linkedBelow = partner != null && partners.getOrNull(index + 1) == partner
+                // The "New messages" line breaks the tie: it never runs through it.
+                val divided = message.key == unreadFrom
+                val linkedAbove = partner != null && !divided && partners.getOrNull(index - 1) == partner
+                val linkedBelow = partner != null && partners.getOrNull(index + 1) == partner &&
+                    messages.getOrNull(index + 1)?.key != unreadFrom
                 val rail = partner?.let { name -> faces.find(name)?.let { Color(0xFF000000 or botLook(it).color.toLong()) } }
-                Box(
-                    Modifier.drawBehind {
-                        if (rail != null && (linkedAbove || linkedBelow)) {
-                            // In the list's side margin, clear of avatars and text.
-                            val x = -9.dp.toPx()
-                            val gap = 20.dp.toPx()
-                            drawLine(
-                                rail.copy(alpha = 0.55f),
-                                start = Offset(x, if (linkedAbove) -gap else 6.dp.toPx()),
-                                end = Offset(x, if (linkedBelow) size.height + gap else size.height - 6.dp.toPx()),
-                                strokeWidth = 3.dp.toPx(),
-                                cap = androidx.compose.ui.graphics.StrokeCap.Round,
-                            )
+                Column {
+                    // The line marking where the new messages start sits on top of the first of them.
+                    if (divided) UnreadDivider(Modifier.padding(bottom = 20.dp))
+                    Box(
+                        Modifier.drawBehind {
+                            if (rail != null && (linkedAbove || linkedBelow)) {
+                                // In the list's side margin, clear of avatars and text.
+                                val x = -9.dp.toPx()
+                                val gap = 20.dp.toPx()
+                                drawLine(
+                                    rail.copy(alpha = 0.55f),
+                                    start = Offset(x, if (linkedAbove) -gap else 6.dp.toPx()),
+                                    end = Offset(x, if (linkedBelow) size.height + gap else size.height - 6.dp.toPx()),
+                                    strokeWidth = 3.dp.toPx(),
+                                    cap = androidx.compose.ui.graphics.StrokeCap.Round,
+                                )
+                            }
+                        },
+                    ) {
+                    when (message) {
+                        is ChatMessage.User -> UserBubble(
+                            message,
+                            actions,
+                            connected,
+                            // Any prompt with a stored row is edited in place; the last one without can still go through /undo.
+                            // Not while the prompt is still on its way or its delivery is in doubt.
+                            editLabel = if (chat.canEdit(message.key)) "Edit" else "Edit last prompt",
+                            onEdit = if (chat.canEdit(message.key)) {
+                                rewind(MessageChange.Edit, message.key, message.key) { actions.startEdit(message.key) }
+                            } else {
+                                ask(MessageChange.EditLastPrompt, message.key)
+                                    .takeIf { message.key == lastPrompt && !message.pending && message.check == null }
+                            }.takeIf { editing != message.key },
+                            onBranch = ask(MessageChange.Branch, message.key).takeIf { !message.pending && message.check == null },
+                            editing = editing == message.key,
+                        )
+                        is ChatMessage.Assistant -> {
+                            val reply = @Composable {
+                                AssistantReply(
+                                    message,
+                                    onBranch = ask(MessageChange.Branch, message.key),
+                                    onRegenerate = chat.regenerateTarget(message.key)?.let { prompt ->
+                                        rewind(MessageChange.Regenerate, prompt.key, message.key) { actions.regenerate(message.key) }
+                                    },
+                                    last = message.key == lastReply,
+                                    unservable = unservable,
+                                )
+                            }
+                            // An answer to another bot's message folds under it; never while it's still being written.
+                            val to = message.repliedTo
+                            if (to != null && !message.streaming) RepliedToFold(to, message.text, reply) else reply()
                         }
-                    },
-                ) {
-                when (message) {
-                    is ChatMessage.User -> UserBubble(
-                        message,
-                        actions,
-                        connected,
-                        // Any prompt with a stored row is edited in place; the last one without can still go through /undo.
-                        // Not while the prompt is still on its way or its delivery is in doubt.
-                        editLabel = if (chat.canEdit(message.key)) "Edit" else "Edit last prompt",
-                        onEdit = if (chat.canEdit(message.key)) {
-                            rewind(MessageChange.Edit, message.key, message.key) { actions.startEdit(message.key) }
-                        } else {
-                            ask(MessageChange.EditLastPrompt, message.key)
-                                .takeIf { message.key == lastPrompt && !message.pending && message.check == null }
-                        }.takeIf { editing != message.key },
-                        onBranch = ask(MessageChange.Branch, message.key).takeIf { !message.pending && message.check == null },
-                        editing = editing == message.key,
-                    )
-                    is ChatMessage.Assistant -> {
-                        val reply = @Composable {
-                            AssistantReply(
-                                message,
-                                onBranch = ask(MessageChange.Branch, message.key),
-                                onRegenerate = chat.regenerateTarget(message.key)?.let { prompt ->
-                                    rewind(MessageChange.Regenerate, prompt.key, message.key) { actions.regenerate(message.key) }
-                                },
-                                last = message.key == lastReply,
-                                unservable = unservable,
-                            )
-                        }
-                        // An answer to another bot's message folds under it; never while it's still being written.
-                        val to = message.repliedTo
-                        if (to != null && !message.streaming) RepliedToFold(to, message.text, reply) else reply()
+                        is ChatMessage.Event -> TranscriptEventRow(message.event)
+                        is ChatMessage.Command -> CommandOutput(message)
+                        is ChatMessage.Notice -> NoticeLine(message)
                     }
-                    is ChatMessage.Event -> TranscriptEventRow(message.event)
-                    is ChatMessage.Command -> CommandOutput(message)
-                    is ChatMessage.Notice -> NoticeLine(message)
-                }
+                    }
                 }
             }
         }
@@ -1982,6 +2037,89 @@ private fun NoticeLine(message: ChatMessage.Notice) {
         Text(message.text, style = Theme[typography][caption], color = Theme[colors][textTertiary])
     }
 }
+
+/** "New messages" between hairlines, above the first message that came since the chat was last read. */
+@Composable
+private fun UnreadDivider(modifier: Modifier = Modifier) {
+    val line = Theme[colors][accentText].copy(alpha = 0.45f)
+    Row(
+        modifier.fillMaxWidth().semantics { heading() },
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.weight(1f).height(1.dp).background(line))
+        Text("New messages", style = Theme[typography][caption], color = Theme[colors][accentText])
+        Box(Modifier.weight(1f).height(1.dp).background(line))
+    }
+}
+
+/**
+ * The first message newer than [readUpTo] (epoch seconds) that the person would call new: a reply, a prompt
+ * from elsewhere, or another bot's row. Messages without a time (a reply still streaming) count as new.
+ * Null when every message is older, or when nothing in [messages] is new.
+ */
+internal fun firstUnreadKey(messages: List<ChatMessage>, readUpTo: Double): String? =
+    messages.firstOrNull { it.isNewerThan(readUpTo) }?.key
+
+/** What to do next about the "New messages" line, given what is loaded so far. */
+internal sealed interface UnreadLineStep {
+    /** Every loaded message is new and there's more history: fetch an older page first. */
+    data object LoadOlder : UnreadLineStep
+
+    /** No line: nothing is new, or the first new message is beyond the pages worth fetching. */
+    data object None : UnreadLineStep
+
+    /** The line goes above the message [key]. */
+    data class Above(val key: String) : UnreadLineStep
+}
+
+/**
+ * Where the line goes once [pagesLoaded] older pages have been fetched. Past [UNREAD_PAGE_LIMIT] pages with
+ * everything still new, the first new message is further back still, so a line above the oldest loaded one
+ * would be in the wrong place (loading more would show new messages above it). Then there's no line at all
+ * and the chat opens at the bottom, as it did before the line existed.
+ */
+internal fun unreadLineStep(messages: List<ChatMessage>, readUpTo: Double, olderMessages: Boolean, pagesLoaded: Int): UnreadLineStep {
+    if (needsOlderForUnread(messages, readUpTo, olderMessages)) {
+        return if (pagesLoaded < UNREAD_PAGE_LIMIT) UnreadLineStep.LoadOlder else UnreadLineStep.None
+    }
+    return firstUnreadKey(messages, readUpTo)?.let(UnreadLineStep::Above) ?: UnreadLineStep.None
+}
+
+/**
+ * Whether the line can't be placed yet: every loaded message is new and the conversation goes back further,
+ * so the first new message may be on an older page.
+ */
+internal fun needsOlderForUnread(messages: List<ChatMessage>, readUpTo: Double, olderMessages: Boolean): Boolean =
+    olderMessages && messages.firstNotNullOfOrNull { it.sentAt }?.let { it > readUpTo } != false
+
+/**
+ * When a prompt, a reply or another bot's message happened (epoch seconds); null for other rows and for a
+ * reply still streaming.
+ */
+internal val ChatMessage.sentAt: Double?
+    get() = when (this) {
+        is ChatMessage.User -> timestamp
+        is ChatMessage.Assistant -> timestamp
+        is ChatMessage.Event -> timestamp.takeIf { event is TranscriptEvent.FromBot }
+        else -> null
+    }
+
+private fun ChatMessage.isNewerThan(readUpTo: Double): Boolean = when (this) {
+    is ChatMessage.User -> (timestamp ?: return false) > readUpTo + UNREAD_SLACK_SECONDS
+    // A reply with no time yet is still being written, so it came after the last look.
+    is ChatMessage.Assistant -> (timestamp ?: Double.MAX_VALUE) > readUpTo + UNREAD_SLACK_SECONDS
+    // Another bot writing in is news even when this bot stays silent. The machinery's own rows (deliveries,
+    // routines, failures) aren't: the line goes above something the person would want to read.
+    is ChatMessage.Event -> event is TranscriptEvent.FromBot && (timestamp ?: return false) > readUpTo + UNREAD_SLACK_SECONDS
+    else -> false
+}
+
+/** Same slack as the sidebar's unread dot: the gateway and the phone round times differently. */
+private const val UNREAD_SLACK_SECONDS = 1.0
+
+/** How many older pages are fetched at most to find where the new messages start. */
+internal const val UNREAD_PAGE_LIMIT = 5
 
 /** A slash command and what it printed: a quiet outlined card in the terminal face, local to this device. */
 @Composable

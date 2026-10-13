@@ -109,8 +109,11 @@ sealed interface ChatMessage {
         val timestamp: Double? = null,
     ) : ChatMessage
 
-    /** A row written by the machinery rather than the person: another bot's message, a delivery, a routine… */
-    data class Event(override val key: String, val event: TranscriptEvent) : ChatMessage
+    /**
+     * A row written by the machinery rather than the person: another bot's message, a delivery, a routine…
+     * [timestamp] is the stored row's time (epoch seconds), when it has one.
+     */
+    data class Event(override val key: String, val event: TranscriptEvent, val timestamp: Double? = null) : ChatMessage
 
     /**
      * A one-line notice about the session: a live `notice`, shown on this device only, or a [stored] row

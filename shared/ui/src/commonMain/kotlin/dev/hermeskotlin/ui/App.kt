@@ -230,6 +230,8 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
         val bot = openBot ?: return@LaunchedEffect
         val next = liveChat?.openId ?: return@LaunchedEffect
         val open = openSessionId ?: return@LaunchedEffect
+        // Just opened, the chat's state is still the previous chat's; the route already has the live one.
+        if (next == route.target.storedSessionId) return@LaunchedEffect
         if (open != liveChat.id && open != next && !chatState.running) app.openBotChat(bot, next)
     }
 
@@ -308,8 +310,8 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
                 profile = chatsProfile,
                 selectedId = openSessionId,
                 visible = sidebar.isOpen,
-                onOpenSession = {
-                    if (it.id != openSessionId) app.openSession(it.id, it.displayTitle)
+                onOpenSession = { session, readUpTo ->
+                    if (session.id != openSessionId) app.openSession(session.id, session.displayTitle, readUpTo)
                     closeDrawerToChat()
                 },
                 onNewChat = { cwd ->
@@ -325,8 +327,8 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
                     app.switchProfile(it)
                     closeDrawerToChat()
                 },
-                onOpenBot = { bot, storedSessionId ->
-                    if (storedSessionId != openSessionId || route.target.bot == null) app.openBotChat(bot, storedSessionId)
+                onOpenBot = { bot, storedSessionId, readUpTo ->
+                    if (storedSessionId != openSessionId || route.target.bot == null) app.openBotChat(bot, storedSessionId, readUpTo)
                     closeDrawerToChat()
                 },
                 onOpenBotSession = { bot, id, title ->

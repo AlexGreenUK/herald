@@ -35,6 +35,7 @@ import dev.hermeskotlin.core.chat.promptNow
 import dev.hermeskotlin.core.chat.regenerateTarget
 import dev.hermeskotlin.core.network.errorMessage
 import dev.hermeskotlin.core.profiles.ProfilesApi
+import dev.hermeskotlin.core.sessions.SeenStore
 import dev.hermeskotlin.core.sessions.SessionsApi
 import dev.hermeskotlin.core.settings.SettingsStore
 import dev.hermeskotlin.core.settings.AppSettings
@@ -128,7 +129,8 @@ sealed interface ChatRequest {
  * Identifies what the chat screen shows: a stored session, or a new chat (`storedSessionId == null`),
  * in [profile] (null: the gateway's launch profile). With [bot] it is that bot's permanent chat. A new
  * chat opened from outside (share sheet, shortcut) brings its [draft]. A new chat started in a project
- * runs in that project's folder, [cwd].
+ * runs in that project's folder, [cwd]. [readUpTo] is how far the user had read the chat when they opened
+ * it (epoch seconds), so the messages since can be marked as new; null when there was nothing new.
  */
 data class ChatTarget(
     val gateway: SavedGateway,
@@ -139,6 +141,7 @@ data class ChatTarget(
     val bot: BotIdentity? = null,
     val draft: ComposeDraft? = null,
     val cwd: String? = null,
+    val readUpTo: Double? = null,
 ) {
     /**
      * The profile whose last chat this is, which the next launch reads: a bot's chat counts where the Chats
@@ -182,6 +185,8 @@ class ChatViewModel(
     voiceKeepAlive: VoiceKeepAlive,
     deviceDictation: DeviceDictation,
     speechStreams: SpeechStreams,
+    /** Where the user last looked in each chat, so a chat reopened from a notification starts at its new messages. */
+    private val seen: SeenStore? = null,
 ) : ViewModel(), ChatActions {
 
     /** Dictation and voice chat for the open chat. */
@@ -386,8 +391,25 @@ class ChatViewModel(
         }
     }
 
+    /**
+     * The user is leaving this chat, for another one or out of the app: everything in it up to now counts as
+     * read, so a reply that comes in meanwhile (and its notification) is new to them. The lists only record a
+     * look when a chat is tapped there, which misses what came in while it stayed open.
+     */
+    fun markLooked() {
+        val target = target ?: return
+        val state = state.value
+        val id = state.storedSessionId ?: return
+        // The machinery's rows (deliveries, routines) count too: they move the chat's activity on as well.
+        val newest = state.messages.mapNotNull { it.sentAt ?: (it as? ChatMessage.Event)?.timestamp }.maxOrNull() ?: return
+        viewModelScope.launch { seen?.markLooked(target.gateway.gatewayUrl, id, newest, target.profile) }
+    }
+
     fun open(target: ChatTarget) {
-        if (this.target == target) {
+        // The same chat, perhaps with a new read position (reopened from a notification): the screen places the
+        // "New messages" line from the target; the chat itself, its draft and any voice chat stay as they are.
+        if (this.target?.copy(readUpTo = null) == target.copy(readUpTo = null)) {
+            this.target = target
             // An expired session or sign-out closes the host's chat; the same chat reopened after signing
             // back in needs a fresh session, not the stopped one this view model still holds.
             if (session.value !== host.session.value) {
@@ -395,6 +417,7 @@ class ChatViewModel(
             }
             return
         }
+        markLooked()
         // An edit belongs to its chat; what was typed before it is that chat's draft.
         cancelEdit()
         val sameChat = draftOf?.let(::draftChat)?.takeIf { it == target.storedSessionId } != null
