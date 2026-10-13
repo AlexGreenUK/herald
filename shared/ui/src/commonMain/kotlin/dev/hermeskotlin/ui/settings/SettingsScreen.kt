@@ -377,6 +377,13 @@ internal fun SettingsView(
                             )
                         }
                     }
+                    Divider()
+                    SwitchRow(
+                        title = "Projects as a list",
+                        detail = "Show the chat list's projects as one button that opens a list, instead of a row of chips that scrolls sideways.",
+                        checked = settings.projectsAsDropdown,
+                        onCheckedChange = { on -> onUpdate { it.copy(projectsAsDropdown = on) } },
+                    )
                 }
 
                 Section("Chat") {
