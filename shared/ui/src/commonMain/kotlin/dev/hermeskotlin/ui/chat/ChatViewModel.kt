@@ -392,9 +392,9 @@ class ChatViewModel(
     }
 
     /**
-     * The user is leaving the app with this chat on screen: everything in it up to now counts as read, so a
-     * reply that comes in meanwhile (and its notification) is new to them. The sidebar only records a look
-     * when a chat is tapped there, which misses a chat that was simply left open.
+     * The user is leaving this chat, for another one or out of the app: everything in it up to now counts as
+     * read, so a reply that comes in meanwhile (and its notification) is new to them. The lists only record a
+     * look when a chat is tapped there, which misses what came in while it stayed open.
      */
     fun markLooked() {
         val target = target ?: return
@@ -417,6 +417,7 @@ class ChatViewModel(
             }
             return
         }
+        markLooked()
         // An edit belongs to its chat; what was typed before it is that chat's draft.
         cancelEdit()
         val sameChat = draftOf?.let(::draftChat)?.takeIf { it == target.storedSessionId } != null

@@ -230,6 +230,8 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
         val bot = openBot ?: return@LaunchedEffect
         val next = liveChat?.openId ?: return@LaunchedEffect
         val open = openSessionId ?: return@LaunchedEffect
+        // Just opened, the chat's state is still the previous chat's; the route already has the live one.
+        if (next == route.target.storedSessionId) return@LaunchedEffect
         if (open != liveChat.id && open != next && !chatState.running) app.openBotChat(bot, next)
     }
 

@@ -241,16 +241,22 @@ class BotsViewModel(
 
     /**
      * Finds [bot]'s chat (starting it when the bot has never had one) and hands its stored id to [onOpened],
-     * with how far it had been read when it has new messages since (taken before opening counts as reading).
-     * When that can't be done safely the row says so instead, and the user can tap again.
+     * with when the user last looked at it, so the messages since are marked new (taken before opening counts
+     * as reading). When that can't be done safely the row says so instead, and the user can tap again.
      */
     fun open(bot: Bot, onOpened: (storedSessionId: String, readUpTo: Double?) -> Unit) {
         if (_state.value.opening != null) return
         _state.update { it.copy(opening = bot.name, notice = null) }
         viewModelScope.launch {
             try {
-                val readUpTo = gateway.value?.let { url -> bot.chatSummary()?.let { seenStore.seen(url, bot.name).first().readUpTo(it) } }
+                val canonical = bot.chatSummary()?.id
                 val id = chats.open(bot)
+                // The roster's activity times lag behind the chat, so the last look itself is passed, as for a
+                // notification: the screen marks only what is newer, and nothing when nothing is. The look may
+                // be kept on the stable id (the Bots list) or the live one after compression (the chat screen).
+                val readUpTo = gateway.value?.let { url ->
+                    listOfNotNull(canonical, id).distinct().maxOf { seenStore.lastLook(url, it, bot.name) }
+                }
                 openSession = id
                 onOpened(id, readUpTo)
                 refreshNow()
