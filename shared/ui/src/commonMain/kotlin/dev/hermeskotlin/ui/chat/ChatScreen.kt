@@ -200,6 +200,7 @@ import com.composeunstyled.theme.Theme
 import com.composeunstyled.theme.rememberColoredIndication
 import dev.hermeskotlin.core.chat.Attachment
 import dev.hermeskotlin.core.chat.ChatMessage
+import dev.hermeskotlin.core.chat.TranscriptEvent
 import dev.hermeskotlin.core.chat.GatewayNotice
 import dev.hermeskotlin.core.chat.ChatState
 import dev.hermeskotlin.core.chat.OutgoingAttachment
@@ -1236,18 +1237,22 @@ private fun Messages(
     var seenTail by remember { mutableStateOf(tail) }
     LaunchedEffect(awayFromBottom, tail) { if (!awayFromBottom) seenTail = tail }
     val newBelow = awayFromBottom && tail != seenTail
-    // Where the messages that came since the chat was last read begin, fixed for this visit so reading on
-    // doesn't move it. Older pages load first while every loaded message is still new.
+    // Where the messages that came since the chat was last read begin. It stays put for the rest of this visit,
+    // so reading on doesn't move or remove it under the reader; the next visit starts from the new last look.
+    // Older pages load first while every loaded message is still new.
     var unreadFrom by remember(readUpTo) { mutableStateOf<String?>(null) }
     var unreadPagesLoaded by remember(readUpTo) { mutableStateOf(0) }
     LaunchedEffect(readUpTo, messages, olderMessages, loadingOlder) {
         if (readUpTo == null || unreadFrom != null || loadingOlder) return@LaunchedEffect
-        if (needsOlderForUnread(messages, readUpTo, olderMessages) && unreadPagesLoaded < UNREAD_PAGE_LIMIT) {
-            unreadPagesLoaded++
-            actions.loadOlder()
-            return@LaunchedEffect
+        val key = when (val step = unreadLineStep(messages, readUpTo, olderMessages, unreadPagesLoaded)) {
+            UnreadLineStep.LoadOlder -> {
+                unreadPagesLoaded++
+                actions.loadOlder()
+                return@LaunchedEffect
+            }
+            UnreadLineStep.None -> return@LaunchedEffect
+            is UnreadLineStep.Above -> step.key
         }
-        val key = firstUnreadKey(messages, readUpTo) ?: return@LaunchedEffect
         unreadFrom = key
         val index = messages.indexOfFirst { it.key == key }
         if (index >= 0) {
@@ -2041,6 +2046,31 @@ internal fun firstUnreadKey(messages: List<ChatMessage>, readUpTo: Double): Stri
     return messages[first].key
 }
 
+/** What to do next about the "New messages" line, given what is loaded so far. */
+internal sealed interface UnreadLineStep {
+    /** Every loaded message is new and there's more history: fetch an older page first. */
+    data object LoadOlder : UnreadLineStep
+
+    /** No line: nothing is new, or the first new message is beyond the pages worth fetching. */
+    data object None : UnreadLineStep
+
+    /** The line goes above the message [key]. */
+    data class Above(val key: String) : UnreadLineStep
+}
+
+/**
+ * Where the line goes once [pagesLoaded] older pages have been fetched. Past [UNREAD_PAGE_LIMIT] pages with
+ * everything still new, the first new message is further back still, so a line above the oldest loaded one
+ * would be in the wrong place (loading more would show new messages above it). Then there's no line at all
+ * and the chat opens at the bottom, as it did before the line existed.
+ */
+internal fun unreadLineStep(messages: List<ChatMessage>, readUpTo: Double, olderMessages: Boolean, pagesLoaded: Int): UnreadLineStep {
+    if (needsOlderForUnread(messages, readUpTo, olderMessages)) {
+        return if (pagesLoaded < UNREAD_PAGE_LIMIT) UnreadLineStep.LoadOlder else UnreadLineStep.None
+    }
+    return firstUnreadKey(messages, readUpTo)?.let(UnreadLineStep::Above) ?: UnreadLineStep.None
+}
+
 /**
  * Whether the line can't be placed yet: every loaded message is new and the conversation goes back further,
  * so the first new message may be on an older page.
@@ -2048,11 +2078,15 @@ internal fun firstUnreadKey(messages: List<ChatMessage>, readUpTo: Double): Stri
 internal fun needsOlderForUnread(messages: List<ChatMessage>, readUpTo: Double, olderMessages: Boolean): Boolean =
     olderMessages && messages.firstNotNullOfOrNull { it.sentAt }?.let { it > readUpTo } != false
 
-/** When a prompt or reply happened (epoch seconds); null for other rows and for a reply still streaming. */
+/**
+ * When a prompt, a reply or another bot's message happened (epoch seconds); null for other rows and for a
+ * reply still streaming.
+ */
 private val ChatMessage.sentAt: Double?
     get() = when (this) {
         is ChatMessage.User -> timestamp
         is ChatMessage.Assistant -> timestamp
+        is ChatMessage.Event -> timestamp.takeIf { event is TranscriptEvent.FromBot }
         else -> null
     }
 
@@ -2060,6 +2094,9 @@ private fun ChatMessage.isNewerThan(readUpTo: Double): Boolean = when (this) {
     is ChatMessage.User -> (timestamp ?: return false) > readUpTo + UNREAD_SLACK_SECONDS
     // A reply with no time yet is still being written, so it came after the last look.
     is ChatMessage.Assistant -> (timestamp ?: Double.MAX_VALUE) > readUpTo + UNREAD_SLACK_SECONDS
+    // Another bot writing in is news even when this bot stays silent. The machinery's own rows (deliveries,
+    // routines, failures) aren't: the line goes above something the person would want to read.
+    is ChatMessage.Event -> event is TranscriptEvent.FromBot && (timestamp ?: return false) > readUpTo + UNREAD_SLACK_SECONDS
     else -> false
 }
 
@@ -2067,7 +2104,7 @@ private fun ChatMessage.isNewerThan(readUpTo: Double): Boolean = when (this) {
 private const val UNREAD_SLACK_SECONDS = 1.0
 
 /** How many older pages are fetched at most to find where the new messages start. */
-private const val UNREAD_PAGE_LIMIT = 5
+internal const val UNREAD_PAGE_LIMIT = 5
 
 /** A slash command and what it printed: a quiet outlined card in the terminal face, local to this device. */
 @Composable

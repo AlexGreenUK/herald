@@ -1,6 +1,7 @@
 package dev.hermeskotlin.ui.chat
 
 import dev.hermeskotlin.core.chat.ChatMessage
+import dev.hermeskotlin.core.chat.TranscriptEvent
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -13,6 +14,9 @@ class UnreadDividerTest {
     private fun prompt(key: String, at: Double?) = ChatMessage.User(key, text = key, timestamp = at)
     private fun reply(key: String, at: Double?, streaming: Boolean = false) =
         ChatMessage.Assistant(key, text = key, streaming = streaming, timestamp = at)
+    private fun fromBot(key: String, at: Double?) =
+        ChatMessage.Event(key, TranscriptEvent.FromBot(sender = "Scribe", handle = "scribe", body = key), timestamp = at)
+    private fun failedTurn(key: String) = ChatMessage.Event(key, TranscriptEvent.FailedTurn("boom"))
 
     @Test
     fun theLineGoesAboveTheFirstMessageAfterTheLastLook() {
@@ -55,5 +59,65 @@ class UnreadDividerTest {
         val messages = listOf(prompt("p1", 100.0), reply("r1", 110.0), reply("r2", 300.0))
 
         assertFalse(needsOlderForUnread(messages, readUpTo = 150.0, olderMessages = true))
+    }
+
+    @Test
+    fun anotherBotsMessageThatGotNoAnswerStillGetsTheLine() {
+        val messages = listOf(prompt("p1", 100.0), reply("r1", 110.0), fromBot("b1", 200.0))
+
+        assertEquals("b1", firstUnreadKey(messages, readUpTo = 150.0))
+    }
+
+    @Test
+    fun theLineGoesAboveAnotherBotsMessageNotBelowIt() {
+        val messages = listOf(prompt("p1", 100.0), reply("r1", 110.0), fromBot("b1", 200.0), reply("r2", 210.0))
+
+        assertEquals("b1", firstUnreadKey(messages, readUpTo = 150.0))
+    }
+
+    @Test
+    fun theMachinerysOwnRowsAreNotWhereTheLineGoes() {
+        val messages = listOf(prompt("p1", 100.0), failedTurn("f1"), reply("r2", 210.0))
+
+        assertEquals("r2", firstUnreadKey(messages, readUpTo = 150.0))
+    }
+
+    @Test
+    fun anOlderBotMessageCountsAsReadAndTellsPagingTheLastLookIsInView() {
+        val messages = listOf(fromBot("b0", 100.0), reply("r1", 300.0))
+
+        assertFalse(needsOlderForUnread(messages, readUpTo = 150.0, olderMessages = true))
+        assertEquals("r1", firstUnreadKey(messages, readUpTo = 150.0))
+    }
+
+    @Test
+    fun olderPagesAreFetchedUpToTheLimit() {
+        val allNew = listOf(prompt("p9", 900.0), reply("r9", 910.0))
+
+        assertEquals(UnreadLineStep.LoadOlder, unreadLineStep(allNew, readUpTo = 100.0, olderMessages = true, pagesLoaded = 0))
+        assertEquals(UnreadLineStep.LoadOlder, unreadLineStep(allNew, readUpTo = 100.0, olderMessages = true, pagesLoaded = UNREAD_PAGE_LIMIT - 1))
+    }
+
+    @Test
+    fun pastThePageLimitThereIsNoLineRatherThanAWrongOne() {
+        // Still nothing older than the last look after every page worth fetching: the first new message is
+        // further back, so a line above the oldest loaded one would have new messages above it.
+        val allNew = listOf(prompt("p9", 900.0), reply("r9", 910.0))
+
+        assertEquals(UnreadLineStep.None, unreadLineStep(allNew, readUpTo = 100.0, olderMessages = true, pagesLoaded = UNREAD_PAGE_LIMIT))
+    }
+
+    @Test
+    fun theWholeHistoryLoadedAndAllNewPutsTheLineAtTheTop() {
+        val allNew = listOf(prompt("p1", 900.0), reply("r1", 910.0))
+
+        assertEquals(UnreadLineStep.Above("p1"), unreadLineStep(allNew, readUpTo = 100.0, olderMessages = false, pagesLoaded = 0))
+    }
+
+    @Test
+    fun onceTheLastLookIsInViewTheLineIsPlaced() {
+        val messages = listOf(prompt("p1", 100.0), reply("r1", 110.0), reply("r2", 300.0))
+
+        assertEquals(UnreadLineStep.Above("r2"), unreadLineStep(messages, readUpTo = 150.0, olderMessages = true, pagesLoaded = 0))
     }
 }
