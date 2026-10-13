@@ -20,6 +20,13 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.em
 import com.composables.icons.lucide.ChevronDown
+import com.composables.icons.lucide.ChevronUp
+import com.composables.icons.lucide.Folder
+import com.composables.icons.lucide.Folders
+import com.composables.icons.lucide.House
+import com.composeunstyled.AnchorAlignment
+import dev.hermeskotlin.designsystem.components.DropdownMenu
+import dev.hermeskotlin.designsystem.components.MenuChoice
 import com.composables.icons.lucide.MessageCircle
 import com.composables.icons.lucide.MessageCircleQuestion
 import com.composables.icons.lucide.MessageSquare
@@ -267,7 +274,9 @@ fun SessionsSidebar(
     val attentionFilter by viewModel.attentionFilter.collectAsStateWithLifecycle()
     val drafts by viewModel.draftChats.collectAsStateWithLifecycle()
     val settingsStore = koinInject<SettingsStore>()
-    val pinnedCollapsed = settingsStore.settings.collectAsStateWithLifecycle().value?.pinnedCollapsed ?: false
+    val settings = settingsStore.settings.collectAsStateWithLifecycle().value
+    val pinnedCollapsed = settings?.pinnedCollapsed ?: false
+    val projectsAsDropdown = settings?.projectsAsDropdown ?: false
     var profilesOpen by remember { mutableStateOf(false) }
 
     var searchOpen by remember { mutableStateOf(false) }
@@ -533,6 +542,7 @@ fun SessionsSidebar(
                                     ProjectFilters(
                                         state.projects,
                                         state.project,
+                                        asDropdown = projectsAsDropdown,
                                         onSelect = viewModel::selectProject,
                                         onNew = if (state.canMakeProjects) ({ newProject = ProjectDraft() }) else null,
                                         onOptions = { projectActions = it },
@@ -709,6 +719,8 @@ internal fun SessionsSidebarSample(
     selectedProject: Project? = null,
     /** The gateway can make projects, so New project shows. */
     canMakeProjects: Boolean = false,
+    /** The projects as one button that opens a list, not chips. */
+    projectsAsDropdown: Boolean = false,
 ) {
     // Folds for real in the gallery, kept only while the preview shows.
     var pinnedCollapsed by remember { mutableStateOf(false) }
@@ -734,7 +746,7 @@ internal fun SessionsSidebarSample(
                     status = {
                         if (projects.isNotEmpty() || canMakeProjects) {
                             item(key = "projects") {
-                                ProjectFilters(projects, selected = selectedProject, onSelect = {}, onNew = if (canMakeProjects) ({}) else null)
+                                ProjectFilters(projects, selected = selectedProject, asDropdown = projectsAsDropdown, onSelect = {}, onNew = if (canMakeProjects) ({}) else null)
                             }
                         }
                         item(key = "filters") {
@@ -1487,12 +1499,27 @@ private fun AttentionFilters(selected: AttentionFilter, running: Int, needsAtten
     }
 }
 
+/** The projects as [ProjectDropdown] when the "Projects as a list" setting is on, else as [ProjectChips]. */
+@Composable
+private fun ProjectFilters(
+    projects: List<Project>,
+    selected: Project?,
+    asDropdown: Boolean,
+    onSelect: (Project?) -> Unit,
+    /** Null when the gateway can't make projects. */
+    onNew: (() -> Unit)? = null,
+    onOptions: (Project) -> Unit = {},
+) {
+    if (asDropdown) ProjectDropdown(projects, selected, onSelect, onNew, onOptions)
+    else ProjectChips(projects, selected, onSelect, onNew, onOptions)
+}
+
 /**
  * The gateway's projects as chips, as Desktop's sidebar groups chats: "All", then each project with its chat
  * count, Home last. A new chat started under a project runs in its folder.
  */
 @Composable
-private fun ProjectFilters(
+private fun ProjectChips(
     projects: List<Project>,
     selected: Project?,
     onSelect: (Project?) -> Unit,
@@ -1536,12 +1563,139 @@ private fun ProjectFilters(
             }
             if (projects.isEmpty() && onNew != null) Chip(text = "New project", selected = false, onClick = onNew)
         }
-        // The picked project's actions sit outside the scrolling chips, so they stay in reach.
-        if (selected != null && !selected.isNoProject && (selected.isUserMade || (selected.path != null && onNew != null))) {
-            IconButton(Lucide.Ellipsis, contentDescription = "${selected.label} options", onClick = { onOptions(selected) })
-        }
-        if (onNew != null && projects.isNotEmpty()) IconButton(Lucide.FolderPlus, contentDescription = "New project", onClick = onNew)
+        // Outside the scrolling chips, so they stay in reach.
+        ProjectActions(selected, onNew, onOptions, showNew = projects.isNotEmpty())
     }
+}
+
+/**
+ * The picked project's options (Rename and Delete for one the user made, "Save as project" for a folder the
+ * gateway only grouped chats by) and New project, at the end of the projects' row.
+ */
+@Composable
+private fun ProjectActions(selected: Project?, onNew: (() -> Unit)?, onOptions: (Project) -> Unit, showNew: Boolean = true) {
+    if (selected != null && !selected.isNoProject && (selected.isUserMade || (selected.path != null && onNew != null))) {
+        IconButton(Lucide.Ellipsis, contentDescription = "${selected.label} options", onClick = { onOptions(selected) })
+    }
+    if (onNew != null && showNew) IconButton(Lucide.FolderPlus, contentDescription = "New project", onClick = onNew)
+}
+
+/**
+ * Tallest the projects menu gets before it scrolls, so many projects are a menu, not a wall: the 4dp top padding
+ * and 8½ rows of 48dp, so the last row shows cut in half and the menu reads as one that goes on.
+ */
+private val PROJECT_MENU_MAX_HEIGHT = 412.dp
+
+/**
+ * The gateway's projects behind one button, as Desktop's sidebar groups chats: the button names the picked
+ * project (or "All projects") and opens a menu of "All projects", then each project with its chat count, Home
+ * last. However many projects there are, they stay in reach and the sidebar stays one row tall. A new chat
+ * started under a project runs in its folder.
+ */
+@Composable
+private fun ProjectDropdown(
+    projects: List<Project>,
+    selected: Project?,
+    onSelect: (Project?) -> Unit,
+    /** Null when the gateway can't make projects. */
+    onNew: (() -> Unit)? = null,
+    onOptions: (Project) -> Unit = {},
+) {
+    Row(Modifier.fillMaxWidth().padding(start = 6.dp, end = 4.dp, top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (projects.isEmpty()) {
+            if (onNew != null) Chip(text = "New project", selected = false, onClick = onNew)
+        } else {
+            ProjectMenuButton(projects, selected, onSelect)
+            // Beside the button, so they stay in reach.
+            ProjectActions(selected, onNew, onOptions)
+        }
+    }
+}
+
+/** The button naming the picked project, taking the room the actions beside it leave, and its menu of projects. */
+@Composable
+private fun RowScope.ProjectMenuButton(projects: List<Project>, selected: Project?, onSelect: (Project?) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    val shape = CircleShape
+    val shown = selected?.label ?: "All projects"
+    // Takes all the room the buttons beside it leave, with the pill hugging the start: a long name gets that
+    // room before it is cut short, and the buttons stay at the end.
+    Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+        DropdownMenu(
+            expanded = open,
+            onExpandedChange = { open = it },
+            alignment = AnchorAlignment.Start,
+            maxHeight = PROJECT_MENU_MAX_HEIGHT,
+            items = {
+                MenuChoice("All projects", projectIcon(null), selected = selected == null, onClick = { onSelect(null) })
+                projects.forEach { project ->
+                    MenuChoice(
+                        project.label,
+                        projectIcon(project),
+                        selected = project.id == selected?.id,
+                        onClick = { onSelect(project) },
+                        count = project.sessionCount,
+                    )
+                }
+            },
+        ) {
+            val interaction = remember { MutableInteractionSource() }
+            val content = Theme[colors][textSecondary]
+            // A 32dp pill drawn inside a full-height touch target, as a Chip is.
+            Box(
+                Modifier
+                    .heightIn(min = MinTouchTarget)
+                    .clickable(interaction, indication = null, role = Role.DropdownList, onClickLabel = "Choose a project") { open = !open }
+                    // The name and count are read from the pill's text; the state says whether the menu shows.
+                    .semantics { stateDescription = if (open) "Expanded" else "Collapsed" },
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                Row(
+                    Modifier
+                        .heightIn(min = 32.dp)
+                        .clip(shape)
+                        .border(1.dp, Theme[colors][stroke], shape)
+                        .background(Theme[colors][surface2], shape)
+                        .indication(interaction, rememberColoredIndication(content))
+                        .padding(start = 12.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    // The same icon the picked project has in the menu.
+                    UnstyledIcon(projectIcon(selected), contentDescription = null, tint = content, modifier = Modifier.size(14.dp))
+                    Text(
+                        shown,
+                        style = Theme[typography][label].copy(fontWeight = FontWeight.Medium),
+                        color = content,
+                        singleLine = true,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    selected?.let {
+                        Text(
+                            it.sessionCount.toString(),
+                            style = Theme[typography][code].copy(fontSize = 12.sp),
+                            color = Theme[colors][textTertiary],
+                            singleLine = true,
+                        )
+                    }
+                    UnstyledIcon(
+                        if (open) Lucide.ChevronUp else Lucide.ChevronDown,
+                        contentDescription = null,
+                        tint = Theme[colors][textTertiary],
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** A project's icon in the projects menu and on its button: Home a house, all projects a stack, the rest a folder. */
+private fun projectIcon(project: Project?): ImageVector = when {
+    project == null -> Lucide.Folders
+    project.isNoProject -> Lucide.House
+    else -> Lucide.Folder
 }
 
 @Composable
