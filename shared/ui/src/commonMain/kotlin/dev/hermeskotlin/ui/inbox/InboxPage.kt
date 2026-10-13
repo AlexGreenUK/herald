@@ -1,6 +1,13 @@
 package dev.hermeskotlin.ui.inbox
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
+import com.composables.icons.lucide.FolderOpen
+import dev.hermeskotlin.core.inbox.InboxLayout
+import dev.hermeskotlin.designsystem.accent
+import dev.hermeskotlin.designsystem.onAccent
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -136,6 +143,11 @@ internal fun InboxPage(
     PlatformBackHandler(enabled = visible && state.open != null) { viewModel.closeRun() }
     PlatformBackHandler(enabled = visible && state.open == null && state.choosing) { viewModel.closeJobs() }
     PlatformBackHandler(enabled = visible && state.open == null && !state.choosing && state.grouping) { viewModel.closeGroups() }
+    // In a folder, back goes to the folders before it leaves the Inbox.
+    val inFolder = state.groups.layout == InboxLayout.Folders && state.shownFilter != InboxFilter.All
+    PlatformBackHandler(enabled = visible && state.open == null && !state.choosing && !state.grouping && inFolder) {
+        viewModel.setFilter(InboxFilter.All)
+    }
 
     Column(Modifier.fillMaxSize()) {
         when {
@@ -151,9 +163,17 @@ internal fun InboxPage(
 @Composable
 private fun InboxView(state: InboxUiState, viewModel: InboxViewModel, onBack: () -> Unit, onOpenSettings: () -> Unit) {
     val unread = state.unread
+    val folders = state.groups.layout == InboxLayout.Folders
+    val inFolder = folders && state.shownFilter != InboxFilter.All
+    val folderName = when (val f = state.shownFilter) {
+        is InboxFilter.Job -> state.chips.firstOrNull { it.filter == f }?.label
+        is InboxFilter.Group -> f.name ?: "Other"
+        InboxFilter.Failed -> "Failed"
+        InboxFilter.All -> null
+    }
     SubpageHeader(
-        "Inbox",
-        onBack = onBack,
+        if (inFolder) folderName ?: "Inbox" else "Inbox",
+        onBack = if (inFolder) ({ viewModel.setFilter(InboxFilter.All) }) else onBack,
         subtitle = when {
             state.runs.isEmpty() -> null
             state.shownFilter is InboxFilter.Job -> state.shown.size.let { "$it ${if (it == 1) "report" else "reports"} from ${state.nameOf(state.shown.first())}" }
@@ -165,12 +185,13 @@ private fun InboxView(state: InboxUiState, viewModel: InboxViewModel, onBack: ()
         },
     ) {
         if (unread > 0) IconButton(Lucide.CheckCheck, contentDescription = "Mark all read", onClick = viewModel::markAllRead)
-        IconButton(Lucide.FolderTree, contentDescription = "Groups", onClick = viewModel::openGroups)
+        IconButton(Lucide.FolderTree, contentDescription = "Folders and groups", onClick = viewModel::openGroups)
         IconButton(Lucide.Settings2, contentDescription = "Choose jobs", onClick = viewModel::chooseJobs)
     }
     state.block?.let { BlockNotice(it, onOpenSettings) }
     var renaming by remember { mutableStateOf<JobChip?>(null) }
-    FilterChips(state, onSelect = viewModel::setFilter, onRename = { renaming = it })
+    // Folders are the way in on the folder layout; the chips belong to the single list.
+    if (!folders) FilterChips(state, onSelect = viewModel::setFilter, onRename = { renaming = it })
     RenameJobDialog(renaming, onDismiss = { renaming = null }) { chip, name ->
         viewModel.renameJob(chip, name)
         renaming = null
@@ -185,6 +206,25 @@ private fun InboxView(state: InboxUiState, viewModel: InboxViewModel, onBack: ()
             "Nothing here yet",
             "Pick the jobs whose reports you want here, like a morning briefing. Each one can notify you, or arrive quietly.",
         )
+        state.atFolders -> LazyColumn(
+            Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 96.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            items(state.folders, key = { it.filter.toString() }) { folder ->
+                FolderCard(
+                    folder,
+                    newestName = state.nameOf(folder.newest),
+                    onClick = { viewModel.setFilter(folder.filter) },
+                    onLongClick = (folder.filter as? InboxFilter.Job)?.let { f ->
+                        state.chips.firstOrNull { it.filter == f }?.let { chip -> { renaming = chip } }
+                    },
+                )
+            }
+            if (state.failed > 0) {
+                item(key = "failed") { FailedFolder(state.failed, onClick = { viewModel.setFilter(InboxFilter.Failed) }) }
+            }
+        }
         else -> LazyColumn(
             Modifier.fillMaxSize(),
             contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 96.dp),
@@ -246,6 +286,96 @@ private fun FilterChips(state: InboxUiState, onSelect: (InboxFilter) -> Unit, on
                 countColor = Theme[colors][danger],
             )
         }
+    }
+}
+
+/** A folder: its name, unread count, when it last reported and that report's opening words. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun FolderCard(folder: InboxFolder, newestName: String, onClick: () -> Unit, onLongClick: (() -> Unit)?) {
+    val shape = RoundedCornerShape(Theme[radii][radiusLarge])
+    val group = folder.filter is InboxFilter.Group
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(Theme[colors][surface])
+            .border(1.dp, Theme[colors][stroke], shape)
+            .combinedClickable(
+                onClickLabel = "Open ${folder.label}",
+                onClick = onClick,
+                onLongClickLabel = onLongClick?.let { "Rename" },
+                onLongClick = onLongClick,
+            )
+            .padding(14.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Box(Modifier.size(40.dp).background(Theme[colors][accentSoft], RoundedCornerShape(Theme[radii][radiusSmall])), contentAlignment = Alignment.Center) {
+            UnstyledIcon(if (group) Lucide.FolderOpen else Lucide.Folder, contentDescription = null, tint = Theme[colors][accentText], modifier = Modifier.size(18.dp))
+        }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    folder.label,
+                    style = Theme[typography][body].copy(fontWeight = if (folder.unread > 0) FontWeight.SemiBold else FontWeight.Medium),
+                    color = Theme[colors][text],
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                if (folder.unread > 0) {
+                    Text(
+                        folder.unread.toString(),
+                        style = Theme[typography][code].copy(fontSize = 11.sp, fontWeight = FontWeight.SemiBold),
+                        color = Theme[colors][onAccent],
+                        modifier = Modifier
+                            .background(Theme[colors][accent], CircleShape)
+                            .padding(horizontal = 6.dp, vertical = 1.dp)
+                            .semantics { contentDescription = "${folder.unread} unread" },
+                    )
+                }
+            }
+            Text(
+                buildString {
+                    append(if (folder.runs == 1) "1 report" else "${folder.runs} reports")
+                    append(" · ")
+                    append(timeLabel(folder.newest.at))
+                    if (folder.failed > 0) append(" · ${folder.failed} failed")
+                },
+                style = Theme[typography][code].copy(fontSize = 11.5.sp),
+                color = if (folder.failed > 0) Theme[colors][danger] else Theme[colors][textMuted],
+            )
+            Text(
+                (if (group) "$newestName: " else "") + folder.newest.text.toPreview(),
+                style = Theme[typography][bodySmall].copy(fontSize = 13.sp, lineHeight = 19.sp),
+                color = Theme[colors][textSecondary],
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+/** Every failed run, as one more folder after the rest. */
+@Composable
+private fun FailedFolder(count: Int, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(Theme[radii][radiusLarge])
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(Theme[colors][surface])
+            .border(1.dp, Theme[colors][stroke], shape)
+            .clickable(onClickLabel = "Open failed runs", onClick = onClick)
+            .padding(14.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(40.dp).background(Theme[colors][dangerSoft], RoundedCornerShape(Theme[radii][radiusSmall])), contentAlignment = Alignment.Center) {
+            UnstyledIcon(Lucide.TriangleAlert, contentDescription = null, tint = Theme[colors][danger], modifier = Modifier.size(18.dp))
+        }
+        Text("Failed runs", style = Theme[typography][body].copy(fontWeight = FontWeight.Medium), color = Theme[colors][text], modifier = Modifier.weight(1f))
+        Text(count.toString(), style = Theme[typography][code].copy(fontSize = 12.sp), color = Theme[colors][danger])
     }
 }
 
@@ -361,7 +491,7 @@ private fun GroupsView(state: InboxUiState, viewModel: InboxViewModel) {
     var naming by remember { mutableStateOf<GroupNaming?>(null) }
     var picking by remember { mutableStateOf<InboxFilter.Job?>(null) }
     var renamingJob by remember { mutableStateOf<JobChip?>(null) }
-    SubpageHeader("Chips and groups", onBack = viewModel::closeGroups, subtitle = "Kept on this phone") {
+    SubpageHeader("Folders and groups", onBack = viewModel::closeGroups, subtitle = "Kept on this phone") {
         IconButton(Lucide.FolderPlus, contentDescription = "New group", onClick = { naming = GroupNaming(null) })
     }
     LazyColumn(
@@ -369,9 +499,20 @@ private fun GroupsView(state: InboxUiState, viewModel: InboxViewModel) {
         contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 96.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        item(key = "layout") {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                DayLabel("The Inbox opens on")
+                SegmentedControl(
+                    options = InboxLayout.entries,
+                    selected = groups.layout,
+                    onSelect = viewModel::setLayout,
+                    optionLabel = { if (it == InboxLayout.Folders) "Folders" else "One list" },
+                )
+            }
+        }
         item(key = "mode") {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                DayLabel("Chips show")
+                DayLabel(if (groups.layout == InboxLayout.Folders) "Folders are" else "Chips show")
                 SegmentedControl(
                     options = ChipMode.entries,
                     selected = groups.mode,

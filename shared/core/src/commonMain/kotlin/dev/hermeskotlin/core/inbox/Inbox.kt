@@ -258,6 +258,10 @@ class InboxStore(private val store: KeyValueStore) {
 @Serializable
 enum class ChipMode { Jobs, Groups }
 
+/** How the Inbox opens: a folder per job (or per group), or every report in one list. */
+@Serializable
+enum class InboxLayout { Folders, List }
+
 /**
  * The user's own groups of jobs for the Inbox, such as "RUBIX" and "Personal": [names] in the order made, and
  * [jobs] mapping a job ([jobKey]) to its group. A job is in one group at most; one in none shows under "Other".
@@ -270,6 +274,7 @@ data class InboxGroups(
     val mode: ChipMode = ChipMode.Jobs,
     /** Names the user gave jobs on this phone ([jobKey] to name), shown instead of the job's own. */
     val renamed: Map<String, String> = emptyMap(),
+    val layout: InboxLayout = InboxLayout.Folders,
 ) {
     fun of(bot: String, job: String): String? = jobs[jobKey(bot, job)]?.takeIf { it in names }
 

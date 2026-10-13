@@ -12,6 +12,7 @@ import dev.hermeskotlin.core.inbox.Follow
 import dev.hermeskotlin.core.inbox.Following
 import dev.hermeskotlin.core.inbox.InboxApi
 import dev.hermeskotlin.core.inbox.InboxGroups
+import dev.hermeskotlin.core.inbox.InboxLayout
 import dev.hermeskotlin.core.inbox.InboxRun
 import dev.hermeskotlin.core.inbox.InboxStore
 import dev.hermeskotlin.core.network.ApiResult
@@ -77,6 +78,32 @@ fun jobChips(runs: List<InboxRun>, groups: InboxGroups = InboxGroups(), isUnread
         }
         .sortedByDescending { chip -> runs.first { it.bot == chip.filter.bot && it.job == chip.filter.job }.at }
 
+/**
+ * A folder on the Inbox's front page: a job's reports (or, split by group, a group's), its name, how many and how
+ * many unread, and the newest one, whose time and opening words the folder shows.
+ */
+data class InboxFolder(val filter: InboxFilter, val label: String, val runs: Int, val unread: Int, val newest: InboxRun, val failed: Int)
+
+/**
+ * The Inbox's folders: per group when the chips split by group and there are groups (in the user's order, then
+ * Other), else per job; either way the folder that reported last comes first, so what's new is on top.
+ */
+fun inboxFolders(runs: List<InboxRun>, groups: InboxGroups, isUnread: (InboxRun) -> Boolean): List<InboxFolder> {
+    val byGroup = groups.mode == ChipMode.Groups && groupChips(runs, groups, isUnread).isNotEmpty()
+    val folders = if (byGroup) {
+        groupChips(runs, groups, isUnread).map { chip ->
+            val ofGroup = runs.filtered(chip.filter, groups)
+            InboxFolder(chip.filter, chip.label, chip.runs, chip.unread, ofGroup.maxBy { it.at }, ofGroup.count { it.failed })
+        }
+    } else {
+        jobChips(runs, groups, isUnread).map { chip ->
+            val ofJob = runs.filtered(chip.filter)
+            InboxFolder(chip.filter, chip.label, chip.runs, chip.unread, ofJob.maxBy { it.at }, ofJob.count { it.failed })
+        }
+    }
+    return folders.sortedByDescending { it.newest.at }
+}
+
 /** The runs [filter] keeps, in their order. */
 fun List<InboxRun>.filtered(filter: InboxFilter, groups: InboxGroups = InboxGroups()): List<InboxRun> = when (filter) {
     InboxFilter.All -> this
@@ -121,6 +148,10 @@ data class InboxUiState(
     fun isUnread(run: InboxRun): Boolean = run.key !in read && run.at > since
     val unread: Int get() = runs.count(::isUnread)
     val chips: List<JobChip> get() = jobChips(runs, groups, ::isUnread)
+    val folders: List<InboxFolder> get() = inboxFolders(runs, groups, ::isUnread)
+
+    /** The front page shows folders, rather than a folder or a filter opened from it. */
+    val atFolders: Boolean get() = groups.layout == InboxLayout.Folders && shownFilter == InboxFilter.All
 
     /** The name [run]'s job shows by: the user's, else its own. */
     fun nameOf(run: InboxRun): String = groups.nameOf(run)
@@ -203,6 +234,12 @@ class InboxViewModel(
     fun refresh() = load()
 
     fun setFilter(filter: InboxFilter) = _state.update { it.copy(filter = filter) }
+
+    /** Opens the Inbox on folders, or on every report in one list. */
+    fun setLayout(layout: InboxLayout) {
+        _state.update { it.copy(filter = InboxFilter.All) }
+        editGroups { it.copy(layout = layout) }
+    }
 
     /** Splits the chips by job or by the user's groups. */
     fun setChipMode(mode: ChipMode) {

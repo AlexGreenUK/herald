@@ -2,6 +2,7 @@ package dev.hermeskotlin.ui.inbox
 
 import dev.hermeskotlin.core.inbox.ChipMode
 import dev.hermeskotlin.core.inbox.InboxGroups
+import dev.hermeskotlin.core.inbox.InboxLayout
 import dev.hermeskotlin.core.inbox.InboxRun
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -86,5 +87,34 @@ class InboxFilterTest {
         assertTrue(chip.renamed)
         assertFalse(jobChips(runs) { false }.first().renamed)
         assertEquals("Ticket pulse", InboxUiState(runs = runs, groups = groups).nameOf(runs.first()))
+    }
+
+    @Test
+    fun aFolderPerJobTheOneThatReportedLastFirst() {
+        val folders = inboxFolders(runs, InboxGroups()) { it.at > 250 }
+        assertEquals(listOf("rubix-ticket-pulse", "morning-briefing", "morning-briefing"), folders.map { it.label })
+        assertEquals(listOf(500L, 400L, 100L), folders.map { it.newest.at })
+        assertEquals(listOf(2, 2, 1), folders.map { it.runs })
+        assertEquals(listOf(1, 0, 0), folders.map { it.failed })
+    }
+
+    @Test
+    fun splitByGroupTheFoldersAreTheGroups() {
+        val groups = InboxGroups(mode = ChipMode.Groups).add("Personal").assign("default", "brief", "Personal")
+        val folders = inboxFolders(runs, groups) { false }
+        // Other holds the ticket pulse, which reported last.
+        assertEquals(listOf("Other", "Personal"), folders.map { it.label })
+        assertEquals(listOf(InboxFilter.Group(null), InboxFilter.Group("Personal")), folders.map { it.filter })
+        // Groups made but split by job: folders per job.
+        assertEquals(3, inboxFolders(runs, groups.copy(mode = ChipMode.Jobs)) { false }.size)
+    }
+
+    @Test
+    fun theInboxOpensOnFoldersUnlessOneIsOpenOrItsSetToOneList() {
+        val state = InboxUiState(runs = runs)
+        assertEquals(InboxLayout.Folders, state.groups.layout)
+        assertTrue(state.atFolders)
+        assertFalse(state.copy(filter = InboxFilter.Job("default", "brief")).atFolders)
+        assertFalse(state.copy(groups = InboxGroups(layout = InboxLayout.List)).atFolders)
     }
 }
