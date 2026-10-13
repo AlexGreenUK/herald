@@ -22,6 +22,7 @@ import dev.hermeskotlin.core.gateway.GatewayRepository
 import dev.hermeskotlin.core.gateway.SavedGateway
 import dev.hermeskotlin.core.profiles.ProfileStore
 import dev.hermeskotlin.core.push.PushSetup
+import dev.hermeskotlin.core.sessions.SeenStore
 import dev.hermeskotlin.ui.chat.ChatTarget
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -65,6 +66,8 @@ class AppViewModel(
     private val access: AccessTokens,
     /** The chats saved on this device, which go with signing out. */
     private val cache: OfflineCache? = null,
+    /** Where the user last looked in each chat, so one opened from a notification starts at its new messages. */
+    private val seen: SeenStore? = null,
 ) : ViewModel() {
 
     private val _route = MutableStateFlow<Route>(Route.Loading)
@@ -114,9 +117,9 @@ class AppViewModel(
                     val bot = link.bot
                     val stored = link.storedSessionId
                     when {
-                        bot != null -> openBotLink(bot, link.title, stored, link.draft)
+                        bot != null -> openBotLink(bot, link.title, stored, link.draft, stored?.let { lastLook(it, profile = bot) })
                         stored == null -> newChat(link.draft)
-                        open != stored -> openSession(stored, link.title ?: "Chat")
+                        open != stored -> openSession(stored, link.title ?: "Chat", lastLook(stored, currentProfile()))
                     }
                 }
         }
@@ -238,11 +241,11 @@ class AppViewModel(
      * opens at once and is then checked against the gateway; without one it's looked up first, safely.
      * [draft] (a share to the bot) goes into its composer, after what the user had typed there.
      */
-    private fun openBotLink(bot: String, label: String?, storedSessionId: String?, draft: ComposeDraft? = null) {
+    private fun openBotLink(bot: String, label: String?, storedSessionId: String?, draft: ComposeDraft? = null, readUpTo: Double? = null) {
         val gateway = signedInGateway() ?: return
         val name = label?.takeIf { it.isNotBlank() } ?: Bot(name = bot).label
         if (storedSessionId != null) {
-            _route.value = Route.Chat(botChatTarget(gateway, storedSessionId, bot, name, draft).also(::followBotChat))
+            _route.value = Route.Chat(botChatTarget(gateway, storedSessionId, bot, name, draft).copy(readUpTo = readUpTo).also(::followBotChat))
             return
         }
         viewModelScope.launch {
@@ -358,6 +361,16 @@ class AppViewModel(
     // The nonce makes every new chat a fresh target, even right after another empty one.
     private fun newChatTarget(gateway: SavedGateway, profile: String?) =
         ChatTarget(gateway, storedSessionId = null, title = null, nonce = ++newChatCount, profile = profile)
+
+    /**
+     * How far the user had read [sessionId] in [profile], for a chat opened from a notification. A link there
+     * means something came in, so the "New messages" line goes above whatever is newer than this; when
+     * nothing is, there's no line.
+     */
+    private suspend fun lastLook(sessionId: String, profile: String?): Double? {
+        val gateway = signedInGateway() ?: return null
+        return seen?.lastLook(gateway.gatewayUrl, sessionId, profile)
+    }
 
     private fun signedInGateway(): SavedGateway? = (_route.value as? Route.Chat)?.gateway
 

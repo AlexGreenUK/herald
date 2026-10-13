@@ -65,4 +65,31 @@ class SeenStoreTest {
         // The baseline is the first launch's, not this one's.
         assertTrue(seen.isUnread(session("s2", at = 1_300.0)))
     }
+
+    @Test
+    fun aChatOpenedFromOutsideTheListGetsTheSameLastLookAsFromTheList() = runTest {
+        val store = SeenStore(InMemoryKeyValueStore()) { clock }
+        store.markSeen(home, session("s1", at = 1_200.0))
+        val inList = session("s1", at = 1_500.0)
+
+        // A notification has only the chat's id, not its summary: same answer as the list's.
+        assertEquals(store.seen(home).first().readUpTo(inList), store.lastLook(home, "s1"))
+        assertEquals(1_200.0, store.lastLook(home, "s1"))
+    }
+
+    @Test
+    fun aChatNeverOpenedHereWasLastLookedAtWhenTrackingBegan() = runTest {
+        val store = SeenStore(InMemoryKeyValueStore()) { clock }
+
+        assertEquals(1_000.0, store.lastLook(home, "never-opened"))
+    }
+
+    @Test
+    fun eachProfileKeepsItsOwnLastLook() = runTest {
+        val store = SeenStore(InMemoryKeyValueStore()) { clock }
+        store.markSeen(home, session("s1", at = 1_200.0), profile = "scribe")
+
+        assertEquals(1_200.0, store.lastLook(home, "s1", profile = "scribe"))
+        assertEquals(1_000.0, store.lastLook(home, "s1"))
+    }
 }
