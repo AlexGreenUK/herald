@@ -1,0 +1,206 @@
+package dev.hermeskotlin.core.threads
+
+import dev.hermeskotlin.core.gateway.GatewayUrl
+import dev.hermeskotlin.core.network.ApiResult
+import dev.hermeskotlin.core.network.errorMessage
+import dev.hermeskotlin.core.profiles.ProfilesApi
+import dev.hermeskotlin.core.sessions.SessionSummary
+import dev.hermeskotlin.core.sessions.SessionsApi
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlin.time.Clock
+
+/** A thread action that didn't go through; [message] says why, for the user. */
+class ThreadActionException(message: String) : Exception(message)
+
+/** The chat a thread was started fresh into: open [sessionId], titled [title]. */
+data class FreshChat(val sessionId: String, val title: String)
+
+/**
+ * The threads of the gateway and profile the chat list shows, shared by the sidebar and the open chat so both
+ * see the same ones. The list lives in the profile's `ui_meta` ([ThreadsApi]); this keeps the last copy read,
+ * and the chat rows last listed, to tell which row is a thread's chat after compression gave it a new id.
+ */
+class ThreadsRepository(
+    private val api: ThreadsApi,
+    private val sessions: SessionsApi,
+    private val profiles: ProfilesApi,
+    /** The local date and time an archived thread chat is named with: `yyyy-MM-dd HH:mm`, or with seconds. */
+    private val stamp: (withSeconds: Boolean) -> String = { localStamp(Clock.System.now().toEpochMilliseconds(), it) },
+) {
+
+    /** The gateway and profile (null: the gateway's launch profile) the threads are for. */
+    data class Scope(val url: GatewayUrl, val profile: String?)
+
+    private val _scope = MutableStateFlow<Scope?>(null)
+    val scope: StateFlow<Scope?> = _scope.asStateFlow()
+
+    private val _threads = MutableStateFlow<List<ChatThread>>(emptyList())
+
+    /** The threads in their order; empty until read, or on a gateway that can't keep them. */
+    val threads: StateFlow<List<ChatThread>> = _threads.asStateFlow()
+
+    private val _rows = MutableStateFlow<List<SessionSummary>>(emptyList())
+
+    /** The chat rows last listed, which name each thread's chat as it is now. */
+    val rows: StateFlow<List<SessionSummary>> = _rows.asStateFlow()
+
+    /** The profile's own name (`default` for the default one), which its `ui_meta` is written under. */
+    private var profileName: String? = null
+    private var readAt = 0L
+    private val writes = Mutex()
+
+    /** Shows [profile]'s threads on [url] from now on; another scope's are dropped at once. */
+    fun bind(url: GatewayUrl, profile: String?) {
+        val next = Scope(url, profile)
+        if (_scope.value == next) return
+        _scope.value = next
+        profileName = profile
+        readAt = 0
+        _threads.value = emptyList()
+        _rows.value = emptyList()
+    }
+
+    /** The chat rows as the list now has them. */
+    fun noteRows(sessions: List<SessionSummary>) {
+        _rows.value = sessions
+    }
+
+    /** Reads the threads again; at most every [READ_EVERY_MS] unless [force]. A failed read keeps what shows. */
+    suspend fun refresh(force: Boolean = false) {
+        val scope = _scope.value ?: return
+        val now = Clock.System.now().toEpochMilliseconds()
+        if (!force && now - readAt < READ_EVERY_MS) return
+        readAt = now
+        val read = try {
+            api.threads(name(scope))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            return
+        }
+        if (_scope.value == scope) _threads.value = read
+    }
+
+    /** [thread]'s chat as last listed: the row it names, or the newest row of that chat's lineage. */
+    fun chatOf(thread: ChatThread): SessionSummary? = chatOf(thread, _rows.value)
+
+    /** The thread whose chat is [storedId], by the id it keeps or the chat's id now. */
+    fun threadFor(storedId: String?): ChatThread? = threadFor(storedId, _threads.value, _rows.value)
+
+    /** Makes [session] a thread, named after it, at the end of the list; pins it so the gateway keeps it. */
+    suspend fun makeThread(session: SessionSummary) {
+        val scope = requireScope()
+        change { it.withThread(ChatThread(newThreadId(), session.displayTitle, session.id, session.cwd)) }
+        if (!session.pinned) sessions.setPinned(scope.url, session.id, true, scope.profile).orThrow("Made a thread, but couldn't pin its chat.")
+    }
+
+    /** Applies [edit] to the threads and saves them; another device's edit made meanwhile is kept. */
+    suspend fun change(edit: (List<ChatThread>) -> List<ChatThread>) {
+        val scope = requireScope()
+        val saved = writes.withLock { api.change(name(scope), edit) }
+        if (_scope.value == scope) _threads.value = saved
+    }
+
+    /**
+     * Starts [thread] fresh, in an order that never loses the thread's chat: the chat it has now is renamed
+     * "<name> · <date time>" (titles are unique, and an archived chat keeps its title), archived and unpinned in one
+     * call; a new chat takes the thread's name and is pinned; then the thread is pointed at it. If the new chat
+     * can't be made, the old one is put back as it was.
+     */
+    suspend fun startFresh(thread: ChatThread): FreshChat {
+        val scope = requireScope()
+        val current = chatOf(thread)
+        val liveId = current?.id ?: thread.sessionId
+        val oldTitle = current?.title?.takeIf { it.isNotBlank() } ?: thread.name
+        // An earlier id of a compressed chat may hold the pin; it lets go of it too.
+        val earlier = thread.sessionId.takeIf { it != liveId }
+        fileAway(scope, liveId, thread.name)
+        earlier?.let { sessions.update(scope.url, it, archived = true, pinned = false, profile = scope.profile) }
+        val fresh = try {
+            newChat(scope, thread)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            sessions.update(scope.url, liveId, title = oldTitle, archived = false, pinned = true, profile = scope.profile)
+            earlier?.let { sessions.update(scope.url, it, archived = false, pinned = true, profile = scope.profile) }
+            throw ThreadActionException("Couldn't start ${thread.name} fresh. ${e.message.orEmpty()}".trim())
+        }
+        // Pinned, the gateway never prunes it.
+        sessions.update(scope.url, fresh.sessionId, pinned = true, profile = scope.profile)
+        try {
+            change { it.pointedAt(thread.id, fresh.sessionId) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw ThreadActionException("Started a new chat, but couldn't point ${thread.name} at it. ${e.message.orEmpty()}".trim())
+        }
+        return fresh
+    }
+
+    /** Renames, archives and unpins the chat [id] in one call, its new title stamped with the time. */
+    private suspend fun fileAway(scope: Scope, id: String, name: String) {
+        var result = sessions.update(scope.url, id, title = "$name · ${stamp(false)}", archived = true, pinned = false, profile = scope.profile)
+        if (result.isTitleTaken()) {
+            result = sessions.update(scope.url, id, title = "$name · ${stamp(true)}", archived = true, pinned = false, profile = scope.profile)
+        }
+        result.orThrow("Couldn't file away ${name}'s chat.")
+    }
+
+    /** A new chat named after [thread], or "<name> (2)" and on while another chat has the name. */
+    private suspend fun newChat(scope: Scope, thread: ChatThread): FreshChat {
+        val titles = listOf(thread.name) + (2..MAX_SUFFIX).map { "${thread.name} ($it)" }
+        titles.forEach { title ->
+            try {
+                return FreshChat(api.startChat(scope.profile, title, thread.cwd), title)
+            } catch (_: ThreadTitleTakenException) {
+                // Try the next name.
+            }
+        }
+        throw ThreadActionException("Every name for the new chat is taken.")
+    }
+
+    private suspend fun name(scope: Scope): String {
+        profileName?.let { return it }
+        val roster = profiles.roster(scope.url)
+        val launch = (roster as? ApiResult.Success)?.value?.launch
+            ?: throw ThreadActionException("Couldn't tell which profile the gateway runs. ${roster.errorMessage.orEmpty()}".trim())
+        if (_scope.value == scope) profileName = launch
+        return launch
+    }
+
+    private fun requireScope(): Scope = _scope.value ?: throw ThreadActionException("Not connected to a gateway.")
+
+    companion object {
+        /** How often a list refresh may read the threads again; another device's change shows within this. */
+        const val READ_EVERY_MS = 10_000L
+
+        /** The highest number tried after a taken name. */
+        private const val MAX_SUFFIX = 9
+
+        /** [thread]'s chat among [rows]. */
+        fun chatOf(thread: ChatThread, rows: List<SessionSummary>): SessionSummary? = rows.firstOrNull { thread.holds(it) }
+
+        /** The thread among [threads] whose chat is [storedId], with [rows] naming each thread's chat now. */
+        fun threadFor(storedId: String?, threads: List<ChatThread>, rows: List<SessionSummary>): ChatThread? {
+            storedId ?: return null
+            return threads.firstOrNull { it.sessionId == storedId } ?: threads.firstOrNull { thread ->
+                chatOf(thread, rows)?.isChat(storedId) == true
+            }
+        }
+    }
+}
+
+private fun ApiResult<*>.isTitleTaken(): Boolean =
+    this is ApiResult.Failed && message.contains("already in use", ignoreCase = true)
+
+private fun ApiResult<*>.orThrow(what: String) {
+    if (this !is ApiResult.Success) throw ThreadActionException("$what ${errorMessage.orEmpty()}".trim())
+}
+
+/** [epochMillis] as the device's local `yyyy-MM-dd HH:mm`, with `:ss` when [withSeconds]. */
+internal expect fun localStamp(epochMillis: Long, withSeconds: Boolean): String
