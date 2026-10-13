@@ -12,15 +12,20 @@ import dev.hermeskotlin.core.voice.DeviceDictationUnavailable
 import dev.hermeskotlin.core.voice.LiveCalls
 import dev.hermeskotlin.core.voice.VoiceKeepAlive
 import dev.hermeskotlin.core.voice.SpeechPlayer
+import dev.hermeskotlin.core.voice.SpeechStream
+import dev.hermeskotlin.core.voice.SpeechStreamEvent
+import dev.hermeskotlin.core.voice.SpeechStreams
 import dev.hermeskotlin.core.voice.SpokenAudio
 import dev.hermeskotlin.core.voice.VoiceActivity
 import dev.hermeskotlin.core.voice.VoiceRecorder
 import dev.hermeskotlin.core.voice.isVoiceStopCommand
 import dev.hermeskotlin.core.voice.speakableText
 import dev.hermeskotlin.core.voice.speechChunks
+import dev.hermeskotlin.core.voice.speakableSoFar
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
@@ -29,10 +34,12 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.transformWhile
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
 enum class VoicePhase { Off, Connecting, Listening, Transcribing, Thinking, Speaking }
@@ -86,6 +93,8 @@ class VoiceController(
     private val keepAlive: VoiceKeepAlive? = null,
     /** The phone's own speech recognizer, for dictation with [DictationEngine.Device]. */
     private val deviceDictation: DeviceDictation? = null,
+    /** Voices a reply while it's still being written; without it, a reply is read out once it's done. */
+    private val speechStreams: SpeechStreams? = null,
     private val liveCalls: LiveCalls? = null,
 ) {
     private val _chat = MutableStateFlow(VoiceChatState())
@@ -258,7 +267,10 @@ class VoiceController(
         }
         // The turn starts once the gateway takes it; then wait for it to end.
         withTimeoutOrNull(TURN_START_MS) { session.state.first { it.running } }
+        // Voiced while it's written where the gateway can; otherwise read out once it's done.
+        val voiced = speakAsWritten(session, sentAt, gateway, profile)
         session.state.first { !it.running }
+        if (voiced) return true
         val reply = session.state.value.messages.drop(sentAt).lastOrNull { it is ChatMessage.Assistant } as? ChatMessage.Assistant
         val text = reply?.text?.let(::speakableText).orEmpty()
         if (text.isEmpty()) return true
@@ -266,6 +278,83 @@ class VoiceController(
         _chat.update { it.copy(phase = VoicePhase.Speaking, caption = text, captionIsVoice = true) }
         speak(text, gateway, profile)
         return true
+    }
+
+    /**
+     * Voices the reply while the agent is still writing it (`/api/audio/speak-stream`): its text goes to the
+     * gateway as it streams in, and the audio plays as it comes back, so the first sentence is heard long
+     * before the reply is finished. False when the gateway can't (an older one, or it made no audio at all),
+     * so the finished reply is read out instead. Skipping it counts as voiced.
+     */
+    private suspend fun speakAsWritten(session: ChatSession, sentAt: Int, gateway: GatewayUrl, profile: String?): Boolean {
+        val stream = speechStreams?.open(gateway, profile) ?: return false
+        var heard = false
+        var ended = false
+        var skipped = false
+        try {
+            coroutineScope {
+                // A child of the conversation, so ending the chat stops the voice; skipping cancels only this.
+                val job = launch {
+                    coroutineScope {
+                        val audio = Channel<ByteArray>(Channel.UNLIMITED)
+                        val feeding = launch { feedReply(stream, session, sentAt) }
+                        var sampleRate = 0
+                        stream.events.collect { event ->
+                            when (event) {
+                                is SpeechStreamEvent.Start -> sampleRate = event.sampleRate
+                                is SpeechStreamEvent.Audio -> {
+                                    // The player starts with the first sound, not before: a reply with nothing to say plays nothing.
+                                    if (!heard && sampleRate > 0) launch { playStreamed(sampleRate, audio) }
+                                    heard = heard || sampleRate > 0
+                                    audio.send(event.pcm)
+                                }
+                                SpeechStreamEvent.End -> ended = true
+                                SpeechStreamEvent.Fallback -> Unit
+                            }
+                        }
+                        audio.close()
+                        // The socket is done: nothing more will be voiced.
+                        feeding.cancel()
+                    }
+                }
+                speechJob = job
+                job.join()
+                skipped = job.isCancelled
+            }
+        } finally {
+            speechJob = null
+            withContext(NonCancellable) { stream.close() }
+        }
+        return heard || ended || skipped
+    }
+
+    private suspend fun playStreamed(sampleRate: Int, audio: Channel<ByteArray>) {
+        try {
+            player.playPcm(sampleRate, audio, ::onSound)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            _chat.update { it.copy(error = e.message ?: "Couldn't play the reply.") }
+        }
+    }
+
+    /** Sends the reply's text to [stream] as it's written, and its end once the turn is over; the captions follow it. */
+    private suspend fun feedReply(stream: SpeechStream, session: ChatSession, sentAt: Int) {
+        var sent = ""
+        session.state.transformWhile { emit(it); it.running }.collect { state ->
+            val now = speakableSoFar(replyText(state.messages, sentAt))
+            if (now.length > sent.length) {
+                stream.append(now.substring(sent.length))
+                sent = now
+                _chat.update { it.copy(caption = speakableText(now), captionIsVoice = true) }
+            }
+        }
+        stream.finish()
+    }
+
+    /** Sound coming out is Speaking; a pause in it, while the agent works between sentences, is Thinking again. */
+    private fun onSound(sound: Boolean) = _chat.update {
+        if (it.phase == VoicePhase.Speaking || it.phase == VoicePhase.Thinking) it.copy(phase = if (sound) VoicePhase.Speaking else VoicePhase.Thinking) else it
     }
 
     /** Reads [text] aloud piece by piece, synthesizing the next piece while the current one plays. */
@@ -400,6 +489,10 @@ class VoiceController(
         const val DICTATION_MAX_MS = 120_000L
     }
 }
+
+/** Everything the agent has written since the prompt at [sentAt], its messages a paragraph apart. */
+internal fun replyText(messages: List<ChatMessage>, sentAt: Int): String =
+    messages.drop(sentAt).filterIsInstance<ChatMessage.Assistant>().joinToString("\n\n") { it.text }
 
 /**
  * Why a live call couldn't start, in a line: the vendor's own message when the gateway passed one on (no
