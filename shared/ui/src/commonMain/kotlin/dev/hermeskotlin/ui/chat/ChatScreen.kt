@@ -358,6 +358,8 @@ fun ChatScreen(
         viewModel.onScreen(false)
     }
     LifecycleEventEffect(Lifecycle.Event.ON_START) { viewModel.onScreen(true) }
+    // A room replacing the chat takes it off screen without a stop.
+    DisposableEffect(viewModel) { onDispose { viewModel.onScreen(false) } }
     LaunchedEffect(viewModel) {
         viewModel.requests.collect { request ->
             when (request) {

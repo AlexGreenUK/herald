@@ -272,7 +272,10 @@ class ChatViewModel(
     /** Commands the screen answers: a new chat, the model sheet, the sessions list. */
     val requests: Flow<ChatRequest> = _requests.receiveAsFlow()
 
-    /** Whether the chat screen is on screen ([onScreen]); a call can't take the microphone from the background. */
+    /**
+     * Whether the chat screen is on screen ([onScreen]): started, and not swapped out for a room. A call can't
+     * take the microphone from the background, and shouldn't start behind another screen.
+     */
     private val shown = MutableStateFlow(true)
 
     /** The commands and skills of the open chat's profile; fetched once per chat, on the first `/`. */
