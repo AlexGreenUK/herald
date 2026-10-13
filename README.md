@@ -12,6 +12,7 @@ Chat with your own agent, approve what it wants to do, and follow its work from 
 [![Kotlin Multiplatform](https://img.shields.io/badge/Kotlin-Multiplatform-7F52FF?style=flat&logo=kotlin&logoColor=white)](#development)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=flat)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/Giton22/herald?style=flat&logo=github)](https://github.com/Giton22/herald/stargazers)
+[![Discord](https://img.shields.io/badge/Discord-join%20the%20community-5865F2?style=flat&logo=discord&logoColor=white)](https://discord.gg/wCtyvQ3KcM)
 
 <img src="docs/screenshots/reply.jpg" width="250" alt="A finished reply with reasoning, tools and a code block">&nbsp;
 <img src="docs/screenshots/sidebar.jpg" width="250" alt="The sessions sidebar with projects, filters and chat states">&nbsp;
@@ -33,6 +34,7 @@ the app talks to your gateway directly.
 - [Install](#install)
 - [Requirements](#requirements)
 - [Privacy](#privacy)
+- [Community](#community)
 - [Development](#development)
 - [Releasing](#releasing)
 - [License](#license)
@@ -121,6 +123,14 @@ connection one at a time and says what to fix.
   location, calendar, contacts, or steps, sleep and heart rate from Health Connect) goes only to your
   gateway's agent, in the chat that asked, when the agent calls it. Herald only reads health data, never
   writes it, and keeps none of it.
+
+## Community
+
+Join the [Herald Discord](https://discord.gg/wCtyvQ3KcM) to get help, share your setup, suggest features
+and hear about new releases first. In the app, it's under **Settings → About → Join the Discord**.
+
+Found a bug? [Open an issue](https://github.com/Giton22/herald/issues/new/choose) here or post it in
+the server's #bug-reports.
 
 ## Development
 
