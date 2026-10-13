@@ -14,6 +14,7 @@ import dev.hermeskotlin.core.config.clearsToolsets
 import dev.hermeskotlin.core.config.configPatch
 import dev.hermeskotlin.core.config.sameConfigValue
 import dev.hermeskotlin.core.config.with
+import dev.hermeskotlin.core.config.without
 import dev.hermeskotlin.core.gateway.SavedGateway
 import dev.hermeskotlin.core.network.ApiResult
 import dev.hermeskotlin.core.network.errorMessage
@@ -26,7 +27,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 
 /** Where the Config page is: its sections, one section, every schema category, or the YAML file. */
@@ -82,10 +82,18 @@ class ConfigViewModel(private val api: ConfigApi) : ViewModel(), ConfigActions {
     /** Parent of every call for the bound gateway and profile; cancelled on a switch so a late answer can't land in the next profile's page. */
     private var binding: Job = newBinding()
 
+    /** Counts reloads of the values, so only the newest one's answer lands. */
+    private var reloads = 0
+
     fun bind(gateway: SavedGateway, profile: String?) {
         if (this.gateway == gateway && this.profile == profile) {
-            // Opened again: settings may have changed elsewhere since.
-            if (_state.value.values != null && _state.value.saving.isEmpty()) viewModelScope.launch(binding) { reloadValues() }
+            val state = _state.value
+            when {
+                // Opened again after a load that failed: try once more rather than show the old error.
+                state.schema == null || state.values == null -> if (!state.loading) refresh()
+                // Settings may have changed elsewhere since.
+                state.saving.isEmpty() -> viewModelScope.launch(binding) { reloadValues() }
+            }
             return
         }
         this.gateway = gateway
@@ -112,7 +120,13 @@ class ConfigViewModel(private val api: ConfigApi) : ViewModel(), ConfigActions {
                     state.copy(schema = s.value, values = v.value, loading = false)
                 } else {
                     val failed = if (s !is ApiResult.Success) s else v
-                    state.copy(loading = false, error = failed.errorMessage, sessionExpired = failed == ApiResult.SessionExpired)
+                    state.copy(
+                        loading = false,
+                        error = failed.errorMessage,
+                        // With the page already showing, the error page doesn't: say so in the banner.
+                        message = if (state.schema != null && state.values != null) listOfNotNull("Couldn't refresh", failed.errorMessage).joinToString(": ") else state.message,
+                        sessionExpired = failed == ApiResult.SessionExpired,
+                    )
                 }
             }
         }
@@ -171,7 +185,8 @@ class ConfigViewModel(private val api: ConfigApi) : ViewModel(), ConfigActions {
 
     private fun save(entry: ConfigEntry, value: JsonElement) {
         val url = gateway?.gatewayUrl ?: return
-        val before = entry.value
+        // What the page holds now: the entry may be from before a reload.
+        val before = _state.value.values?.at(entry.key)
         _state.update { it.copy(values = it.values?.with(entry.key, value), saving = it.saving + entry.key) }
         viewModelScope.launch(binding) {
             val result = api.save(url, profile, configPatch(entry.key, value))
@@ -181,7 +196,8 @@ class ConfigViewModel(private val api: ConfigApi) : ViewModel(), ConfigActions {
                 } else {
                     state.copy(
                         // Put back what was there, unless a later change has replaced this one.
-                        values = state.values?.takeIf { it.at(entry.key) != value } ?: state.values?.with(entry.key, before ?: JsonNull),
+                        values = state.values?.takeIf { it.at(entry.key) != value }
+                            ?: state.values?.let { if (before == null) it.without(entry.key) else it.with(entry.key, before) },
                         saving = state.saving - entry.key,
                         message = listOfNotNull("Couldn't save ${entry.label}", result.errorMessage).joinToString(": "),
                         sessionExpired = result == ApiResult.SessionExpired,
@@ -195,8 +211,10 @@ class ConfigViewModel(private val api: ConfigApi) : ViewModel(), ConfigActions {
 
     private suspend fun reloadValues() {
         val url = gateway?.gatewayUrl ?: return
+        val reload = ++reloads
         val result = api.values(url, profile)
-        if (result is ApiResult.Success) _state.update { if (it.saving.isEmpty()) it.copy(values = result.value) else it }
+        // A later reload read the file after this one did, maybe after another save: this answer is stale.
+        if (result is ApiResult.Success && reload == reloads) _state.update { if (it.saving.isEmpty()) it.copy(values = result.value) else it }
     }
 
     private fun loadYaml() {

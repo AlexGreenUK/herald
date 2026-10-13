@@ -16,6 +16,7 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -50,6 +51,12 @@ class ConfigViewModelTest {
         "category_order":["general","security"]}"""
     private var config = """{"approvals":{"mode":"manual"},"toolsets":["hermes-cli"],"logging":{"level":"INFO"}}"""
 
+    /** Every read fails while true, as with no network. */
+    private var offline = false
+
+    /** Each read of the values takes the config as it is when asked, then waits for the next gate, if any. */
+    private val gates = ArrayDeque<CompletableDeferred<Unit>>()
+
     /** A gateway answering the schema and config, with [put] deciding what a save gets. */
     private fun viewModel(
         saves: MutableList<String> = mutableListOf(),
@@ -63,9 +70,14 @@ class ConfigViewModelTest {
                     saves += "${request.url.encodedPath} ${request.body.toByteArray().decodeToString()}"
                     put(request)
                 }
+                offline -> respond("""{"detail":"Gateway down"}""", HttpStatusCode.ServiceUnavailable, json)
                 request.url.encodedPath == "/api/config/schema" -> respond(schema, HttpStatusCode.OK, json)
                 request.url.encodedPath == "/api/config/raw" -> respond("""{"yaml":"approvals:\n  mode: manual\n","path":"/srv/.hermes/config.yaml"}""", HttpStatusCode.OK, json)
-                else -> respond(config, HttpStatusCode.OK, json)
+                else -> {
+                    val read = config
+                    gates.removeFirstOrNull()?.await()
+                    respond(read, HttpStatusCode.OK, json)
+                }
             }
         }
         return ConfigViewModel(ConfigApi(createHttpClient(MockEngine(engine)))).also { it.bind(gateway, "rin") }
@@ -105,6 +117,57 @@ class ConfigViewModelTest {
 
         assertEquals(JsonPrimitive("manual"), vm.state.value.values!!.at("approvals.mode"))
         assertEquals("Couldn't save Approval mode: Unknown approval mode", vm.state.value.message)
+    }
+
+    @Test
+    fun aRefusedFirstValueLeavesTheKeyUnset() = runTest(dispatcher) {
+        config = """{"approvals":{"mode":"manual"},"toolsets":["hermes-cli"]}"""
+        val vm = viewModel { respond("""{"detail":"No"}""", HttpStatusCode.BadRequest, json) }
+
+        vm.set(vm.entry("logging.level"), JsonPrimitive("DEBUG"))
+
+        // Not a null where nothing was.
+        assertNull(vm.state.value.values!!.at("logging.level"))
+    }
+
+    @Test
+    fun anOlderReadBackDoesntUndoALaterSave() = runTest(dispatcher) {
+        val vm = viewModel()
+        val slow = CompletableDeferred<Unit>()
+
+        // The first save's read-back is slow and reads the file before the second save.
+        gates += slow
+        config = """{"approvals":{"mode":"smart"},"toolsets":["hermes-cli"],"logging":{"level":"INFO"}}"""
+        vm.set(vm.entry("approvals.mode"), JsonPrimitive("smart"))
+        config = """{"approvals":{"mode":"off"},"toolsets":["hermes-cli"],"logging":{"level":"INFO"}}"""
+        vm.set(vm.entry("approvals.mode"), JsonPrimitive("off"))
+        slow.complete(Unit)
+
+        assertEquals(JsonPrimitive("off"), vm.state.value.values!!.at("approvals.mode"))
+    }
+
+    @Test
+    fun openingAgainAfterAFailedLoadTriesAgain() = runTest(dispatcher) {
+        offline = true
+        val vm = viewModel()
+        assertNotNull(vm.state.value.error)
+
+        offline = false
+        vm.bind(gateway, "rin")
+
+        assertNotNull(vm.state.value.values)
+        assertNull(vm.state.value.error)
+    }
+
+    @Test
+    fun aFailedRefreshOverAShownPageSaysSo() = runTest(dispatcher) {
+        val vm = viewModel()
+
+        offline = true
+        vm.refresh()
+
+        assertEquals("Couldn't refresh: Can't reach the gateway: Gateway down", vm.state.value.message)
+        assertNotNull(vm.state.value.values)
     }
 
     @Test
