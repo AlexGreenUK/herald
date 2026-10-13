@@ -64,6 +64,7 @@ import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
@@ -149,6 +150,7 @@ import dev.hermeskotlin.core.gateway.SavedGateway
 import dev.hermeskotlin.core.models.displayModelName
 import dev.hermeskotlin.core.profiles.Profile
 import dev.hermeskotlin.core.projects.Project
+import dev.hermeskotlin.core.projects.ProjectIndex
 import dev.hermeskotlin.core.sessions.SessionListFilter
 import dev.hermeskotlin.core.sessions.SessionSummary
 import androidx.compose.ui.text.font.FontWeight
@@ -339,6 +341,7 @@ fun SessionsSidebar(
         }
     }
 
+    val projectIndex = remember(state.projects) { ProjectIndex(state.projects) }
     val open: (SessionSummary) -> Unit = {
         viewModel.markSeen(it)
         onOpenSession(it)
@@ -531,6 +534,8 @@ fun SessionsSidebar(
                         statuses = statuses,
                         drafts = drafts,
                         sectioned = true,
+                        projectIndex = projectIndex,
+                        shownProject = state.project,
                         pinnedCollapsed = pinnedCollapsed,
                         onTogglePinned = { settingsStore.update { it.copy(pinnedCollapsed = !it.pinnedCollapsed) } },
                         status = {
@@ -738,6 +743,8 @@ internal fun SessionsSidebarSample(
                     statuses = statuses,
                     drafts = drafts,
                     sectioned = true,
+                    projectIndex = remember(projects) { ProjectIndex(projects) },
+                    shownProject = selectedProject,
                     pinnedCollapsed = pinnedCollapsed,
                     onTogglePinned = { pinnedCollapsed = !pinnedCollapsed },
                     status = {
@@ -1209,6 +1216,10 @@ private fun SessionList(
     drafts: Set<String> = emptySet(),
     /** Pinned chats under a "PINNED" label, then [status] and the rest. */
     sectioned: Boolean = false,
+    /** Which project each chat is in, named on pinned rows. */
+    projectIndex: ProjectIndex = ProjectIndex.Empty,
+    /** The project the list is narrowed to, whose name the rows leave out. */
+    shownProject: Project? = null,
     /** The Pinned section is folded to the chats [visiblePinned] keeps. */
     pinnedCollapsed: Boolean = false,
     /** Folds or unfolds the Pinned section; null, its label is plain text. */
@@ -1243,6 +1254,8 @@ private fun SessionList(
                 showSnippet = showSnippets,
                 status = statuses[session.id],
                 draft = session.id in drafts,
+                // Pinned chats sit apart from their project's others, so their row names it.
+                projectLabel = if (sectioned && session.pinned) projectIndex.labelFor(session, shownProject) else null,
                 onClick = { onOpen(session) },
                 onActions = { onActions(session) },
             )
@@ -1359,6 +1372,8 @@ internal fun SessionRow(
     showSnippet: Boolean,
     status: RowStatus? = null,
     draft: Boolean = false,
+    /** The project the chat is in, said lightly after the title; null shows none. */
+    projectLabel: String? = null,
     onClick: () -> Unit,
     onActions: () -> Unit,
 ) {
@@ -1412,6 +1427,7 @@ internal fun SessionRow(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false),
                 )
+                projectLabel?.let { ProjectTag(it) }
                 if (session.pinned && !pinOnly) {
                     UnstyledIcon(Lucide.Pin, contentDescription = "Pinned", tint = Theme[colors][textMuted], modifier = Modifier.size(12.dp))
                 }
@@ -1439,6 +1455,26 @@ internal fun SessionRow(
         }
     }
 }
+
+/**
+ * The project a row's chat is in, after its title: small and muted like the row's time, and held to a narrow
+ * width so a long project name is cut short before the title is.
+ */
+@Composable
+private fun ProjectTag(label: String) {
+    Text(
+        "· $label",
+        style = Theme[typography][caption].copy(fontSize = 12.sp),
+        color = Theme[colors][textMuted],
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        // Read as words in place of the "·" text, not as well as it.
+        modifier = Modifier.widthIn(max = PROJECT_TAG_MAX_WIDTH).clearAndSetSemantics { contentDescription = "In project $label" },
+    )
+}
+
+/** The most room a row's project name takes beside the title. */
+private val PROJECT_TAG_MAX_WIDTH = 112.dp
 
 /** A 28dp disc tinted for [tone], its icon spinning while a turn runs. The row says the same in words. */
 @Composable
