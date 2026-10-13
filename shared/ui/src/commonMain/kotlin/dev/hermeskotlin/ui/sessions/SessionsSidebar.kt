@@ -226,8 +226,8 @@ fun SessionsSidebar(
     onOpenGateways: () -> Unit,
     onOpenSettings: () -> Unit,
     onSwitchProfile: (String?) -> Unit,
-    /** Opens a bot's chat, by the bot and the stored session to resume. */
-    onOpenBot: (Bot, String) -> Unit,
+    /** Opens a bot's chat, by the bot and the stored session to resume, with how far it had been read when it has new messages. */
+    onOpenBot: (bot: Bot, storedSessionId: String, readUpTo: Double?) -> Unit,
     /** Opens one of a bot's other conversations, in the bot's profile, by id and title. */
     onOpenBotSession: (Bot, String, String) -> Unit,
     /** Starts a throwaway chat in a bot's profile. */
@@ -455,10 +455,10 @@ fun SessionsSidebar(
                             nowSeconds = bots.nowSeconds(),
                             actions = remember(bots, onOpenBot, onOpenBotSession, onNewBotChat, onEditBot, onBotDeleted) {
                                 object : BotActions {
-                                    override fun open(bot: Bot) = bots.open(bot) { id -> onOpenBot(bot, id) }
+                                    override fun open(bot: Bot) = bots.open(bot) { id, readUpTo -> onOpenBot(bot, id, readUpTo) }
                                     override fun setPinned(bot: Bot, pinned: Boolean) = bots.setPinned(bot, pinned)
                                     override fun setHidden(bot: Bot, hidden: Boolean) = bots.setHidden(bot, hidden)
-                                    override fun startFresh(bot: Bot) = bots.startFresh(bot) { id -> onOpenBot(bot, id) }
+                                    override fun startFresh(bot: Bot) = bots.startFresh(bot) { id -> onOpenBot(bot, id, null) }
                                     override fun openRecent(bot: Bot) {
                                         val recent = bot.lastSession ?: return
                                         onOpenBotSession(bot, recent.id ?: return, recent.title?.takeIf { it.isNotBlank() } ?: bot.label)

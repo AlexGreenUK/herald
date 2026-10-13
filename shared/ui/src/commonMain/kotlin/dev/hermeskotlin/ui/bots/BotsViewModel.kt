@@ -240,17 +240,19 @@ class BotsViewModel(
     }
 
     /**
-     * Finds [bot]'s chat (starting it when the bot has never had one) and hands its stored id to [onOpened].
+     * Finds [bot]'s chat (starting it when the bot has never had one) and hands its stored id to [onOpened],
+     * with how far it had been read when it has new messages since (taken before opening counts as reading).
      * When that can't be done safely the row says so instead, and the user can tap again.
      */
-    fun open(bot: Bot, onOpened: (storedSessionId: String) -> Unit) {
+    fun open(bot: Bot, onOpened: (storedSessionId: String, readUpTo: Double?) -> Unit) {
         if (_state.value.opening != null) return
         _state.update { it.copy(opening = bot.name, notice = null) }
         viewModelScope.launch {
             try {
+                val readUpTo = gateway.value?.let { url -> bot.chatSummary()?.let { seenStore.seen(url, bot.name).first().readUpTo(it) } }
                 val id = chats.open(bot)
                 openSession = id
-                onOpened(id)
+                onOpened(id, readUpTo)
                 refreshNow()
             } catch (e: CancellationException) {
                 throw e
@@ -279,7 +281,7 @@ class BotsViewModel(
      */
     fun startFresh(bot: Bot, onOpened: (storedSessionId: String) -> Unit) {
         val url = gateway.value ?: return
-        val chat = bot.canonicalSession ?: return open(bot, onOpened)
+        val chat = bot.canonicalSession ?: return open(bot) { id, _ -> onOpened(id) }
         _state.update { it.copy(opening = bot.name, notice = null) }
         viewModelScope.launch {
             // The row holding the title, and the live end of its lineage when compression moved it on.
@@ -291,7 +293,7 @@ class BotsViewModel(
             }
             chats.forget(bot.name)
             _state.update { it.copy(opening = null) }
-            open(bot.copy(canonicalSession = null), onOpened)
+            open(bot.copy(canonicalSession = null)) { id, _ -> onOpened(id) }
         }
     }
 

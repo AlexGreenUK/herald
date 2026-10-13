@@ -325,8 +325,8 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
                     app.switchProfile(it)
                     closeDrawerToChat()
                 },
-                onOpenBot = { bot, storedSessionId ->
-                    if (storedSessionId != openSessionId || route.target.bot == null) app.openBotChat(bot, storedSessionId)
+                onOpenBot = { bot, storedSessionId, readUpTo ->
+                    if (storedSessionId != openSessionId || route.target.bot == null) app.openBotChat(bot, storedSessionId, readUpTo)
                     closeDrawerToChat()
                 },
                 onOpenBotSession = { bot, id, title ->

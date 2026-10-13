@@ -236,10 +236,13 @@ class AppViewModel(
         _route.value = Route.Chat(newChatTarget(gateway, bot.name))
     }
 
-    /** Opens [bot]'s permanent chat, the stored session [storedSessionId], in the bot's own profile. */
-    fun openBotChat(bot: Bot, storedSessionId: String) {
+    /**
+     * Opens [bot]'s permanent chat, the stored session [storedSessionId], in the bot's own profile; [readUpTo] is
+     * how far it had been read, when it has new messages since.
+     */
+    fun openBotChat(bot: Bot, storedSessionId: String, readUpTo: Double? = null) {
         val gateway = signedInGateway() ?: return
-        _route.value = Route.Chat(botChatTarget(gateway, storedSessionId, bot.name, bot.label))
+        _route.value = Route.Chat(botChatTarget(gateway, storedSessionId, bot.name, bot.label).copy(readUpTo = readUpTo))
     }
 
     /**
