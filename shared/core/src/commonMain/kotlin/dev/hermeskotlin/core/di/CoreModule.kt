@@ -21,6 +21,7 @@ import dev.hermeskotlin.core.capabilities.CapabilitiesApi
 import dev.hermeskotlin.core.plugins.PluginsApi
 import dev.hermeskotlin.core.cron.CronApi
 import dev.hermeskotlin.core.insights.InsightsApi
+import dev.hermeskotlin.core.config.ConfigApi
 import dev.hermeskotlin.core.connection.GatewayConnection
 import dev.hermeskotlin.core.gateway.AccessTokens
 import dev.hermeskotlin.core.gateway.ConnectionCheck
@@ -82,6 +83,7 @@ val coreModule = module {
     single { CapabilitiesApi(get()) }
     single { PluginsApi(get()) }
     single { InsightsApi(get()) }
+    single { ConfigApi(get()) }
     single { LastChatStore(get()) }
     single { DraftStore(get()) }
     single { ProfilesApi(get()) }
