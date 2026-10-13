@@ -28,11 +28,19 @@ data class SessionSummary(
     @Serializable(with = LenientBooleanSerializer::class) @SerialName("is_active") val isActive: Boolean = false,
     /** Search hits only: the matching message excerpt (FTS5 `snippet()`, `>>>`/`<<<` markers stripped). */
     val snippet: String? = null,
+    /**
+     * Every stored id of the chat's compression lineage, this row's included (`_lineage_ids`). After `/compress`
+     * the chat goes on under a new id and the list shows that newest one, so an older id still names this chat.
+     */
+    @SerialName("_lineage_ids") val lineageIds: List<String>? = null,
 ) {
     /** What a list shows as the name: the title, else the first prompt, else a placeholder. */
     val displayTitle: String
         get() = title?.takeIf { it.isNotBlank() } ?: preview?.takeIf { it.isNotBlank() }?.lineSequence()?.first()
             ?: "Untitled session"
+
+    /** Whether [storedId] names this chat: its own id, or an earlier one of its compression lineage. */
+    fun isChat(storedId: String): Boolean = storedId == id || lineageIds?.contains(storedId) == true
 
     /** Latest activity in epoch seconds, falling back to when the session started. */
     val activityAt: Double? get() = lastActive ?: startedAt

@@ -329,8 +329,8 @@ internal object ChatSamples {
 
     /** Projects the sample chats sit in: two git roots and Home. */
     val projects = listOf(
-        Project("/srv/backup", "backup", "/srv/backup", sessionCount = 6, isAuto = true),
-        Project("p-site", "website", "/srv/site", sessionCount = 3),
+        Project("/srv/backup", "backup", "/srv/backup", sessionCount = 6, isAuto = true, sessionIds = setOf("p1", "s2", "s7")),
+        Project("p-site", "website", "/srv/site", sessionCount = 3, sessionIds = setOf("s9")),
         Project("__no_project__", "Home", null, sessionCount = 9, isNoProject = true),
     )
 

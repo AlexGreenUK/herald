@@ -33,6 +33,8 @@ data class Project(
     val sessionCount: Int,
     val isAuto: Boolean = false,
     val isNoProject: Boolean = false,
+    /** The chats the project holds in the gateway's window (`sessionIds`), by stored id. */
+    val sessionIds: Set<String> = emptySet(),
 ) {
     /** A stored project (`projects.db`), which can be renamed and deleted; the others are only groupings. */
     val isUserMade: Boolean get() = !isAuto && !isNoProject
@@ -201,6 +203,7 @@ class ProjectsApi(private val connection: GatewayConnection) {
                     // shows empty or offers Rename and Delete.
                     isAuto = (o["isAuto"] as? JsonPrimitive)?.booleanOrNull != false,
                     isNoProject = (o["isNoProject"] as? JsonPrimitive)?.booleanOrNull == true || id == NO_PROJECT_ID,
+                    sessionIds = ids.orEmpty().mapNotNullTo(LinkedHashSet()) { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.contentOrNull?.takeIf { s -> s.isNotBlank() } },
                 )
             }
                 // A project the user made shows with no chats yet, as on Desktop: it was made to start chats in.
