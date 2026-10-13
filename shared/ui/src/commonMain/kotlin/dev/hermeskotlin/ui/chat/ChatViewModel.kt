@@ -272,6 +272,9 @@ class ChatViewModel(
     /** Commands the screen answers: a new chat, the model sheet, the sessions list. */
     val requests: Flow<ChatRequest> = _requests.receiveAsFlow()
 
+    /** Whether the chat screen is on screen ([onScreen]); a call can't take the microphone from the background. */
+    private val shown = MutableStateFlow(true)
+
     /** The commands and skills of the open chat's profile; fetched once per chat, on the first `/`. */
     private var catalog: SlashCatalog? = null
     private var catalogFor: ChatTarget? = null
@@ -413,17 +416,29 @@ class ChatViewModel(
         if (target.draft?.start == DraftStart.VoiceChat) startVoiceWhenConnected(target)
     }
 
+    /** The screen tells whether it's on screen (started) or gone to the background (stopped). */
+    fun onScreen(shown: Boolean) {
+        this.shown.value = shown
+    }
+
     /**
      * Starts the Call Hermes shortcut's voice chat in [target] once the gateway is connected, as the Voice chat
-     * button can't be pressed before then either. A call that can't start in time isn't started late, when the
-     * person may have moved on; a notice says why.
+     * button can't be pressed before then either, and while the app is on screen. A call that can't start in time
+     * isn't started late, when the person may have moved on. A gateway that can't be reached gets a notice;
+     * an expired sign-in shows its own screen, and someone who left the app knows why nothing rang.
      */
     private fun startVoiceWhenConnected(target: ChatTarget) {
         viewModelScope.launch {
-            val connected = withTimeoutOrNull(VOICE_CONNECT_WAIT_MS) { connectionState.first { it is ConnectionState.Connected } }
+            val ready = withTimeoutOrNull(VOICE_CONNECT_WAIT_MS) {
+                combine(connectionState, shown) { state, shown -> state.takeIf { it !is ConnectionState.Connected || shown } }
+                    .first { it is ConnectionState.Connected || it is ConnectionState.Failed || it is ConnectionState.SessionExpired }
+            }
             if (this@ChatViewModel.target != target) return@launch
-            if (connected != null) _requests.send(ChatRequest.StartVoice)
-            else showAttachmentError("The call didn't start: Herald couldn't reach the gateway.")
+            when {
+                ready is ConnectionState.Connected -> _requests.send(ChatRequest.StartVoice)
+                ready is ConnectionState.Failed || (ready == null && connectionState.value !is ConnectionState.Connected) ->
+                    showAttachmentError("The call didn't start: Herald couldn't reach the gateway.")
+            }
         }
     }
 

@@ -348,6 +348,40 @@ class ChatViewModelTest {
     }
 
     @Test
+    fun theCallShortcutWaitsForThePersonToComeBackToTheApp() = runTest(dispatcher) {
+        val (vm, _) = viewModel()
+        val requests = mutableListOf<ChatRequest>()
+        backgroundScope.launch(dispatcher) { vm.requests.collect { requests += it } }
+
+        vm.open(ChatTarget(gateway, null, null, nonce = 1, draft = ComposeDraft(start = DraftStart.VoiceChat)))
+        vm.onScreen(false)
+        connection.start(gateway.gatewayUrl)
+        vm.connectionState.first { it is ConnectionState.Connected }
+        assertEquals(emptyList(), requests)
+
+        vm.onScreen(true)
+        assertEquals(listOf<ChatRequest>(ChatRequest.StartVoice), requests)
+    }
+
+    @Test
+    fun theCallShortcutGivesUpQuietlyWhenThePersonStaysAway() = runTest(dispatcher) {
+        val (vm, _) = viewModel()
+        val requests = mutableListOf<ChatRequest>()
+        backgroundScope.launch(dispatcher) { vm.requests.collect { requests += it } }
+
+        vm.open(ChatTarget(gateway, null, null, nonce = 1, draft = ComposeDraft(start = DraftStart.VoiceChat)))
+        vm.onScreen(false)
+        connection.start(gateway.gatewayUrl)
+        vm.connectionState.first { it is ConnectionState.Connected }
+        advanceTimeBy(30_001)
+        vm.onScreen(true)
+
+        assertEquals(emptyList(), requests)
+        // The gateway was there; the notice would blame it wrongly.
+        assertNull(vm.attachmentError.value)
+    }
+
+    @Test
     fun theCallShortcutDoesNotFollowThePersonToAnotherChat() = runTest(dispatcher) {
         val (vm, _) = viewModel()
         val requests = mutableListOf<ChatRequest>()
