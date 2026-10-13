@@ -18,9 +18,6 @@ class ProjectIndex(projects: List<Project>) {
     fun projectOf(session: SessionSummary): Project? =
         byChat[session.id] ?: session.lineageIds?.firstNotNullOfOrNull { byChat[it] }
 
-    /** The project of the stored chat [sessionId], when the tree knows it. */
-    fun projectOf(sessionId: String): Project? = byChat[sessionId]
-
     /** [session]'s project name for a row, unless the list already shows only that project ([shown]). */
     fun labelFor(session: SessionSummary, shown: Project? = null): String? =
         projectOf(session)?.takeIf { it.id != shown?.id }?.label
