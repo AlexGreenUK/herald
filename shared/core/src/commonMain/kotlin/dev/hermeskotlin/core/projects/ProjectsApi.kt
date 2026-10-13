@@ -193,7 +193,9 @@ class ProjectsApi(private val connection: GatewayConnection) {
                 val id = o.text("id") ?: return@mapNotNull null
                 // `sessionIds` are the chats the project really holds in the window; a discovered repo's
                 // `sessionCount` counts all history (cron runs, helpers, years back) and opens on nothing.
-                val ids = o["sessionIds"] as? JsonArray
+                val ids = (o["sessionIds"] as? JsonArray)?.mapNotNullTo(LinkedHashSet()) {
+                    (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.contentOrNull?.takeIf { s -> s.isNotBlank() }
+                }
                 Project(
                     id = id,
                     label = o.text("label") ?: id,
@@ -203,7 +205,7 @@ class ProjectsApi(private val connection: GatewayConnection) {
                     // shows empty or offers Rename and Delete.
                     isAuto = (o["isAuto"] as? JsonPrimitive)?.booleanOrNull != false,
                     isNoProject = (o["isNoProject"] as? JsonPrimitive)?.booleanOrNull == true || id == NO_PROJECT_ID,
-                    sessionIds = ids.orEmpty().mapNotNullTo(LinkedHashSet()) { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.contentOrNull?.takeIf { s -> s.isNotBlank() } },
+                    sessionIds = ids.orEmpty(),
                 )
             }
                 // A project the user made shows with no chats yet, as on Desktop: it was made to start chats in.

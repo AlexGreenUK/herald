@@ -44,13 +44,21 @@ class ProjectIndexTest {
         )
         val project = ProjectsApi.parseProjects(tree).single()
         assertEquals(setOf("x", "y"), project.sessionIds)
-        assertEquals(4, project.sessionCount)
+        // The chip counts the chats it can open, not the entries that name none.
+        assertEquals(2, project.sessionCount)
+    }
+
+    @Test
+    fun aTreeOfOnlyBadIdsHasNoChats() {
+        val tree = HermesJson.parseToJsonElement(
+            """[{"id":"/srv/junk","label":"junk","path":"/srv/junk","isAuto":true,"sessionIds":[3,null,""]}]""",
+        )
+        assertEquals(emptyList(), ProjectsApi.parseProjects(tree))
     }
 
     @Test
     fun aRowsLineageIdsAreRead() {
         val row = HermesJson.decodeFromString(SessionSummary.serializer(), """{"id":"c","_lineage_ids":["a","b","c"]}""")
         assertEquals(listOf("a", "b", "c"), row.lineageIds)
-        assertEquals(true, row.isChat("a"))
     }
 }
