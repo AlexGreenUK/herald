@@ -406,6 +406,10 @@ class ChatViewModel(
             loadModels()
             pets.bind(target.profile)
         }
+        // Start the shortcut's voice conversation only after its new chat session is bound.
+        if (target.draft?.voiceChat == true) {
+            viewModelScope.launch { _requests.send(ChatRequest.StartVoice) }
+        }
     }
 
     /**

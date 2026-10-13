@@ -41,6 +41,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
@@ -58,6 +59,29 @@ import kotlin.test.assertSame
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ChatViewModelTest {
+
+    @Test
+    fun theVoiceChatShortcutRequestsVoiceAfterBindingItsFreshSessionOnlyOnce() = runTest(dispatcher) {
+        val (vm, host) = viewModel()
+        vm.open(ChatTarget(gateway, "s1", "Previous chat"))
+        val previous = assertNotNull(host.session.value)
+        val requests = mutableListOf<ChatRequest>()
+        backgroundScope.launch(dispatcher) {
+            vm.requests.collect { request ->
+                assertNotSame(previous, assertNotNull(host.session.value))
+                assertNull(vm.state.value.storedSessionId)
+                requests += request
+            }
+        }
+
+        val target = ChatTarget(gateway, null, null, nonce = 1, draft = ComposeDraft(voiceChat = true))
+        vm.open(target)
+        assertEquals(listOf<ChatRequest>(ChatRequest.StartVoice), requests)
+        vm.open(target)
+        assertEquals(listOf<ChatRequest>(ChatRequest.StartVoice), requests)
+        vm.open(ChatTarget(gateway, null, null, nonce = 2))
+        assertEquals(listOf<ChatRequest>(ChatRequest.StartVoice), requests)
+    }
 
     private val dispatcher = UnconfinedTestDispatcher()
     private val gateway = SavedGateway("https://hermes.example.ts.net")

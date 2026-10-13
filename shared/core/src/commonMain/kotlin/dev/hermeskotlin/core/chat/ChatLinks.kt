@@ -19,18 +19,19 @@ data class ChatLink(
 
 /**
  * What a new chat opened from outside starts with: [text] in the composer and [attachments] in its tray
- * (shared from another app), or dictation running ([dictate], the voice shortcut). Nothing is sent until
- * the user sends it. [notice] is a sentence about anything that couldn't come along.
+ * (shared from another app), dictation running ([dictate]), or a voice conversation ([voiceChat]).
+ * Draft text and files wait for the user to send them. [notice] is about anything that couldn't come along.
  */
 class ComposeDraft(
     val text: String? = null,
     val attachments: List<OutgoingAttachment> = emptyList(),
     val notice: String? = null,
     val dictate: Boolean = false,
+    val voiceChat: Boolean = false,
 ) {
     /** The same draft, telling [notice] first and then the notice it had. */
     fun withNotice(notice: String) =
-        ComposeDraft(text, attachments, listOfNotNull(notice, this.notice).joinToString(" "), dictate)
+        ComposeDraft(text, attachments, listOfNotNull(notice, this.notice).joinToString(" "), dictate, voiceChat)
 }
 
 /**
@@ -64,6 +65,7 @@ class ChatLinks {
     fun follow(link: AppLink) = when (link) {
         AppLink.NewChat -> newChat()
         AppLink.NewChatVoice -> newChat(ComposeDraft(dictate = true))
+        AppLink.VoiceChat -> newChat(ComposeDraft(voiceChat = true))
         is AppLink.Session -> open(link.id, title = null)
         is AppLink.Bot -> openBot(link.profile, label = null)
     }

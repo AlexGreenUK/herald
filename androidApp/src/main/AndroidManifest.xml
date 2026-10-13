@@ -129,7 +129,8 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
             <!--
-                hermes://new-chat and new-chat-voice start a chat (the launcher shortcuts); session/<id> opens one;
+                hermes://new-chat and new-chat-voice start a chat; voice-chat starts a voice conversation;
+                session/<id> opens a stored chat;
                 bot/<profile> opens that bot's chat, the link Hermes Desktop uses for a bot.
             -->
             <intent-filter>
@@ -139,6 +140,7 @@
                 <data android:scheme="hermes" />
                 <data android:host="new-chat" />
                 <data android:host="new-chat-voice" />
+                <data android:host="voice-chat" />
                 <data android:host="session" />
                 <data android:host="bot" />
             </intent-filter>

@@ -23,9 +23,25 @@ class ChatLinksTest {
         val plain = assertNotNull(links.pending.value)
         assertNull(plain.storedSessionId)
         assertFalse(assertNotNull(plain.draft).dictate)
+        assertFalse(plain.draft.voiceChat)
 
         links.follow(AppLink.NewChatVoice)
         assertTrue(assertNotNull(links.pending.value?.draft).dictate)
+        assertFalse(assertNotNull(links.pending.value?.draft).voiceChat)
+    }
+
+    @Test
+    fun aVoiceChatLinkOpensAFreshChatWithVoiceRatherThanDictation() {
+        val links = ChatLinks()
+        links.follow(AppLink.Session("s1"))
+        links.follow(assertNotNull(AppLink.parse("hermes://voice-chat")))
+        val chat = assertNotNull(links.pending.value)
+        assertNull(chat.storedSessionId)
+        assertNull(chat.bot)
+        val draft = assertNotNull(chat.draft)
+        assertTrue(draft.voiceChat)
+        assertFalse(draft.dictate)
+        assertTrue(draft.withNotice("A notice.").voiceChat)
     }
 
     @Test
