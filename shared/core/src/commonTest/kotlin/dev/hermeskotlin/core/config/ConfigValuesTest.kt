@@ -1,0 +1,92 @@
+package dev.hermeskotlin.core.config
+
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
+
+class ConfigValuesTest {
+
+    private fun entry(control: ConfigControl, value: JsonElement?, key: String = "some.key") = ConfigEntry(key, "Label", null, value, control)
+
+    private fun json(text: String) = Json.parseToJsonElement(text)
+
+    @Test
+    fun summariesSayWhatsSet() {
+        assertEquals("Not set", entry(ConfigControl.Text, null).summary())
+        assertEquals("Not set", entry(ConfigControl.Text, JsonPrimitive("")).summary())
+        assertEquals("smart", entry(ConfigControl.Text, JsonPrimitive("smart")).summary())
+        assertEquals("ls, git status", entry(ConfigControl.Lines, json("""["ls","git status"]""")).summary())
+        assertEquals("None", entry(ConfigControl.Lines, json("[]")).summary())
+        assertEquals("2 entries", entry(ConfigControl.Json, json("""{"a":1,"b":2}""")).summary())
+        assertEquals(
+            "opencode-go:glm-5.3, openrouter:anthropic/claude-sonnet-4.6",
+            entry(ConfigControl.Fallbacks, json("""[{"provider":"opencode-go","model":"glm-5.3"},"openrouter/anthropic/claude-sonnet-4.6"]""")).summary(),
+        )
+    }
+
+    @Test
+    fun numbersAreReadAsWholeOrDecimal() {
+        val e = entry(ConfigControl.Number, JsonPrimitive(90))
+
+        assertEquals(JsonPrimitive(120L), parseConfigInput(e, " 120 ").getOrThrow())
+        assertEquals(JsonPrimitive(0.75), parseConfigInput(e, "0.75").getOrThrow())
+        assertEquals(JsonPrimitive(0), parseConfigInput(e, "").getOrThrow())
+        assertEquals("“ninety” isn't a number.", parseConfigInput(e, "ninety").exceptionOrNull()?.message)
+    }
+
+    @Test
+    fun linesBecomeAListWithBlanksDropped() {
+        val e = entry(ConfigControl.Lines, json("""["a"]"""))
+
+        assertEquals("a", e.editText())
+        assertEquals(json("""["git status","ls -la"]"""), parseConfigInput(e, "git status\n\n  ls -la  \n").getOrThrow())
+    }
+
+    @Test
+    fun fallbacksKeepTheRoutingWrittenBesideThem() {
+        val current = json("""[{"provider":"custom","model":"llama3:8b","base_url":"http://box:11434/v1"},{"provider":"openrouter","model":"x"}]""")
+        val e = entry(ConfigControl.Fallbacks, current, key = "fallback_providers")
+
+        assertEquals("custom:llama3:8b\nopenrouter:x", e.editText())
+        // Reordered, one dropped and one added: the kept pair keeps its base_url.
+        val next = parseConfigInput(e, "opencode-go:glm-5.3\ncustom:llama3:8b").getOrThrow()
+
+        assertEquals(
+            json("""[{"provider":"opencode-go","model":"glm-5.3"},{"provider":"custom","model":"llama3:8b","base_url":"http://box:11434/v1"}]"""),
+            next,
+        )
+        assertTrue(parseConfigInput(e, "just-a-model").isFailure)
+    }
+
+    @Test
+    fun jsonMustParse() {
+        val e = entry(ConfigControl.Json, json("""{"a":1}"""))
+
+        assertEquals("{\n    \"a\": 1\n}", e.editText())
+        assertEquals(json("""{"b":[1,2]}"""), parseConfigInput(e, """{"b":[1,2]}""").getOrThrow())
+        assertTrue(parseConfigInput(e, "{nope").exceptionOrNull()!!.message!!.startsWith("That isn't valid JSON"))
+    }
+
+    @Test
+    fun emptyingTheToolsetsIsCaught() {
+        val toolsets = entry(ConfigControl.Lines, json("""["hermes-cli"]"""), key = "toolsets")
+
+        assertTrue(clearsToolsets(toolsets, JsonArray(emptyList())))
+        assertFalse(clearsToolsets(toolsets, json("""["web"]""")))
+        assertFalse(clearsToolsets(entry(ConfigControl.Lines, json("[]"), key = "toolsets"), JsonArray(emptyList())))
+        assertFalse(clearsToolsets(entry(ConfigControl.Lines, json("""["a"]""")), JsonArray(emptyList())))
+    }
+
+    @Test
+    fun aNumberWrittenEitherWayIsTheSame() {
+        assertTrue(sameConfigValue(JsonPrimitive(30), JsonPrimitive(30.0)))
+        assertFalse(sameConfigValue(JsonPrimitive(30), JsonPrimitive("30")))
+        assertTrue(sameConfigValue(json("""["a"]"""), json("""["a"]""")))
+        assertFalse(sameConfigValue(JsonPrimitive(true), JsonPrimitive(false)))
+    }
+}
