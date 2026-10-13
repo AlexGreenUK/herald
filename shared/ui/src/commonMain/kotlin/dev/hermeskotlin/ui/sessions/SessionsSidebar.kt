@@ -94,6 +94,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.composables.icons.lucide.Archive
 import com.composables.icons.lucide.Blocks
 import com.composables.icons.lucide.Puzzle
+import com.composables.icons.lucide.SlidersHorizontal
 import com.composables.icons.lucide.ArchiveRestore
 import com.composables.icons.lucide.ArrowLeft
 import com.composables.icons.lucide.ArrowLeftRight
@@ -271,6 +272,7 @@ fun SessionsSidebar(
     var searchOpen by remember { mutableStateOf(false) }
     var scheduledOpen by remember { mutableStateOf(false) }
     var capabilitiesOpen by remember { mutableStateOf(false) }
+    var configOpen by remember { mutableStateOf(false) }
     var pluginsOpen by remember { mutableStateOf(false) }
     var insightsOpen by remember { mutableStateOf(false) }
     /** The bot whose routines are showing. */
@@ -293,7 +295,7 @@ fun SessionsSidebar(
     }
 
     // Back steps out of search or the Scheduled / Archived pages before it closes the drawer.
-    PlatformBackHandler(enabled = visible && (searchOpen || scheduledOpen || routinesOf != null || capabilitiesOpen || insightsOpen || state.filter != SessionListFilter.Recent)) {
+    PlatformBackHandler(enabled = visible && (searchOpen || scheduledOpen || routinesOf != null || capabilitiesOpen || configOpen || insightsOpen || state.filter != SessionListFilter.Recent)) {
         when {
             searchOpen -> closeSearch()
             scheduledOpen -> scheduledOpen = false
@@ -302,6 +304,7 @@ fun SessionsSidebar(
                 bots.refreshRoutines()
             }
             capabilitiesOpen -> capabilitiesOpen = false
+            configOpen -> configOpen = false
             insightsOpen -> insightsOpen = false
             else -> viewModel.setFilter(SessionListFilter.Recent)
         }
@@ -377,6 +380,14 @@ fun SessionsSidebar(
                 profile = profile,
                 onBack = { capabilitiesOpen = false },
                 onSessionExpired = onSessionExpired,
+            )
+        } else if (configOpen && !searchOpen) {
+            ConfigPage(
+                gateway = gateway,
+                profile = profile,
+                onBack = { configOpen = false },
+                onSessionExpired = onSessionExpired,
+                visible = visible,
             )
         } else if (pluginsOpen && !searchOpen) {
             PluginsPage(
@@ -564,6 +575,7 @@ fun SessionsSidebar(
                                     NavLink(Lucide.ChartColumn, "Insights") { insightsOpen = true },
                                     NavLink(Lucide.Blocks, "Capabilities") { capabilitiesOpen = true },
                                     NavLink(Lucide.Puzzle, "Plugins") { pluginsOpen = true },
+                                    NavLink(Lucide.SlidersHorizontal, "Config") { configOpen = true },
                                     NavLink(Lucide.Archive, "Archived") { viewModel.setFilter(SessionListFilter.Archived) },
                                 ),
                             )

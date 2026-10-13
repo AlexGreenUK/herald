@@ -60,6 +60,7 @@ the app talks to your gateway directly.
 - Bots and rooms: chat with each bot, follow their exchanges, and @mention them in a room
 - Scheduled jobs: create, edit, pause and run them, and open each run as a chat
 - Capabilities: turn skills, toolsets and MCP servers on or off, and test a server
+- Config: change Hermes's own settings, or each bot's, by section or by search, or edit config.yaml
 - Insights: cost, sessions and tokens by day, and the models, tools and skills used most
 
 **Stay connected**

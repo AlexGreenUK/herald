@@ -54,6 +54,13 @@ import dev.hermeskotlin.ui.chat.SessionControlSheetView
 import dev.hermeskotlin.ui.chat.UsageSheetView
 import dev.hermeskotlin.ui.sessions.CapabilitiesActions
 import dev.hermeskotlin.ui.sessions.CapabilitiesView
+import dev.hermeskotlin.ui.sessions.ConfigActions
+import dev.hermeskotlin.ui.sessions.ConfigPlace
+import dev.hermeskotlin.ui.sessions.ConfigView
+import dev.hermeskotlin.core.config.ConfigCatalog
+import dev.hermeskotlin.core.config.ConfigEntry
+import dev.hermeskotlin.ui.sessions.ChoiceSheet
+import kotlinx.serialization.json.JsonElement
 import dev.hermeskotlin.ui.sessions.ScheduledActions
 import dev.hermeskotlin.ui.sessions.ScheduledView
 import dev.hermeskotlin.ui.sessions.CapabilityTab
@@ -126,6 +133,10 @@ enum class PreviewScene(val label: String) {
     Journey("What the agent has learned"),
     Insights("Insights"),
     Capabilities("Capabilities"),
+    Config("Hermes's settings"),
+    ConfigVoice("Hermes's voice settings, one saving"),
+    ConfigSearch("A search across Hermes's settings"),
+    ConfigPicker("Picking a voice, with Other… for one off the list"),
     Plugins("Plugins with a page"),
     Assistant("The assistant, called up over another app"),
     AssistantAnswer("The assistant, after a question about the screen"),
@@ -321,6 +332,21 @@ fun HeraldPreview(scene: PreviewScene, dark: Boolean = true, accent: String = DE
                 PreviewScene.Capabilities -> OpenSidebar {
                     SidebarPage { CapabilitiesView(PageSamples.capabilities, remember { TextFieldState() }, PreviewCapabilitiesActions, onBack = {}) }
                 }
+                PreviewScene.Config, PreviewScene.ConfigVoice, PreviewScene.ConfigSearch, PreviewScene.ConfigPicker -> OpenSidebar {
+                    val config = PageSamples.config(place = "voice".takeIf { scene == PreviewScene.ConfigVoice || scene == PreviewScene.ConfigPicker })
+                    SidebarPage {
+                        ConfigView(
+                            config,
+                            remember { TextFieldState(if (scene == PreviewScene.ConfigSearch) "memory" else "") },
+                            remember { TextFieldState() },
+                            PreviewConfigActions,
+                            onBack = {},
+                        )
+                    }
+                    if (scene == PreviewScene.ConfigPicker) {
+                        ChoiceSheet(ConfigCatalog.entry("voice.gpt_live.voice", config.schema!!, config.values!!), onDismiss = {}, onPick = { _, _ -> }, onOther = {})
+                    }
+                }
                 PreviewScene.Gateways -> Box(Modifier.fillMaxSize()) {
                     SampleChat(ChatSamples.reply)
                     GatewaysSheet(
@@ -494,6 +520,19 @@ private object PreviewCapabilitiesActions : CapabilitiesActions {
     override fun setToolsetEnabled(toolset: Toolset, enabled: Boolean) = Unit
     override fun setServerEnabled(server: McpServer, enabled: Boolean) = Unit
     override fun testServer(server: McpServer) = Unit
+    override fun dismissMessage() = Unit
+}
+
+private object PreviewConfigActions : ConfigActions {
+    override fun refresh() = Unit
+    override fun open(view: ConfigPlace) = Unit
+    override fun back() = false
+    override fun set(entry: ConfigEntry, value: JsonElement) = Unit
+    override fun confirmChange() = Unit
+    override fun cancelChange() = Unit
+    override fun saveYaml() = Unit
+    override fun discardYaml() = Unit
+    override fun keepEditing() = Unit
     override fun dismissMessage() = Unit
 }
 
