@@ -406,4 +406,17 @@ class ChatViewModelTest {
 
         assertSame(first, host.session.value)
     }
+
+    @Test
+    fun theSameChatWithANewReadPositionKeepsItsSession() = runTest(dispatcher) {
+        val (vm, host) = viewModel()
+        val target = ChatTarget(gateway, "s1", "Chat")
+        vm.open(target)
+        val first = assertNotNull(host.session.value)
+
+        // Reopened from a notification: only where the "New messages" line goes has changed.
+        vm.open(target.copy(readUpTo = 1_300.0))
+
+        assertSame(first, host.session.value)
+    }
 }

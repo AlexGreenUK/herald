@@ -64,12 +64,20 @@ class SeenStore(private val store: KeyValueStore, private val now: () -> Double)
     /** Records that the user has seen [session] as it is now. */
     suspend fun markSeen(gateway: GatewayUrl, session: SessionSummary, profile: String? = null) {
         val activity = session.activityAt ?: return
+        markLooked(gateway, session.id, activity, profile)
+    }
+
+    /**
+     * Records that the user had the chat [sessionId] open with everything up to [at] (epoch seconds) in it,
+     * e.g. when they leave the app on it. Never moves a last look back.
+     */
+    suspend fun markLooked(gateway: GatewayUrl, sessionId: String, at: Double, profile: String? = null) {
         val key = key(gateway, profile)
         mutex.withLock {
             val current = scopeLocked(key)
-            if ((current.chats[session.id] ?: Double.MIN_VALUE) >= activity) return
+            if ((current.chats[sessionId] ?: Double.MIN_VALUE) >= at) return
             // The oldest entries go first; anything dropped counts as read up to `since`, which is fine.
-            val chats = (current.chats + (session.id to activity)).entries.sortedByDescending { it.value }
+            val chats = (current.chats + (sessionId to at)).entries.sortedByDescending { it.value }
                 .take(MAX_REMEMBERED).associate { it.key to it.value }
             val next = current.copy(chats = chats)
             store.put(key, HermesJson.encodeToString(SeenChats.serializer(), next))

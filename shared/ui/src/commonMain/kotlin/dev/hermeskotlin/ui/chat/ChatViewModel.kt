@@ -35,6 +35,7 @@ import dev.hermeskotlin.core.chat.promptNow
 import dev.hermeskotlin.core.chat.regenerateTarget
 import dev.hermeskotlin.core.network.errorMessage
 import dev.hermeskotlin.core.profiles.ProfilesApi
+import dev.hermeskotlin.core.sessions.SeenStore
 import dev.hermeskotlin.core.sessions.SessionsApi
 import dev.hermeskotlin.core.settings.SettingsStore
 import dev.hermeskotlin.core.settings.AppSettings
@@ -184,6 +185,8 @@ class ChatViewModel(
     voiceKeepAlive: VoiceKeepAlive,
     deviceDictation: DeviceDictation,
     speechStreams: SpeechStreams,
+    /** Where the user last looked in each chat, so a chat reopened from a notification starts at its new messages. */
+    private val seen: SeenStore? = null,
 ) : ViewModel(), ChatActions {
 
     /** Dictation and voice chat for the open chat. */
@@ -388,7 +391,27 @@ class ChatViewModel(
         }
     }
 
+    /**
+     * The user is leaving the app with this chat on screen: everything in it up to now counts as read, so a
+     * reply that comes in meanwhile (and its notification) is new to them. The sidebar only records a look
+     * when a chat is tapped there, which misses a chat that was simply left open.
+     */
+    fun markLooked() {
+        val target = target ?: return
+        val state = state.value
+        val id = state.storedSessionId ?: return
+        val newest = state.messages.mapNotNull { it.time }.maxOrNull() ?: return
+        viewModelScope.launch { seen?.markLooked(target.gateway.gatewayUrl, id, newest, target.profile) }
+    }
+
     fun open(target: ChatTarget) {
+        // The same chat with only a new read position (reopened from a notification): the screen places the
+        // "New messages" line from the target; the chat itself, its draft and any voice chat stay as they are.
+        val current = this.target
+        if (current != null && current != target && current.copy(readUpTo = null) == target.copy(readUpTo = null)) {
+            this.target = target
+            return
+        }
         if (this.target == target) {
             // An expired session or sign-out closes the host's chat; the same chat reopened after signing
             // back in needs a fresh session, not the stopped one this view model still holds.
@@ -1135,3 +1158,12 @@ class ChatViewModel(
         const val VOICE_CONNECT_WAIT_MS = 30_000L
     }
 }
+
+/** When a message happened (epoch seconds), when it has a time: a reply still being written has none yet. */
+private val ChatMessage.time: Double?
+    get() = when (this) {
+        is ChatMessage.User -> timestamp
+        is ChatMessage.Assistant -> timestamp
+        is ChatMessage.Event -> timestamp
+        else -> null
+    }
