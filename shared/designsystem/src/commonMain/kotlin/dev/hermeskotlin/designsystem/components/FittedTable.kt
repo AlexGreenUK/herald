@@ -1,6 +1,7 @@
 package dev.hermeskotlin.designsystem.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -11,6 +12,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.Placeable
@@ -51,7 +53,14 @@ internal fun FittedTable(content: String, node: ASTNode, style: TextStyle) {
     }
     if (rows.isEmpty()) return
     val dimens = LocalMarkdownDimens.current
-    BoxWithConstraints(Modifier.background(LocalMarkdownColors.current.tableBackground, RoundedCornerShape(dimens.tableCornerSize))) {
+    val shape = RoundedCornerShape(dimens.tableCornerSize)
+    val faint = LocalMarkdownColors.current.dividerColor.fainter()
+    BoxWithConstraints(
+        Modifier
+            .background(LocalMarkdownColors.current.tableBackground, shape)
+            .border(dimens.dividerThickness, faint, shape)
+            .clip(shape),
+    ) {
         val available = if (constraints.hasBoundedWidth) constraints.maxWidth else Int.MAX_VALUE
         Box(Modifier.horizontalScroll(rememberScrollState())) {
             TableGrid(rows, content, style, available, LocalMarkdownColors.current.dividerColor, dimens.dividerThickness)
@@ -92,8 +101,10 @@ private fun TableGrid(
                     }
                 }
             }
-            // The line under the header row, placed by the layout below.
-            Box(Modifier.background(dividerColor))
+            // The lines between rows (the one under the header a little stronger) and between columns,
+            // placed by the layout below.
+            repeat(rows.size - 1) { Box(Modifier.background(if (it == 0) dividerColor else dividerColor.fainter())) }
+            repeat(columnCount - 1) { Box(Modifier.background(dividerColor.fainter())) }
         },
         modifier = Modifier.semantics { collectionInfo = CollectionInfo(rowCount = rows.size, columnCount = columnCount) },
     ) { measurables, _ ->
@@ -122,7 +133,8 @@ private fun TableGrid(
         val width = widths.sum()
         val height = rowHeights.sum()
         val line = dividerThickness.roundToPx().coerceAtLeast(1)
-        val divider = measurables.last().measure(Constraints.fixed(width, line))
+        val rowLines = (0 until rows.size - 1).map { measurables[next++].measure(Constraints.fixed(width, line)) }
+        val columnLines = (0 until columnCount - 1).map { measurables[next++].measure(Constraints.fixed(line, height)) }
 
         layout(width, height) {
             var index = 0
@@ -135,7 +147,19 @@ private fun TableGrid(
                 }
                 y += rowHeights[rowIndex]
             }
-            divider.placeRelative(0, rowHeights[0] - line)
+            var bottom = 0
+            rowLines.forEachIndexed { row, placeable ->
+                bottom += rowHeights[row]
+                placeable.placeRelative(0, bottom - line)
+            }
+            var right = 0
+            columnLines.forEachIndexed { column, placeable ->
+                right += widths[column]
+                placeable.placeRelative(right - line, 0)
+            }
         }
     }
 }
+
+/** The same line, fainter: the grid between cells should read as a hint, not as a frame. */
+private fun Color.fainter(): Color = copy(alpha = alpha * 0.55f)
