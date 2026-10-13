@@ -282,7 +282,7 @@ Agent tools that run on the phone: a gateway plugin registers them, Herald answe
 
 ### Platforms & polish
 - [x] 48dp touch targets (`MinTouchTarget`) on icon buttons, the composer, the top bar and the sidebar rows, without enlarging the icons
-- [x] Launcher shortcuts New chat and New chat with voice (starts dictating); links `hermes://new-chat`, `hermes://new-chat-voice` and `hermes://session/<id>`
+- [x] Launcher shortcuts New chat, New chat with voice (starts dictating) and Call Hermes (a voice chat in a new chat, once the gateway is connected); links `hermes://new-chat`, `hermes://new-chat-voice`, `hermes://voice-chat` and `hermes://session/<id>`
 - [x] Web links in replies open in a Custom Tab in the app's colors, or the browser when there's none
 - [x] App lock (Settings → Privacy): fingerprint, face or screen lock on launch and after a minute away; content hidden in Recents
 - [ ] Tablet and foldable adaptive layout (list and detail side by side)

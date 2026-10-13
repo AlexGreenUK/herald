@@ -8,6 +8,9 @@ sealed interface AppLink {
     /** `hermes://new-chat-voice`: a new chat that starts dictating into its composer. */
     data object NewChatVoice : AppLink
 
+    /** `hermes://voice-chat`: a new chat that starts a voice conversation. */
+    data object VoiceChat : AppLink
+
     /** `hermes://session/<id>`: a stored chat. */
     data class Session(val id: String) : AppLink
 
@@ -27,6 +30,7 @@ sealed interface AppLink {
             return when (host) {
                 "new-chat" -> NewChat.takeIf { segments.isEmpty() }
                 "new-chat-voice" -> NewChatVoice.takeIf { segments.isEmpty() }
+                "voice-chat" -> VoiceChat.takeIf { segments.isEmpty() }
                 "session" -> segments.singleOrNull()?.takeIf { it.isNotBlank() }?.let(::Session)
                 "bot" -> segments.singleOrNull()?.takeIf { it.isNotBlank() }?.let(::Bot)
                 else -> null
