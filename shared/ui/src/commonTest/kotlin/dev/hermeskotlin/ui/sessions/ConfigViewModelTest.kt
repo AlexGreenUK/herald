@@ -147,6 +147,21 @@ class ConfigViewModelTest {
     }
 
     @Test
+    fun aSlowReadBackDoesntUndoALaterRefresh() = runTest(dispatcher) {
+        val vm = viewModel()
+        val slow = CompletableDeferred<Unit>()
+
+        // Opened again: a read-back starts and is slow; then Try again reads the changed file.
+        gates += slow
+        vm.bind(gateway, "rin")
+        config = """{"approvals":{"mode":"off"},"toolsets":["hermes-cli"],"logging":{"level":"INFO"}}"""
+        vm.refresh()
+        slow.complete(Unit)
+
+        assertEquals(JsonPrimitive("off"), vm.state.value.values!!.at("approvals.mode"))
+    }
+
+    @Test
     fun openingAgainAfterAFailedLoadTriesAgain() = runTest(dispatcher) {
         offline = true
         val vm = viewModel()

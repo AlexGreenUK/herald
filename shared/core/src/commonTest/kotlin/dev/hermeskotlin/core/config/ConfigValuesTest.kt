@@ -40,9 +40,19 @@ class ConfigValuesTest {
     }
 
     @Test
-    fun anEmptiedNumberIsUnsetNotZero() {
-        // A speed or timeout of 0 means something; the empty field says "Not set".
-        assertEquals(JsonNull, parseConfigInput(entry(ConfigControl.Number, JsonPrimitive(300)), "  ").getOrThrow())
+    fun anEmptiedNumberIsNeverZero() {
+        // A speed or timeout of 0 means something, and null over a value reads as None, not the default.
+        assertEquals("Type a number.", parseConfigInput(entry(ConfigControl.Number, JsonPrimitive(300)), "  ").exceptionOrNull()?.message)
+        // One that was unset stays so.
+        assertEquals(JsonNull, parseConfigInput(entry(ConfigControl.Number, JsonNull), "").getOrThrow())
+    }
+
+    @Test
+    fun twoFallbacksThatReadTheSameKeepTheirOwnRouting() {
+        val current = json("""[{"provider":"custom","model":"m","base_url":"http://a"},{"provider":"custom","model":"m","base_url":"http://b"}]""")
+        val e = entry(ConfigControl.Fallbacks, current, key = "fallback_providers")
+
+        assertEquals(current, parseConfigInput(e, e.editText()).getOrThrow())
     }
 
     @Test

@@ -46,14 +46,19 @@ fun parseConfigInput(entry: ConfigEntry, text: String): Result<JsonElement> = ru
     when (entry.control) {
         ConfigControl.Number -> {
             val trimmed = text.trim()
-            // Empty is "Not set", as the field shows, not 0: a speed or timeout of 0 means something.
-            if (trimmed.isEmpty()) JsonNull
+            // Not 0, which is a speed or timeout of its own, and not null over a value: Hermes would read None, not its default.
+            if (trimmed.isEmpty()) {
+                if (entry.value == null || entry.value is JsonNull) JsonNull else throw IllegalArgumentException("Type a number.")
+            }
             else trimmed.toLongOrNull()?.let(::JsonPrimitive)
                 ?: trimmed.toDoubleOrNull()?.takeIf { it.isFinite() }?.let(::JsonPrimitive)
                 ?: throw IllegalArgumentException("“$trimmed” isn't a number.")
         }
         ConfigControl.Lines -> JsonArray(lines(text).map(::JsonPrimitive))
-        ConfigControl.Fallbacks -> JsonArray(lines(text).map { fallbackEntry(it, entry.value) })
+        ConfigControl.Fallbacks -> {
+            val unused = (entry.value as? JsonArray).orEmpty().toMutableList()
+            JsonArray(lines(text).map { fallbackEntry(it, unused) })
+        }
         ConfigControl.Json -> try {
             Json.parseToJsonElement(text.ifBlank { "null" })
         } catch (e: Exception) {
@@ -98,8 +103,12 @@ private fun fallbackLine(item: JsonElement): String? = when (item) {
  * the routing written by hand beside it (`base_url`, `api_mode`, keys) or a form the phone wouldn't write
  * (a bare model name), so a save neither sends it to the public provider nor refuses it.
  */
-private fun fallbackEntry(line: String, current: JsonElement?): JsonElement {
-    (current as? JsonArray).orEmpty().firstOrNull { fallbackLine(it) == line }?.let { return it }
+private fun fallbackEntry(line: String, unused: MutableList<JsonElement>): JsonElement {
+    // Each entry once, so two that read the same keep their own routing.
+    unused.firstOrNull { fallbackLine(it)?.trim() == line }?.let {
+        unused.remove(it)
+        return it
+    }
     val provider = line.substringBefore(':', "").trim()
     val model = line.substringAfter(':', "").trim()
     require(provider.isNotEmpty() && model.isNotEmpty()) { "Write each fallback as provider:model, like openrouter:anthropic/claude-sonnet-4.6. “$line” isn't." }

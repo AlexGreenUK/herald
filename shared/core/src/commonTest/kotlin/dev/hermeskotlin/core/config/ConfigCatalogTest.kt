@@ -224,6 +224,19 @@ class ConfigCatalogTest {
     }
 
     @Test
+    fun notSetSavesTheSchemasOwnEmpty() {
+        val field = ConfigField("select", "", "x", listOf(JsonNull, JsonPrimitive(true), JsonPrimitive(false)))
+
+        val choice = assertIs<ConfigControl.Choice>(ConfigCatalog.entry("x.flag", ConfigSchema(mapOf("x.flag" to field)), config("""{"x":{"flag":true}}"""))!!.control)
+
+        assertEquals(JsonNull, choice.valueOf(""))
+        assertEquals(JsonPrimitive(false), choice.valueOf("false"))
+        // With "" among the options, "" it is.
+        val both = ConfigField("select", "", "x", listOf(JsonNull, JsonPrimitive(""), JsonPrimitive("a")))
+        assertEquals(JsonPrimitive(""), assertIs<ConfigControl.Choice>(ConfigCatalog.entry("x.mode", ConfigSchema(mapOf("x.mode" to both)), config("{}"))!!.control).valueOf(""))
+    }
+
+    @Test
     fun withoutDropsOneKey() {
         val values = config("""{"tts":{"provider":"edge","openai":{"voice":"nova"}}}""")
 

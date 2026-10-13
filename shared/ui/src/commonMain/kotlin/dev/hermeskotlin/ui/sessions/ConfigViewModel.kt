@@ -110,6 +110,7 @@ class ConfigViewModel(private val api: ConfigApi) : ViewModel(), ConfigActions {
         val url = gateway?.gatewayUrl ?: return
         val profile = profile
         _state.update { it.copy(loading = true, error = null) }
+        val reload = ++reloads
         viewModelScope.launch(binding) {
             val schema = async { api.schema(url, profile) }
             val values = async { api.values(url, profile) }
@@ -117,7 +118,9 @@ class ConfigViewModel(private val api: ConfigApi) : ViewModel(), ConfigActions {
             val v = values.await()
             _state.update { state ->
                 if (s is ApiResult.Success && v is ApiResult.Success) {
-                    state.copy(schema = s.value, values = v.value, loading = false)
+                    // A later read, or a save in flight, holds newer values than this one.
+                    val fresh = state.values == null || (reload == reloads && state.saving.isEmpty())
+                    state.copy(schema = s.value, values = if (fresh) v.value else state.values, loading = false)
                 } else {
                     val failed = if (s !is ApiResult.Success) s else v
                     state.copy(

@@ -21,7 +21,7 @@ sealed interface ConfigControl {
         val options: List<String>,
         val searchable: Boolean = false,
         val other: Boolean = false,
-        /** Options stored as numbers or booleans, by their text, so a pick saves `1` and not `"1"`. */
+        /** Options stored as numbers, booleans or null, by their text, so a pick saves `1` and not `"1"`. */
         val typed: Map<String, JsonPrimitive> = emptyMap(),
     ) : ConfigControl {
         /** What picking [option] saves. */
@@ -265,7 +265,9 @@ object ConfigCatalog {
             val typed = (field.options + listOfNotNull(value))
                 .filterIsInstance<JsonPrimitive>()
                 .filter { it !is JsonNull && !it.isString }
-                .associateBy { it.content }
+                .associateBy { it.content } +
+                // The schema's own "not set" is null: "Not set" saves that, not "".
+                if (JsonNull in field.options && field.options.none { it is JsonPrimitive && it.isString && it.content.isEmpty() }) mapOf("" to JsonNull) else emptyMap()
             return ConfigControl.Choice(
                 options = if (field.clearable && "" !in withCurrent) listOf("") + withCurrent else withCurrent,
                 searchable = field.searchable || withCurrent.size > 20,
