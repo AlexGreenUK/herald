@@ -73,6 +73,33 @@ data class InboxRun(
     }
 }
 
+/**
+ * A report written for a chat app (Telegram keeps every line break) as Markdown that keeps them too: a single
+ * line break would otherwise join two lines into one paragraph, so "**Event** · date" and "🎟 0 tickets" run
+ * together. Each line that a non-blank line follows gets a hard break, except in code fences and table rows,
+ * where Markdown keeps lines apart already.
+ */
+fun keepLineBreaks(markdown: String): String {
+    val lines = markdown.lines()
+    val out = StringBuilder(markdown.length + lines.size * 2)
+    var fence: String? = null
+    lines.forEachIndexed { i, line ->
+        val trimmed = line.trimStart()
+        val opensFence = trimmed.startsWith("```") || trimmed.startsWith("~~~")
+        val inFence = fence != null
+        if (opensFence) fence = if (inFence && trimmed.startsWith(fence!!)) null else fence ?: trimmed.take(3)
+        out.append(line)
+        if (i < lines.lastIndex) {
+            val next = lines[i + 1]
+            val breakHere = !inFence && !opensFence && line.isNotBlank() && next.isNotBlank() &&
+                !trimmed.startsWith("|") && !next.trimStart().startsWith("|") && !line.endsWith("  ") && !line.endsWith("\\")
+            if (breakHere) out.append("  ")
+            out.append('\n')
+        }
+    }
+    return out.toString()
+}
+
 /** How one job reaches the Inbox: not at all, into it quietly, or with a notification. */
 enum class Follow(val wire: String) {
     Off("off"),

@@ -231,4 +231,21 @@ class InboxTest {
         again.bind("https://gw", now = 0)
         assertEquals("Briefing", again.state.value.groups.renamedOf("default", "j"))
     }
+
+    @Test
+    fun aChatReportKeepsItsLineBreaks() {
+        val pulse = "🎫 **TICKET PULSE**\n━━━━━━\n\n**MINO** · 2026-12-04\n🎟️ 0 tickets · €0.00\n📊 Site: 0\n\n───"
+        assertEquals(
+            "🎫 **TICKET PULSE**  \n━━━━━━\n\n**MINO** · 2026-12-04  \n🎟️ 0 tickets · €0.00  \n📊 Site: 0\n\n───",
+            keepLineBreaks(pulse),
+        )
+    }
+
+    @Test
+    fun codeTablesAndBreaksAlreadyThereAreLeftAlone() {
+        val doc = "Before\n```\na\nb\n```\n| A | B |\n|---|---|\n| 1 | 2 |\nkept  \nlast"
+        assertEquals("Before  \n```\na\nb\n```\n| A | B |\n|---|---|\n| 1 | 2 |\nkept  \nlast", keepLineBreaks(doc))
+        assertEquals("", keepLineBreaks(""))
+        assertEquals("one line", keepLineBreaks("one line"))
+    }
 }

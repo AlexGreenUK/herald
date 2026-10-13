@@ -112,6 +112,28 @@ fun List<InboxRun>.filtered(filter: InboxFilter, groups: InboxGroups = InboxGrou
     is InboxFilter.Group -> filter { groups.of(it.bot, it.job) == filter.name }
 }
 
+/** What the Inbox's pages can ask for; [InboxViewModel] does it all, previews nothing. */
+interface InboxActions {
+    fun open(run: InboxRun)
+    fun closeRun()
+    fun markAllRead()
+    fun setFilter(filter: InboxFilter)
+    fun chooseJobs()
+    fun closeJobs()
+    fun setFollow(job: CronJob, follow: Follow)
+    fun setFailures(on: Boolean)
+    fun setAll(follow: Follow)
+    fun openGroups()
+    fun closeGroups()
+    fun setLayout(layout: InboxLayout)
+    fun setChipMode(mode: ChipMode)
+    fun addGroup(name: String)
+    fun renameGroup(from: String, to: String)
+    fun removeGroup(name: String)
+    fun assignGroup(job: InboxFilter.Job, group: String?)
+    fun renameJob(chip: JobChip, name: String)
+}
+
 /** Why the Inbox can't fetch from the gateway: it then shows what it kept, with this said once. */
 enum class InboxBlock {
     /** Notifications anywhere is off: the Inbox goes by this phone's push registration. */
@@ -188,7 +210,7 @@ class InboxViewModel(
     private val push: PushSetup,
     private val connection: GatewayConnection,
     private val settings: SettingsStore,
-) : ViewModel() {
+) : ViewModel(), InboxActions {
 
     private val _state = MutableStateFlow(InboxUiState())
     val state: StateFlow<InboxUiState> = _state.asStateFlow()
@@ -233,34 +255,34 @@ class InboxViewModel(
 
     fun refresh() = load()
 
-    fun setFilter(filter: InboxFilter) = _state.update { it.copy(filter = filter) }
+    override fun setFilter(filter: InboxFilter) = _state.update { it.copy(filter = filter) }
 
     /** Opens the Inbox on folders, or on every report in one list. */
-    fun setLayout(layout: InboxLayout) {
+    override fun setLayout(layout: InboxLayout) {
         _state.update { it.copy(filter = InboxFilter.All) }
         editGroups { it.copy(layout = layout) }
     }
 
     /** Splits the chips by job or by the user's groups. */
-    fun setChipMode(mode: ChipMode) {
+    override fun setChipMode(mode: ChipMode) {
         _state.update { it.copy(filter = InboxFilter.All) }
         editGroups { it.copy(mode = mode) }
     }
 
-    fun openGroups() = _state.update { it.copy(grouping = true) }
+    override fun openGroups() = _state.update { it.copy(grouping = true) }
 
-    fun closeGroups() = _state.update { it.copy(grouping = false) }
+    override fun closeGroups() = _state.update { it.copy(grouping = false) }
 
-    fun addGroup(name: String) = editGroups { it.add(name) }
+    override fun addGroup(name: String) = editGroups { it.add(name) }
 
-    fun renameGroup(from: String, to: String) = editGroups { it.rename(from, to) }
+    override fun renameGroup(from: String, to: String) = editGroups { it.rename(from, to) }
 
-    fun removeGroup(name: String) = editGroups { it.remove(name) }
+    override fun removeGroup(name: String) = editGroups { it.remove(name) }
 
-    fun assignGroup(job: InboxFilter.Job, group: String?) = editGroups { it.assign(job.bot, job.job, group) }
+    override fun assignGroup(job: InboxFilter.Job, group: String?) = editGroups { it.assign(job.bot, job.job, group) }
 
     /** Calls [chip]'s job [name] on this phone; blank puts its own name back. */
-    fun renameJob(chip: JobChip, name: String) = editGroups { it.renameJob(chip.filter.bot, chip.filter.job, name, chip.own) }
+    override fun renameJob(chip: JobChip, name: String) = editGroups { it.renameJob(chip.filter.bot, chip.filter.job, name, chip.own) }
 
     private fun editGroups(change: (InboxGroups) -> InboxGroups) {
         viewModelScope.launch { store.editGroups(change) }
@@ -305,7 +327,7 @@ class InboxViewModel(
         return true
     }
 
-    fun open(run: InboxRun) {
+    override fun open(run: InboxRun) {
         _state.update { it.copy(open = run, openLoading = true, openPartial = false) }
         viewModelScope.launch {
             store.markRead(run)
@@ -328,14 +350,14 @@ class InboxViewModel(
         }
     }
 
-    fun closeRun() = _state.update { it.copy(open = null, openLoading = false) }
+    override fun closeRun() = _state.update { it.copy(open = null, openLoading = false) }
 
-    fun markAllRead() {
+    override fun markAllRead() {
         viewModelScope.launch { store.markAllRead() }
     }
 
     /** Opens the follow page: every job, and how each reaches the Inbox now. */
-    fun chooseJobs() {
+    override fun chooseJobs() {
         val url = gateway?.gatewayUrl ?: return
         _state.update { it.copy(choosing = true, jobsLoading = it.jobs.isEmpty()) }
         viewModelScope.launch {
@@ -352,14 +374,14 @@ class InboxViewModel(
         }
     }
 
-    fun closeJobs() = _state.update { it.copy(choosing = false) }
+    override fun closeJobs() = _state.update { it.copy(choosing = false) }
 
-    fun setFollow(job: CronJob, follow: Follow) = save(_state.value.following.with(job.id, follow))
+    override fun setFollow(job: CronJob, follow: Follow) = save(_state.value.following.with(job.id, follow))
 
-    fun setFailures(on: Boolean) = save(_state.value.following.copy(failures = on))
+    override fun setFailures(on: Boolean) = save(_state.value.following.copy(failures = on))
 
     /** Every job, new ones too, to [follow]: All on (into the Inbox) or All off. */
-    fun setAll(follow: Follow) = save(_state.value.following.all(follow))
+    override fun setAll(follow: Follow) = save(_state.value.following.all(follow))
 
     private fun save(next: Following) {
         val before = _state.value.following

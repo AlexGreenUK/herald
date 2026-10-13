@@ -5,6 +5,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import com.composables.icons.lucide.FolderOpen
 import dev.hermeskotlin.core.inbox.InboxLayout
+import dev.hermeskotlin.core.inbox.keepLineBreaks
 import dev.hermeskotlin.designsystem.accent
 import dev.hermeskotlin.designsystem.onAccent
 import androidx.compose.ui.semantics.semantics
@@ -161,7 +162,7 @@ internal fun InboxPage(
 }
 
 @Composable
-private fun InboxView(state: InboxUiState, viewModel: InboxViewModel, onBack: () -> Unit, onOpenSettings: () -> Unit) {
+internal fun InboxView(state: InboxUiState, viewModel: InboxActions, onBack: () -> Unit, onOpenSettings: () -> Unit) {
     val unread = state.unread
     val folders = state.groups.layout == InboxLayout.Folders
     val inFolder = folders && state.shownFilter != InboxFilter.All
@@ -461,7 +462,7 @@ private fun RunCard(run: InboxRun, name: String, unread: Boolean, onClick: () ->
 
 /** One run in full, as Markdown. */
 @Composable
-private fun RunView(run: InboxRun, name: String, loading: Boolean, partial: Boolean, onBack: () -> Unit) {
+internal fun RunView(run: InboxRun, name: String, loading: Boolean, partial: Boolean, onBack: () -> Unit) {
     SubpageHeader(name, onBack = onBack, subtitle = (if (run.failed) "Failed · " else "") + messageTime(run.at.toDouble(), uses24HourClock()))
     Column(
         Modifier
@@ -477,7 +478,7 @@ private fun RunView(run: InboxRun, name: String, loading: Boolean, partial: Bool
                 color = Theme[colors][textTertiary],
             )
         }
-        if (loading && run.text.isEmpty()) ListSkeleton() else MarkdownText(run.text)
+        if (loading && run.text.isEmpty()) ListSkeleton() else MarkdownText(remember(run.text) { keepLineBreaks(run.text) })
     }
 }
 
@@ -486,7 +487,7 @@ private fun RunView(run: InboxRun, name: String, loading: Boolean, partial: Bool
  * live on this phone only: they sort what it shows, nothing on the gateway.
  */
 @Composable
-private fun GroupsView(state: InboxUiState, viewModel: InboxViewModel) {
+internal fun GroupsView(state: InboxUiState, viewModel: InboxActions) {
     val groups = state.groups
     var naming by remember { mutableStateOf<GroupNaming?>(null) }
     var picking by remember { mutableStateOf<InboxFilter.Job?>(null) }
@@ -729,7 +730,7 @@ private fun <T> DropdownSheet(
 
 /** Every job, each set to not follow, follow quietly, or notify; and one switch for failures. */
 @Composable
-private fun FollowView(state: InboxUiState, viewModel: InboxViewModel) {
+internal fun FollowView(state: InboxUiState, viewModel: InboxActions) {
     SubpageHeader("Jobs in the Inbox", onBack = viewModel::closeJobs, subtitle = "What each job's reports do on this phone")
     if (state.jobsLoading && state.jobs.isEmpty()) {
         ListSkeleton()
