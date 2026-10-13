@@ -145,8 +145,11 @@ internal fun parseSpeechFrame(text: String): SpeechStreamEvent? {
 }
 
 private val FENCE = Regex("```")
-private val MEDIA_LINE = Regex("""(?m)^[ \t]*MEDIA:\S+[ \t]*\r?\n""")
-private val MEDIA_INLINE = Regex("""(?<!\S)MEDIA:\S+?(?=[.,;:!?)\]]*(?:\s|$))""")
+// Whitespace as Char.isWhitespace has it (a no-break space too), so the regexes and the held-back word agree.
+private const val SPACE = """\s\p{Z}\x1C-\x1F"""
+// The line's indent stays: it may already have been sent before the file came.
+private val MEDIA_LINE = Regex("""(?m)^([ \t]*)MEDIA:[^$SPACE]+[ \t]*\r?\n""")
+private val MEDIA_INLINE = Regex("""(?<![^$SPACE])MEDIA:[^$SPACE]+?(?=[.,;:!?)\]]*(?:[$SPACE]|$))""")
 private const val MEDIA = "MEDIA:"
 
 /**
@@ -158,8 +161,10 @@ private const val MEDIA = "MEDIA:"
  * reply is [complete], nothing is waiting for more: what was held back is voiced.
  */
 fun speakableSoFar(reply: String, complete: Boolean = false): String {
-    val ticks = reply.takeLastWhile { it == '`' }.length
-    val text = if (ticks in 1..2 && !complete) reply.dropLast(ticks) else reply
+    // Fences are cut three backticks at a time from the left, so the one or two after the last whole fence
+    // could still become one.
+    val ticks = reply.takeLastWhile { it == '`' }.length % 3
+    val text = if (complete) reply else reply.dropLast(ticks)
     val out = StringBuilder()
     var start = 0
     var inCode = false
@@ -172,12 +177,12 @@ fun speakableSoFar(reply: String, complete: Boolean = false): String {
     if (!complete) {
         val lastLine = out.substring(out.lastIndexOf("\n") + 1).trimStart()
         if (lastLine.isNotEmpty() && (MEDIA.startsWith(lastLine) || lastLine.startsWith(MEDIA))) {
-            out.setLength(out.lastIndexOf("\n") + 1)
+            out.setLength(out.length - lastLine.length)
         }
         val lastWord = out.takeLastWhile { !it.isWhitespace() }
         if (lastWord.isNotEmpty() && (MEDIA.startsWith(lastWord) || lastWord.startsWith(MEDIA))) {
             out.setLength(out.length - lastWord.length)
         }
     }
-    return out.toString().replace(MEDIA_LINE, "").replace(MEDIA_INLINE, "")
+    return out.toString().replace(MEDIA_LINE, "$1").replace(MEDIA_INLINE, "")
 }

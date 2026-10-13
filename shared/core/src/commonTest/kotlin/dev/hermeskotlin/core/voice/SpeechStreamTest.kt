@@ -63,6 +63,21 @@ class SpeechStreamTest {
         assertEquals("Sure. `x` is set.\n\nMore text, and `` a pair ``.\nMEDI is not a file, nor is ME. Chart: , done. The end `ok`", complete)
     }
 
+    /** No-break spaces, long backtick runs and an indented last line keep it growing too. */
+    @Test
+    fun whatCanBeVoicedOnlyGrowsWithOddSpacingAndBackticks() {
+        for (reply in listOf("see MEDIA:a v1.2 next", "a MEDIA:/x.png b", "```a````` b```c", "Hi.\n  MEDIA:/a.png\nBye.")) {
+            var before = ""
+            for (i in 0..reply.length) {
+                val now = speakableSoFar(reply.substring(0, i))
+                assertTrue(now.startsWith(before), "“$reply” at $i: “$now” doesn't continue “$before”")
+                before = now
+            }
+        }
+        // A file after a no-break space is still a file.
+        assertEquals("a  b", speakableSoFar("a MEDIA:/x.png b"))
+    }
+
     @Test
     fun aWavHeaderDescribesThePcm() {
         val file = wav(ByteArray(8), 24_000)
