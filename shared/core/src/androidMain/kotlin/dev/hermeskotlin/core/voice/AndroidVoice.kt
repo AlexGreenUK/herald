@@ -5,10 +5,17 @@ import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioRecord
+import android.media.AudioTrack
 import android.media.MediaPlayer
 import android.media.MediaRecorder
 import android.media.audiofx.NoiseSuppressor
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.ReceiveChannel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -16,6 +23,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlin.math.min
@@ -116,8 +124,92 @@ class AndroidVoiceRecorder : VoiceRecorder {
     }
 }
 
-/** Plays each reply clip from a cache file with [MediaPlayer], as an assistant voice. */
+/**
+ * Plays each reply clip from a cache file with [MediaPlayer], and streamed speech straight into an
+ * [AudioTrack] as it arrives, both as an assistant voice.
+ */
 class AndroidSpeechPlayer(private val context: Context) : SpeechPlayer {
+
+    override suspend fun playPcm(sampleRate: Int, chunks: ReceiveChannel<ByteArray>, onSound: (Boolean) -> Unit) = coroutineScope {
+        val track = AudioTrack.Builder()
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_ASSISTANT)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build(),
+            )
+            .setAudioFormat(
+                AudioFormat.Builder()
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                    .setSampleRate(sampleRate)
+                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                    .build(),
+            )
+            // Half a second of room: enough to ride out the network's hiccups, little enough to stop at once.
+            .setBufferSizeInBytes(maxOf(AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT), sampleRate))
+            .setTransferMode(AudioTrack.MODE_STREAM)
+            .build()
+        // Frames handed to the track; the head position counts the ones already heard.
+        val written = AtomicLong()
+        fun played(): Long = track.playbackHeadPosition.toLong() and 0xFFFF_FFFFL
+        val sound = launch(Dispatchers.Default) {
+            var on = false
+            var quietSince = 0L
+            while (true) {
+                val now = System.currentTimeMillis()
+                val pending = played() < written.get()
+                if (pending && !on) {
+                    on = true
+                    onSound(true)
+                } else if (!pending && on) {
+                    if (quietSince == 0L) quietSince = now
+                    // The short gaps between sentences aren't the voice stopping.
+                    if (now - quietSince >= QUIET_MS) {
+                        on = false
+                        onSound(false)
+                    }
+                }
+                if (pending) quietSince = 0L
+                delay(POLL_MS)
+            }
+        }
+        try {
+            withContext(Dispatchers.IO) {
+                track.play()
+                // Provider chunks needn't end on a whole sample; an odd byte waits for the next chunk.
+                var carry: Byte? = null
+                for (chunk in chunks) {
+                    val bytes = carry?.let { byteArrayOf(it) + chunk } ?: chunk
+                    val usable = bytes.size - bytes.size % 2
+                    carry = if (usable < bytes.size) bytes.last() else null
+                    var offset = 0
+                    while (offset < usable) {
+                        ensureActive()
+                        val n = track.write(bytes, offset, usable - offset, AudioTrack.WRITE_NON_BLOCKING)
+                        if (n < 0) error("Couldn't play the reply ($n).")
+                        offset += n
+                        written.addAndGet(n / 2L)
+                        if (n == 0) delay(WRITE_WAIT_MS)
+                    }
+                }
+                // Stopping a streaming track plays out what it holds first.
+                track.stop()
+                val deadline = System.currentTimeMillis() + (written.get() - played()) * 1000 / sampleRate + DRAIN_SLACK_MS
+                while (played() < written.get() && System.currentTimeMillis() < deadline) {
+                    ensureActive()
+                    delay(POLL_MS)
+                }
+            }
+        } finally {
+            withContext(NonCancellable) { sound.cancelAndJoin() }
+            onSound(false)
+            runCatching {
+                track.pause()
+                track.flush()
+            }
+            track.release()
+        }
+    }
 
     override suspend fun play(audio: SpokenAudio) {
         val extension = when {
@@ -152,5 +244,12 @@ class AndroidSpeechPlayer(private val context: Context) : SpeechPlayer {
             player.release()
             file.delete()
         }
+    }
+
+    private companion object {
+        const val POLL_MS = 50L
+        const val QUIET_MS = 600L
+        const val WRITE_WAIT_MS = 10L
+        const val DRAIN_SLACK_MS = 400L
     }
 }

@@ -1,5 +1,11 @@
 package dev.hermeskotlin.core.voice
 
+import kotlinx.coroutines.channels.ReceiveChannel
+import kotlinx.io.Buffer
+import kotlinx.io.readByteArray
+import kotlinx.io.writeIntLe
+import kotlinx.io.writeShortLe
+
 /**
  * How a recording decides you're done talking. The timings are Desktop's (tools.voice_mode); the
  * level is lower, since a phone's speech-recognition mic is unboosted where the browser's isn't.
@@ -119,6 +125,44 @@ object NoDeviceDictation : DeviceDictation {
 interface SpeechPlayer {
     /** Plays [audio] to the end; cancelling stops it. */
     suspend fun play(audio: SpokenAudio)
+
+    /**
+     * Plays 16-bit little-endian mono PCM at [sampleRate] as [chunks] arrive, until the channel is closed and
+     * all of it has played; cancelling stops it at once. [onSound] says when sound starts coming out, and when
+     * it has stopped for a moment, as it does while the agent works between sentences.
+     *
+     * A player that can't stream plays it all at once when the channel closes.
+     */
+    suspend fun playPcm(sampleRate: Int, chunks: ReceiveChannel<ByteArray>, onSound: (Boolean) -> Unit = {}) {
+        val pcm = Buffer()
+        for (chunk in chunks) pcm.write(chunk)
+        if (pcm.size == 0L) return
+        onSound(true)
+        try {
+            play(SpokenAudio(wav(pcm.readByteArray(), sampleRate), "audio/wav"))
+        } finally {
+            onSound(false)
+        }
+    }
+}
+
+/** [pcm] (16-bit mono) as a WAV file. */
+fun wav(pcm: ByteArray, sampleRate: Int): ByteArray {
+    val header = Buffer().apply {
+        write("RIFF".encodeToByteArray())
+        writeIntLe(36 + pcm.size)
+        write("WAVEfmt ".encodeToByteArray())
+        writeIntLe(16)
+        writeShortLe(1.toShort()) // PCM
+        writeShortLe(1.toShort()) // mono
+        writeIntLe(sampleRate)
+        writeIntLe(sampleRate * 2)
+        writeShortLe(2.toShort())
+        writeShortLe(16.toShort())
+        write("data".encodeToByteArray())
+        writeIntLe(pcm.size)
+    }
+    return header.readByteArray() + pcm
 }
 
 private val FENCED_CODE = Regex("```[\\s\\S]*?(?:```|$)")
