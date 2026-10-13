@@ -107,6 +107,31 @@ class ThreadsRepository(
     }
 
     /**
+     * Names [thread] [name], and its chat the same. The chat is titled first, since titles are unique and that is
+     * the step that can be refused; a refusal leaves the thread as it was. If saving the thread then fails, the
+     * chat gets its old title back.
+     */
+    suspend fun rename(thread: ChatThread, name: String) {
+        val scope = requireScope()
+        val current = chatOf(thread)
+        val liveId = current?.id ?: thread.sessionId
+        val oldTitle = current?.title?.takeIf { it.isNotBlank() }
+        if (current?.title != name) {
+            val result = sessions.update(scope.url, liveId, title = name, profile = scope.profile)
+            if (result.isTitleTaken()) throw ThreadActionException("Another chat is already named \"$name\".")
+            result.orThrow("Couldn't rename ${thread.name}'s chat.")
+        }
+        try {
+            change { it.renamed(thread.id, name) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            oldTitle?.let { sessions.update(scope.url, liveId, title = it, profile = scope.profile) }
+            throw e
+        }
+    }
+
+    /**
      * Starts [thread] fresh, in an order that never loses the thread's chat: the chat it has now is renamed
      * "<name> · <date time>" (titles are unique, and an archived chat keeps its title), archived and unpinned in one
      * call; a new chat takes the thread's name and is pinned; then the thread is pointed at it. If the new chat

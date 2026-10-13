@@ -608,9 +608,10 @@ class SessionsViewModel(
         threadsRepo.change { it.withoutThread(thread.id) }
     }
 
-    /** Names [thread] [name]; its chat keeps its own title until the thread is started fresh. */
+    /** Names [thread] [name]; its chat is retitled to match. */
     fun renameThread(thread: ChatThread, name: String) = threadAction("Couldn't rename the thread.") {
-        threadsRepo.change { it.renamed(thread.id, name) }
+        threadsRepo.rename(thread, name.trim())
+        load(refresh = false)
     }
 
     /** Moves [thread] one place up, or down with [down]. */

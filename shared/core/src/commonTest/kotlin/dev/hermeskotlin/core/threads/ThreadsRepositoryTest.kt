@@ -133,6 +133,32 @@ class ThreadsRepositoryTest {
     }
 
     @Test
+    fun renamingAThreadRetitlesItsChatToo() = runTest {
+        val repo = repository(backgroundScope)
+        repo.refresh(force = true)
+        repo.noteRows(listOf(SessionSummary("tip", title = "Misc", pinned = true, lineageIds = listOf("old", "tip"))))
+
+        repo.rename(repo.threads.value.first(), "Errands")
+
+        assertEquals("""PATCH tip {"title":"Errands","profile":"work"}""", sent.first { it.startsWith("PATCH") })
+        assertEquals("Errands", savedThreads().first().name)
+    }
+
+    @Test
+    fun aTakenNameLeavesTheThreadAsItWas() = runTest {
+        val repo = repository(backgroundScope, patch = {
+            HttpStatusCode.BadRequest to """{"detail":"Title 'Errands' is already in use"}"""
+        })
+        repo.refresh(force = true)
+        repo.noteRows(listOf(SessionSummary("tip", title = "Misc", pinned = true, lineageIds = listOf("old", "tip"))))
+
+        assertFailsWith<ThreadActionException> { repo.rename(repo.threads.value.first(), "Errands") }
+
+        assertEquals(emptyList(), configured)
+        assertEquals("Misc", repo.threads.value.first().name)
+    }
+
+    @Test
     fun startingFreshFilesTheOldChatAwayBeforeMakingTheNewOne() = runTest {
         val repo = repository(backgroundScope)
         repo.refresh(force = true)
