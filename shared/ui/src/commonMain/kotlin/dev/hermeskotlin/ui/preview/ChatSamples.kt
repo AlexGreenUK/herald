@@ -107,6 +107,27 @@ internal object ChatSamples {
     /** A finished turn: reasoning, tools, a diff and a Markdown answer. */
     val reply: ChatState = connected.copy(messages = listOf(ask, answer))
 
+    private val tableAnswer = ChatMessage.Assistant(
+        key = "a2",
+        text = """
+            Three jobs are still open. Here is where each stands:
+
+            | | Job | Where it stands |
+            |---|---|---|
+            | 🔥 | Backup script | Keeps the last 14 snapshots now. The first cleanup runs tonight and should free about 1.3 TB. |
+            | 🧵 | Photo import | Waiting on the NAS share to be remounted, then it picks up where it stopped. |
+            | 🎸 | Playlist sync | Done. |
+
+            | Disk | Used | Free |
+            |---|---|---|
+            | nas-1 | 1.9 TB | 0.1 TB |
+            | nas-2 | 0.4 TB | 1.6 TB |
+        """.trimIndent(),
+    )
+
+    /** A finished turn whose answer holds tables: a column of emoji, a wordy one, and a plain one. */
+    val tables: ChatState = connected.copy(messages = listOf(ask, tableAnswer))
+
     /** The finished turn with the gateway's notices: credits, and the agent still starting. */
     val notices: ChatState = reply.copy(
         notices = listOf(
