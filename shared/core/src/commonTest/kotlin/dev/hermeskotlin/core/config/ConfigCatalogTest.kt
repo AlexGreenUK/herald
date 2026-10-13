@@ -2,6 +2,7 @@ package dev.hermeskotlin.core.config
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
@@ -191,6 +192,43 @@ class ConfigCatalogTest {
 
         assertEquals(ConfigControl.Number, ConfigCatalog.entry("agent.max_turns", schema, config("""{"agent":{"max_turns":150}}"""))!!.control)
         assertEquals(ConfigControl.Text, ConfigCatalog.entry("agent.max_turns", schema, config("""{"agent":{"max_turns":"150"}}"""))!!.control)
+    }
+
+    @Test
+    fun anUnsetValueIsNoNumber() {
+        // The gateway sends null for a field with no value (x_search.reasoning_effort): it's typed as words.
+        val schema = ConfigSchema(mapOf("x_search.reasoning_effort" to ConfigField("string", "", "x_search")))
+
+        assertEquals(ConfigControl.Text, ConfigCatalog.entry("x_search.reasoning_effort", schema, config("""{"x_search":{"reasoning_effort":null}}"""))!!.control)
+    }
+
+    @Test
+    fun aChoiceOfNumbersSavesANumber() {
+        val schema = ConfigSchema(mapOf("tts.xai.optimize_streaming_latency" to ConfigField("select", "", "tts", listOf(0, 1, 2).map(::JsonPrimitive))))
+
+        val latency = assertIs<ConfigControl.Choice>(ConfigCatalog.entry("tts.xai.optimize_streaming_latency", schema, config("""{"tts":{"xai":{"optimize_streaming_latency":2}}}"""))!!.control)
+
+        assertEquals(listOf("0", "1", "2"), latency.options)
+        assertEquals(JsonPrimitive(1), latency.valueOf("1"))
+        assertTrue(sameConfigValue(JsonPrimitive(2), latency.valueOf("2")))
+    }
+
+    @Test
+    fun aChoiceListsEachOptionOnce() {
+        // The picker keys its rows by option; one twice would crash it.
+        val field = ConfigField("select", "", "x", listOf(JsonNull, JsonPrimitive(""), JsonPrimitive("a"), JsonPrimitive("a")), clearable = true)
+
+        val choice = assertIs<ConfigControl.Choice>(ConfigCatalog.entry("x.mode", ConfigSchema(mapOf("x.mode" to field)), config("{}"))!!.control)
+
+        assertEquals(listOf("", "a"), choice.options)
+    }
+
+    @Test
+    fun withoutDropsOneKey() {
+        val values = config("""{"tts":{"provider":"edge","openai":{"voice":"nova"}}}""")
+
+        assertEquals(config("""{"tts":{"provider":"edge","openai":{}}}"""), values.without("tts.openai.voice"))
+        assertEquals(values, values.without("stt.provider"))
     }
 
     @Test

@@ -18,6 +18,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
@@ -36,8 +37,8 @@ data class ConfigField(
     /** The choices are many (the time zones), so the picker gets a search. */
     val searchable: Boolean = false,
 ) {
-    /** [options] as text, the way the config stores them. */
-    val choices: List<String> get() = options.map { (it as? JsonPrimitive)?.content ?: it.toString() }
+    /** [options] as text, each once; a `null` option is "not set", as `""` is. */
+    val choices: List<String> get() = options.map { if (it is JsonNull) "" else (it as? JsonPrimitive)?.content ?: it.toString() }.distinct()
 }
 
 /** Every setting the gateway knows, and the order Desktop shows its categories in. */

@@ -112,6 +112,7 @@ import kotlinx.coroutines.delay
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
 import org.koin.compose.viewmodel.koinViewModel
 
 /**
@@ -240,7 +241,7 @@ internal fun ConfigView(
 
     ChoiceSheet(picking, onDismiss = { picking = null }, onPick = { entry, value ->
         picking = null
-        actions.set(entry, JsonPrimitive(value))
+        actions.set(entry, (entry.control as? ConfigControl.Choice)?.valueOf(value) ?: JsonPrimitive(value))
     }, onOther = { entry ->
         picking = null
         editing = entry
@@ -468,7 +469,8 @@ internal fun ChoiceSheet(entry: ConfigEntry?, onDismiss: () -> Unit, onPick: (Co
     LaunchedEffect(entry) { if (entry != null) search.edit { replace(0, length, "") } }
     BottomSheet(visible = entry != null, onDismiss = onDismiss) {
         if (e == null || control == null) return@BottomSheet
-        val current = (e.value as? JsonPrimitive)?.content.orEmpty()
+        // Null is "not set", like "".
+        val current = (e.value as? JsonPrimitive)?.contentOrNull.orEmpty()
         SheetHeader(e.label, e.description)
         if (control.searchable) {
             TextField(

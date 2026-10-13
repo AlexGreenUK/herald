@@ -17,7 +17,16 @@ sealed interface ConfigControl {
     data object Toggle : ConfigControl
 
     /** One of [options]; `""` among them is "not set". With [other], a name off the list may be typed too (voices, models). */
-    data class Choice(val options: List<String>, val searchable: Boolean = false, val other: Boolean = false) : ConfigControl
+    data class Choice(
+        val options: List<String>,
+        val searchable: Boolean = false,
+        val other: Boolean = false,
+        /** Options stored as numbers or booleans, by their text, so a pick saves `1` and not `"1"`. */
+        val typed: Map<String, JsonPrimitive> = emptyMap(),
+    ) : ConfigControl {
+        /** What picking [option] saves. */
+        fun valueOf(option: String): JsonPrimitive = typed[option] ?: JsonPrimitive(option)
+    }
 
     data object Number : ConfigControl
     data object Text : ConfigControl
@@ -253,15 +262,20 @@ object ConfigCatalog {
             val current = (value as? JsonPrimitive)?.contentOrNull.orEmpty()
             // A value set by hand that the list doesn't know stays pickable.
             val withCurrent = if (current.isNotEmpty() && current !in options) options + current else options
+            val typed = (field.options + listOfNotNull(value))
+                .filterIsInstance<JsonPrimitive>()
+                .filter { it !is JsonNull && !it.isString }
+                .associateBy { it.content }
             return ConfigControl.Choice(
                 options = if (field.clearable && "" !in withCurrent) listOf("") + withCurrent else withCurrent,
                 searchable = field.searchable || withCurrent.size > 20,
                 other = key in FREE_INPUT,
+                typed = typed,
             )
         }
         return when {
-            // The schema calls a few numbers strings (agent.max_turns); a number stays a number.
-            field.type == "number" || (value is JsonPrimitive && !value.isString && value.booleanOrNull == null) -> ConfigControl.Number
+            // The schema calls a few numbers strings (agent.max_turns); a number stays a number. Null is no number: it's unset.
+            field.type == "number" || (value is JsonPrimitive && value !is JsonNull && !value.isString && value.booleanOrNull == null) -> ConfigControl.Number
             field.type == "list" && (value == null || value.isListOfText()) -> ConfigControl.Lines
             value is JsonObject || value is JsonArray -> ConfigControl.Json
             else -> ConfigControl.Text
@@ -573,6 +587,14 @@ fun JsonObject.with(path: String, value: JsonElement): JsonObject {
     if (head == path) return JsonObject(this + (head to value))
     val child = this[head] as? JsonObject ?: JsonObject(emptyMap())
     return JsonObject(this + (head to child.with(path.substringAfter('.'), value)))
+}
+
+/** This config without the key at [path]; the objects on the way stay. */
+fun JsonObject.without(path: String): JsonObject {
+    val head = path.substringBefore('.')
+    if (head == path) return JsonObject(this - head)
+    val child = this[head] as? JsonObject ?: return this
+    return JsonObject(this + (head to child.without(path.substringAfter('.'))))
 }
 
 /** The smallest config holding just [value] at [path]: what a save sends. */
