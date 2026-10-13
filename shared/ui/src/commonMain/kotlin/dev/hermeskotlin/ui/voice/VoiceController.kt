@@ -26,6 +26,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
@@ -33,7 +34,11 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.flow.transformWhile
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
@@ -106,6 +111,8 @@ class VoiceController(
     private var chatJob: Job? = null
     private var stoppedByUser = false
     private var speechJob: Job? = null
+    /** The gateway whose speech socket couldn't open in this chat; its replies are read out once they're done. */
+    private var noSpeechStream: GatewayUrl? = null
     private var dictationJob: Job? = null
     /** The recognizer the dictation in progress listens with; null when the gateway transcribes it. */
     private var dictating: DeviceDictation? = null
@@ -122,6 +129,7 @@ class VoiceController(
         cancelDictation()
         _chat.value = VoiceChatState(VoicePhase.Listening)
         stoppedByUser = false
+        noSpeechStream = null
         // Held now, on the tap: Android only lets the microphone go to the background from the foreground.
         away = false
         held = keepAlive?.hold(
@@ -261,16 +269,23 @@ class VoiceController(
 
         _chat.update { it.copy(phase = VoicePhase.Thinking, caption = transcript.trim(), captionIsVoice = false) }
         val sentAt = session.state.value.messages.size
-        if (!session.send(transcript)) {
-            _chat.update { it.copy(error = session.state.value.error ?: "Couldn't send that.") }
-            return true
-        }
-        // The turn starts once the gateway takes it; then wait for it to end.
-        withTimeoutOrNull(TURN_START_MS) { session.state.first { it.running } }
-        // Voiced while it's written where the gateway can; otherwise read out once it's done.
-        val voiced = speakAsWritten(session, sentAt, gateway, profile)
+        val voiced = coroutineScope {
+            // The speech socket opens while the prompt goes out, so the first words don't wait for it.
+            val opening = async { openSpeech(gateway, profile) }
+            if (!session.send(transcript)) {
+                opening.await()?.let { withContext(NonCancellable) { it.close() } }
+                _chat.update { it.copy(error = session.state.value.error ?: "Couldn't send that.") }
+                return@coroutineScope null
+            }
+            // The turn starts once the gateway takes it.
+            withTimeoutOrNull(TURN_START_MS) { session.state.first { it.running } }
+            // Voiced while it's written where the gateway can; otherwise read out once it's done.
+            speakAsWritten(opening.await(), session, sentAt)
+        } ?: return true
+        // Skipped while the agent is still at work: listen again now rather than once it's done.
+        if (voiced == Voiced.Skipped) return true
         session.state.first { !it.running }
-        if (voiced) return true
+        if (voiced == Voiced.Yes) return true
         val reply = session.state.value.messages.drop(sentAt).lastOrNull { it is ChatMessage.Assistant } as? ChatMessage.Assistant
         val text = reply?.text?.let(::speakableText).orEmpty()
         if (text.isEmpty()) return true
@@ -283,13 +298,13 @@ class VoiceController(
     /**
      * Voices the reply while the agent is still writing it (`/api/audio/speak-stream`): its text goes to the
      * gateway as it streams in, and the audio plays as it comes back, so the first sentence is heard long
-     * before the reply is finished. False when the gateway can't (an older one, or it made no audio at all),
-     * so the finished reply is read out instead. Skipping it counts as voiced.
+     * before the reply is finished. [Voiced.No] when the gateway can't (an older one), made no audio at all,
+     * or the voice broke off (the socket dropped, the player failed), so the finished reply is read out instead.
      */
-    private suspend fun speakAsWritten(session: ChatSession, sentAt: Int, gateway: GatewayUrl, profile: String?): Boolean {
-        val stream = speechStreams?.open(gateway, profile) ?: return false
-        var heard = false
+    private suspend fun speakAsWritten(stream: SpeechStream?, session: ChatSession, sentAt: Int): Voiced {
+        stream ?: return Voiced.No
         var ended = false
+        var playFailed = false
         var skipped = false
         try {
             coroutineScope {
@@ -298,15 +313,26 @@ class VoiceController(
                     coroutineScope {
                         val audio = Channel<ByteArray>(Channel.UNLIMITED)
                         val feeding = launch { feedReply(stream, session, sentAt) }
-                        var sampleRate = 0
-                        stream.events.collect { event ->
+                        var format: SpeechStreamEvent.Start? = null
+                        var playing = false
+                        // A player that failed hears nothing more; the finished reply is read out instead.
+                        stream.events.takeWhile { !playFailed }.collect { event ->
                             when (event) {
-                                is SpeechStreamEvent.Start -> sampleRate = event.sampleRate
+                                is SpeechStreamEvent.Start -> format = event
                                 is SpeechStreamEvent.Audio -> {
+                                    val start = format ?: return@collect
                                     // The player starts with the first sound, not before: a reply with nothing to say plays nothing.
-                                    if (!heard && sampleRate > 0) launch { playStreamed(sampleRate, audio) }
-                                    heard = heard || sampleRate > 0
-                                    audio.send(event.pcm)
+                                    if (!playing) {
+                                        playing = true
+                                        launch {
+                                            if (!playStreamed(start, audio)) {
+                                                playFailed = true
+                                                // Nothing will take the rest: it isn't kept.
+                                                audio.cancel()
+                                            }
+                                        }
+                                    }
+                                    audio.trySend(event.pcm)
                                 }
                                 SpeechStreamEvent.End -> ended = true
                                 SpeechStreamEvent.Fallback -> Unit
@@ -325,30 +351,47 @@ class VoiceController(
             speechJob = null
             withContext(NonCancellable) { stream.close() }
         }
-        return heard || ended || skipped
+        return when {
+            skipped -> Voiced.Skipped
+            ended && !playFailed -> Voiced.Yes
+            else -> Voiced.No
+        }
     }
 
-    private suspend fun playStreamed(sampleRate: Int, audio: Channel<ByteArray>) {
-        try {
-            player.playPcm(sampleRate, audio, ::onSound)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            _chat.update { it.copy(error = e.message ?: "Couldn't play the reply.") }
-        }
+    /** The speech socket for one reply, unless this gateway has already shown it has none. */
+    private suspend fun openSpeech(gateway: GatewayUrl, profile: String?): SpeechStream? {
+        val streams = speechStreams?.takeIf { gateway != noSpeechStream } ?: return null
+        return streams.open(gateway, profile).also { if (it == null) noSpeechStream = gateway }
+    }
+
+    /** Plays the voice as it streams in; false when the player failed. */
+    private suspend fun playStreamed(format: SpeechStreamEvent.Start, audio: Channel<ByteArray>): Boolean = try {
+        player.playPcm(format.sampleRate, format.channels, audio, ::onSound)
+        true
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Exception) {
+        false
     }
 
     /** Sends the reply's text to [stream] as it's written, and its end once the turn is over; the captions follow it. */
     private suspend fun feedReply(stream: SpeechStream, session: ChatSession, sentAt: Int) {
         var sent = ""
-        session.state.transformWhile { emit(it); it.running }.collect { state ->
-            val now = speakableSoFar(replyText(state.messages, sentAt))
-            if (now.length > sent.length) {
-                stream.append(now.substring(sent.length))
-                sent = now
-                _chat.update { it.copy(caption = speakableText(now), captionIsVoice = true) }
+        session.state
+            .transformWhile { emit(it); it.running }
+            .map { replyText(it.messages, sentAt) to !it.running }
+            .distinctUntilChanged()
+            // Behind a fast reply, only the latest of it matters.
+            .conflate()
+            .collect { (reply, complete) ->
+                val now = speakableSoFar(reply, complete)
+                val unsent = unsentSpeech(sent, now)
+                if (unsent.isNotEmpty()) {
+                    stream.append(unsent)
+                    sent = now
+                    _chat.update { it.copy(caption = speakableText(now), captionIsVoice = true) }
+                }
             }
-        }
         stream.finish()
     }
 
@@ -490,9 +533,27 @@ class VoiceController(
     }
 }
 
-/** Everything the agent has written since the prompt at [sentAt], its messages a paragraph apart. */
+/** Whether a reply was voiced as it was written. */
+private enum class Voiced { Yes, No, Skipped }
+
+/**
+ * Everything the agent has written since the prompt at [sentAt], its messages a paragraph apart. Empty ones
+ * add nothing, so one that comes or goes (a turn with no words) doesn't shift what's after it.
+ */
 internal fun replyText(messages: List<ChatMessage>, sentAt: Int): String =
-    messages.drop(sentAt).filterIsInstance<ChatMessage.Assistant>().joinToString("\n\n") { it.text }
+    messages.drop(sentAt).filterIsInstance<ChatMessage.Assistant>().filter { it.text.isNotBlank() }.joinToString("\n\n") { it.text }
+
+/**
+ * What of the speakable reply [now] hasn't been sent yet, after [sent]: what was added to it. Where the reply
+ * was rewritten under what was sent (the transcript read again), the words from where the two part; what was
+ * already said can't be taken back.
+ */
+internal fun unsentSpeech(sent: String, now: String): String {
+    if (now.startsWith(sent)) return now.substring(sent.length)
+    if (now.length <= sent.length) return ""
+    val common = now.commonPrefixWith(sent)
+    return now.substring(common.indexOfLast { it.isWhitespace() } + 1)
+}
 
 /**
  * Why a live call couldn't start, in a line: the vendor's own message when the gateway passed one on (no

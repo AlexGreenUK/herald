@@ -130,7 +130,14 @@ class AndroidVoiceRecorder : VoiceRecorder {
  */
 class AndroidSpeechPlayer(private val context: Context) : SpeechPlayer {
 
-    override suspend fun playPcm(sampleRate: Int, chunks: ReceiveChannel<ByteArray>, onSound: (Boolean) -> Unit) = coroutineScope {
+    override suspend fun playPcm(sampleRate: Int, channels: Int, chunks: ReceiveChannel<ByteArray>, onSound: (Boolean) -> Unit) = coroutineScope {
+        val mask = when (channels) {
+            1 -> AudioFormat.CHANNEL_OUT_MONO
+            2 -> AudioFormat.CHANNEL_OUT_STEREO
+            else -> error("Can't play $channels-channel speech.")
+        }
+        // A frame is a 16-bit sample for each channel.
+        val frameBytes = 2 * channels
         val track = AudioTrack.Builder()
             .setAudioAttributes(
                 AudioAttributes.Builder()
@@ -142,11 +149,11 @@ class AndroidSpeechPlayer(private val context: Context) : SpeechPlayer {
                 AudioFormat.Builder()
                     .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
                     .setSampleRate(sampleRate)
-                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                    .setChannelMask(mask)
                     .build(),
             )
             // Half a second of room: enough to ride out the network's hiccups, little enough to stop at once.
-            .setBufferSizeInBytes(maxOf(AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT), sampleRate))
+            .setBufferSizeInBytes(maxOf(AudioTrack.getMinBufferSize(sampleRate, mask, AudioFormat.ENCODING_PCM_16BIT), sampleRate * channels))
             .setTransferMode(AudioTrack.MODE_STREAM)
             .build()
         // Frames handed to the track; the head position counts the ones already heard.
@@ -176,19 +183,19 @@ class AndroidSpeechPlayer(private val context: Context) : SpeechPlayer {
         try {
             withContext(Dispatchers.IO) {
                 track.play()
-                // Provider chunks needn't end on a whole sample; an odd byte waits for the next chunk.
-                var carry: Byte? = null
+                // Provider chunks needn't end on a whole frame; what's left over waits for the next chunk.
+                var carry = ByteArray(0)
                 for (chunk in chunks) {
-                    val bytes = carry?.let { byteArrayOf(it) + chunk } ?: chunk
-                    val usable = bytes.size - bytes.size % 2
-                    carry = if (usable < bytes.size) bytes.last() else null
+                    val bytes = if (carry.isEmpty()) chunk else carry + chunk
+                    val usable = bytes.size - bytes.size % frameBytes
+                    carry = bytes.copyOfRange(usable, bytes.size)
                     var offset = 0
                     while (offset < usable) {
                         ensureActive()
                         val n = track.write(bytes, offset, usable - offset, AudioTrack.WRITE_NON_BLOCKING)
                         if (n < 0) error("Couldn't play the reply ($n).")
                         offset += n
-                        written.addAndGet(n / 2L)
+                        written.addAndGet(n.toLong() / frameBytes)
                         if (n == 0) delay(WRITE_WAIT_MS)
                     }
                 }

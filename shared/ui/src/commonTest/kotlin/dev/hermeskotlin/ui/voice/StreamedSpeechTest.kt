@@ -2,6 +2,7 @@ package dev.hermeskotlin.ui.voice
 
 import dev.hermeskotlin.core.auth.AuthApi
 import dev.hermeskotlin.core.auth.PersistentCookiesStorage
+import dev.hermeskotlin.core.chat.ChatMessage
 import dev.hermeskotlin.core.chat.ChatSession
 import dev.hermeskotlin.core.connection.ConnectionState
 import dev.hermeskotlin.core.connection.GatewayConnection
@@ -35,6 +36,7 @@ import kotlinx.coroutines.flow.transformWhile
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.yield
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -76,11 +78,11 @@ class StreamedSpeechTest {
         }
     }
 
-    /** Hears one request, then listens for good. */
-    private class OneRequest : VoiceRecorder {
+    /** Hears one request (or [requests] of them), then listens for good. */
+    private class OneRequest(val requests: Int = 1) : VoiceRecorder {
         var recordings = 0
         override suspend fun record(activity: VoiceActivity, onLevel: (Float) -> Unit, onSpeech: () -> Unit): Recording {
-            if (recordings++ > 0) awaitCancellation()
+            if (recordings++ >= requests) awaitCancellation()
             onSpeech()
             return Recording(byteArrayOf(1, 2, 3), "audio/wav", heardSpeech = true)
         }
@@ -88,16 +90,21 @@ class StreamedSpeechTest {
         override fun finish() = Unit
     }
 
-    private class Player : SpeechPlayer {
+    private class Player(val fails: Boolean = false) : SpeechPlayer {
         val clips = mutableListOf<SpokenAudio>()
         val streamed = MutableStateFlow<List<ByteArray>>(emptyList())
         var rate = 0
+        var channels = 0
+        var pcm: ReceiveChannel<ByteArray>? = null
         override suspend fun play(audio: SpokenAudio) {
             clips += audio
         }
 
-        override suspend fun playPcm(sampleRate: Int, chunks: ReceiveChannel<ByteArray>, onSound: (Boolean) -> Unit) {
+        override suspend fun playPcm(sampleRate: Int, channels: Int, chunks: ReceiveChannel<ByteArray>, onSound: (Boolean) -> Unit) {
             rate = sampleRate
+            this.channels = channels
+            pcm = chunks
+            if (fails) error("No audio track.")
             onSound(true)
             for (chunk in chunks) streamed.update { it + chunk }
             onSound(false)
@@ -128,7 +135,10 @@ class StreamedSpeechTest {
     private class Setup(val socket: Socket, val voice: VoiceController, val player: Player, val spoken: MutableList<String>)
 
     /** A chained voice chat on a chat whose gateway voices replies through [stream], or can't when it's null. */
-    private suspend fun TestScope.chat(stream: Stream?): Setup {
+    private suspend fun TestScope.chat(stream: Stream?, player: Player = Player()): Setup =
+        chat(player) { stream }
+
+    private suspend fun TestScope.chat(player: Player = Player(), recorder: VoiceRecorder = OneRequest(), streams: () -> SpeechStream?): Setup {
         val spoken = mutableListOf<String>()
         val client = createHttpClient(
             MockEngine { request ->
@@ -150,8 +160,7 @@ class StreamedSpeechTest {
         connection.state.first { it is ConnectionState.Connected }
         val session = ChatSession(gateway, null, null, connection, SessionsApi(client), backgroundScope)
         session.start()
-        val player = Player()
-        val voice = VoiceController(AudioApi(client), OneRequest(), player, backgroundScope, backgroundScope, speechStreams = { _, _ -> stream })
+        val voice = VoiceController(AudioApi(client), recorder, player, backgroundScope, backgroundScope, speechStreams = { _, _ -> streams() })
         voice.startChat(session, gateway, "rin")
         socket.submits.first { it.isNotEmpty() }
         return Setup(socket, voice, player, spoken)
@@ -239,5 +248,131 @@ class StreamedSpeechTest {
         assertTrue(setup.spoken.isEmpty())
         assertFalse(setup.player.clips.isNotEmpty())
         setup.voice.stopChat()
+    }
+
+    /** Skip says "tap skip to talk again": with the agent still at work, that's now, not once it's done. */
+    @Test
+    fun skippingWhileTheAgentStillWorksListensAgainAtOnce() = runTest {
+        val stream = Stream()
+        val setup = chat(stream)
+
+        setup.socket.event("message.start")
+        setup.socket.event("message.delta", """{"text":"Let me look into it. "}""")
+        stream.appended.first { it.isNotEmpty() }
+        stream.gateway.send(SpeechStreamEvent.Start(sampleRate = 24_000, channels = 2))
+        stream.gateway.send(SpeechStreamEvent.Audio(byteArrayOf(1, 0, 2, 0)))
+        setup.voice.chat.first { it.phase == VoicePhase.Speaking }
+        // Played as the gateway sent it.
+        assertEquals(2, setup.player.channels)
+
+        // The agent goes on with its tools; the turn hasn't ended.
+        setup.voice.skipSpeech()
+
+        setup.voice.chat.first { it.phase == VoicePhase.Listening }
+        assertTrue(stream.closed)
+        assertTrue(setup.spoken.isEmpty())
+        setup.voice.stopChat()
+    }
+
+    @Test
+    fun aVoiceThatBrokeOffReadsTheFinishedReply() = runTest {
+        val stream = Stream()
+        val setup = chat(stream)
+
+        setup.socket.event("message.start")
+        setup.socket.event("message.delta", """{"text":"It was good. "}""")
+        stream.appended.first { it.isNotEmpty() }
+        stream.gateway.send(SpeechStreamEvent.Start(sampleRate = 24_000))
+        stream.gateway.send(SpeechStreamEvent.Audio(byteArrayOf(1, 0)))
+        setup.player.streamed.first { it.size == 1 }
+        // The socket drops after the first sentence: the rest would never be heard.
+        stream.gateway.close()
+        setup.socket.event("message.delta", """{"text":"And then some."}""")
+        setup.socket.event("message.complete","""{"text":"It was good. And then some.","status":"complete"}""")
+
+        setup.voice.chat.first { it.phase == VoicePhase.Listening && setup.spoken.isNotEmpty() }
+        assertEquals(listOf("It was good. And then some."), setup.spoken)
+        setup.voice.stopChat()
+    }
+
+    @Test
+    fun aPlayerThatFailsKeepsNoAudioAndReadsTheFinishedReply() = runTest {
+        val stream = Stream()
+        val setup = chat(stream, Player(fails = true))
+
+        setup.socket.event("message.start")
+        setup.socket.event("message.delta", """{"text":"It was good. "}""")
+        stream.appended.first { it.isNotEmpty() }
+        stream.gateway.send(SpeechStreamEvent.Start(sampleRate = 24_000))
+        stream.gateway.send(SpeechStreamEvent.Audio(byteArrayOf(1, 0)))
+        val pcm = setup.player.pcmChannel()
+        stream.gateway.send(SpeechStreamEvent.Audio(byteArrayOf(2, 0)))
+        // Nobody would read it: the audio isn't piling up.
+        while (!pcm.isClosedForReceive) yield()
+        setup.socket.event("message.complete", """{"text":"It was good.","status":"complete"}""")
+
+        setup.voice.chat.first { it.phase == VoicePhase.Listening && setup.spoken.isNotEmpty() }
+        assertEquals(listOf("It was good."), setup.spoken)
+        setup.voice.stopChat()
+    }
+
+    @Test
+    fun whatWasHeldBackIsSentWhenTheReplyEnds() = runTest {
+        val stream = Stream()
+        val setup = chat(stream)
+
+        setup.socket.event("message.start")
+        setup.socket.event("message.delta", """{"text":"Try running `ls`"}""")
+        stream.appended.first { it.isNotEmpty() }
+        setup.socket.event("message.complete", """{"text":"Try running `ls`","status":"complete"}""")
+
+        stream.appended.first { it == "Try running `ls`" }
+        stream.gateway.send(SpeechStreamEvent.End)
+        setup.voice.chat.first { it.phase == VoicePhase.Listening && stream.closed }
+        assertTrue(stream.finished)
+        setup.voice.stopChat()
+    }
+
+    /** An older gateway without the socket isn't asked again every turn. */
+    @Test
+    fun aGatewayWithoutTheSocketIsAskedOnce() = runTest {
+        var opens = 0
+        val setup = chat(recorder = OneRequest(requests = 2)) { opens++; null }
+
+        setup.socket.event("message.start")
+        setup.socket.event("message.complete", """{"text":"One.","status":"complete"}""")
+        setup.socket.submits.first { it.size == 2 }
+        setup.socket.event("message.start")
+        setup.socket.event("message.complete", """{"text":"Two.","status":"complete"}""")
+
+        setup.voice.chat.first { it.phase == VoicePhase.Listening && setup.spoken.size == 2 }
+        assertEquals(listOf("One.", "Two."), setup.spoken)
+        assertEquals(1, opens)
+        setup.voice.stopChat()
+    }
+
+    @Test
+    fun theReplySentIsWhatWasAddedOrWhereItWasRewritten() {
+        assertEquals("world.", unsentSpeech("Hello ", "Hello world."))
+        assertEquals("", unsentSpeech("Hello world.", "Hello world."))
+        // Rewritten under it: from the word where they part, never half a word.
+        assertEquals("car is red.", unsentSpeech("The cat", "The car is red."))
+        assertEquals("", unsentSpeech("The cat is", "The car"))
+    }
+
+    @Test
+    fun aReplyWithNoWordsDoesntShiftTheRest() {
+        val withEmpty = listOf(
+            ChatMessage.User("u", "Hi"),
+            ChatMessage.Assistant("a1", ""),
+            ChatMessage.Assistant("a2", "Hello."),
+        )
+        assertEquals("Hello.", replyText(withEmpty, 1))
+        assertEquals(replyText(withEmpty, 1), replyText(withEmpty - withEmpty[1], 1))
+    }
+
+    private suspend fun Player.pcmChannel(): ReceiveChannel<ByteArray> {
+        while (pcm == null) yield()
+        return pcm!!
     }
 }
