@@ -29,6 +29,12 @@ data class SeenChats(val since: Double, val chats: Map<String, Double> = emptyMa
         val activity = session.activityAt ?: return false
         return activity > (chats[session.id] ?: since) + SEEN_SLACK_SECONDS
     }
+
+    /**
+     * The activity time [session] had when the user last looked at it, for marking where the new messages
+     * start; null when nothing has happened in it since.
+     */
+    fun readUpTo(session: SessionSummary): Double? = if (isUnread(session)) chats[session.id] ?: since else null
 }
 
 /** Timestamps from the gateway and this phone's clock round differently. */

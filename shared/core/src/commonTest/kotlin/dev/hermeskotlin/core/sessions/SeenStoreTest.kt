@@ -5,7 +5,9 @@ import dev.hermeskotlin.core.storage.InMemoryKeyValueStore
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class SeenStoreTest {
@@ -21,6 +23,18 @@ class SeenStoreTest {
 
         assertFalse(seen.isUnread(session("old", at = 900.0)))
         assertTrue(seen.isUnread(session("new", at = 1_100.0)))
+    }
+
+    @Test
+    fun readUpToIsWhereTheUserLastLookedAndOnlyWhenSomethingIsNew() = runTest {
+        val store = SeenStore(InMemoryKeyValueStore()) { clock }
+        store.markSeen(home, session("s1", at = 1_200.0))
+        val seen = store.seen(home).first()
+
+        assertEquals(1_200.0, seen.readUpTo(session("s1", at = 1_300.0)))
+        assertNull(seen.readUpTo(session("s1", at = 1_200.0)))
+        // Never opened on this phone: everything since tracking started is new.
+        assertEquals(1_000.0, seen.readUpTo(session("s2", at = 1_100.0)))
     }
 
     @Test

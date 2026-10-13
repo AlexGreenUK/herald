@@ -209,7 +209,8 @@ fun SessionsSidebar(
     profile: String?,
     selectedId: String?,
     visible: Boolean,
-    onOpenSession: (SessionSummary) -> Unit,
+    /** Opens a chat, with how far it had been read when it has new messages since (null otherwise). */
+    onOpenSession: (session: SessionSummary, readUpTo: Double?) -> Unit,
     /** A new chat; [cwd] is the folder of the project the list shows, when one is picked. */
     onNewChat: (cwd: String?) -> Unit,
     onDeleted: (SessionSummary) -> Unit,
@@ -331,8 +332,10 @@ fun SessionsSidebar(
     }
 
     val open: (SessionSummary) -> Unit = {
+        // Taken before the chat counts as read, so it can show where the new messages start.
+        val readUpTo = viewModel.readUpTo(it)
         viewModel.markSeen(it)
-        onOpenSession(it)
+        onOpenSession(it, readUpTo)
         if (searchOpen) closeSearch()
     }
     // The open chat is being read, so whatever it has said is seen.

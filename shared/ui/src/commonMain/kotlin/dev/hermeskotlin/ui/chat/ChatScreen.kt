@@ -25,6 +25,7 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -418,6 +419,8 @@ fun ChatScreen(
         notice = notice,
         actions = viewModel,
         editing = viewModel.editing.collectAsStateWithLifecycle().value,
+        // Only for the chat it was taken for, not one the screen moved on to (a branch, a fresh start).
+        readUpTo = target.readUpTo?.takeIf { state.storedSessionId == target.storedSessionId },
         onOpenSidebar = onOpenSidebar,
         // Already on an untouched new chat: nothing to start over from.
         onNewChat = onNewChat.takeIf { target.storedSessionId != null || state.messages.isNotEmpty() },
@@ -538,6 +541,8 @@ internal fun ChatView(
     actions: ChatActions,
     /** The prompt being edited in the composer, whose send replaces it. */
     editing: String? = null,
+    /** How far this chat had been read when it was opened (epoch seconds); later messages are marked new. */
+    readUpTo: Double? = null,
     onOpenSidebar: () -> Unit,
     onNewChat: (() -> Unit)?,
     onOpenMenu: (() -> Unit)?,
@@ -653,6 +658,7 @@ internal fun ChatView(
                                 // A saved copy may lack what changed since; edits wait for the gateway's transcript.
                                 canChange = state.canChangeChat(connected && state.savedCopyAt == null),
                                 editing = editing,
+                                readUpTo = readUpTo,
                             )
                         }
                     } else Box(Modifier.fillMaxSize().padding(bottom = dockInset)) {
@@ -1165,6 +1171,8 @@ private fun Messages(
     connected: Boolean,
     canChange: Boolean,
     editing: String?,
+    /** How far the chat had been read when it was opened (epoch seconds); later messages are marked new. */
+    readUpTo: Double? = null,
 ) {
     var confirm by remember { mutableStateOf<Pair<MessageChange, String>?>(null) }
     val lastPrompt = messages.lastOrNull { it is ChatMessage.User }?.key
@@ -1228,6 +1236,26 @@ private fun Messages(
     var seenTail by remember { mutableStateOf(tail) }
     LaunchedEffect(awayFromBottom, tail) { if (!awayFromBottom) seenTail = tail }
     val newBelow = awayFromBottom && tail != seenTail
+    // Where the messages that came since the chat was last read begin, fixed for this visit so reading on
+    // doesn't move it. Older pages load first while every loaded message is still new.
+    var unreadFrom by remember(readUpTo) { mutableStateOf<String?>(null) }
+    var unreadPagesLoaded by remember(readUpTo) { mutableStateOf(0) }
+    LaunchedEffect(readUpTo, messages, olderMessages, loadingOlder) {
+        if (readUpTo == null || unreadFrom != null || loadingOlder) return@LaunchedEffect
+        if (needsOlderForUnread(messages, readUpTo, olderMessages) && unreadPagesLoaded < UNREAD_PAGE_LIMIT) {
+            unreadPagesLoaded++
+            actions.loadOlder()
+            return@LaunchedEffect
+        }
+        val key = firstUnreadKey(messages, readUpTo) ?: return@LaunchedEffect
+        unreadFrom = key
+        val index = messages.indexOfFirst { it.key == key }
+        if (index >= 0) {
+            // Opened at the line instead of the end, so reading starts where it was left.
+            pinned = false
+            listState.scrollToItem(index)
+        }
+    }
     val unservable = remember(messages) { unservableEchoes(messages) }
     Box(Modifier.fillMaxSize()) {
         LazyColumn(
@@ -1242,6 +1270,9 @@ private fun Messages(
                 val linkedAbove = partner != null && partners.getOrNull(index - 1) == partner
                 val linkedBelow = partner != null && partners.getOrNull(index + 1) == partner
                 val rail = partner?.let { name -> faces.find(name)?.let { Color(0xFF000000 or botLook(it).color.toLong()) } }
+                Column {
+                // The line marking where the new messages start sits on top of the first of them.
+                if (message.key == unreadFrom) UnreadDivider(Modifier.padding(bottom = 20.dp))
                 Box(
                     Modifier.drawBehind {
                         if (rail != null && (linkedAbove || linkedBelow)) {
@@ -1294,6 +1325,7 @@ private fun Messages(
                     is ChatMessage.Event -> TranscriptEventRow(message.event)
                     is ChatMessage.Command -> CommandOutput(message)
                     is ChatMessage.Notice -> NoticeLine(message)
+                }
                 }
                 }
             }
@@ -1982,6 +2014,60 @@ private fun NoticeLine(message: ChatMessage.Notice) {
         Text(message.text, style = Theme[typography][caption], color = Theme[colors][textTertiary])
     }
 }
+
+/** "New messages" between hairlines, above the first message that came since the chat was last read. */
+@Composable
+private fun UnreadDivider(modifier: Modifier = Modifier) {
+    val line = Theme[colors][accentText].copy(alpha = 0.45f)
+    Row(
+        modifier.fillMaxWidth().semantics { heading() },
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.weight(1f).height(1.dp).background(line))
+        Text("New messages", style = Theme[typography][caption], color = Theme[colors][accentText])
+        Box(Modifier.weight(1f).height(1.dp).background(line))
+    }
+}
+
+/**
+ * The first message newer than [readUpTo] (epoch seconds) that the person would call new: a reply, a prompt
+ * from elsewhere, or another bot's row. Messages without a time (a reply still streaming) count as new.
+ * Null when every message is older, or when nothing in [messages] is new.
+ */
+internal fun firstUnreadKey(messages: List<ChatMessage>, readUpTo: Double): String? {
+    val first = messages.indexOfFirst { it.isNewerThan(readUpTo) }
+    if (first < 0) return null
+    return messages[first].key
+}
+
+/**
+ * Whether the line can't be placed yet: every loaded message is new and the conversation goes back further,
+ * so the first new message may be on an older page.
+ */
+internal fun needsOlderForUnread(messages: List<ChatMessage>, readUpTo: Double, olderMessages: Boolean): Boolean =
+    olderMessages && messages.firstNotNullOfOrNull { it.sentAt }?.let { it > readUpTo } != false
+
+/** When a prompt or reply happened (epoch seconds); null for other rows and for a reply still streaming. */
+private val ChatMessage.sentAt: Double?
+    get() = when (this) {
+        is ChatMessage.User -> timestamp
+        is ChatMessage.Assistant -> timestamp
+        else -> null
+    }
+
+private fun ChatMessage.isNewerThan(readUpTo: Double): Boolean = when (this) {
+    is ChatMessage.User -> (timestamp ?: return false) > readUpTo + UNREAD_SLACK_SECONDS
+    // A reply with no time yet is still being written, so it came after the last look.
+    is ChatMessage.Assistant -> (timestamp ?: Double.MAX_VALUE) > readUpTo + UNREAD_SLACK_SECONDS
+    else -> false
+}
+
+/** Same slack as the sidebar's unread dot: the gateway and the phone round times differently. */
+private const val UNREAD_SLACK_SECONDS = 1.0
+
+/** How many older pages are fetched at most to find where the new messages start. */
+private const val UNREAD_PAGE_LIMIT = 5
 
 /** A slash command and what it printed: a quiet outlined card in the terminal face, local to this device. */
 @Composable
