@@ -52,6 +52,7 @@ import com.composables.icons.lucide.Blocks
 import com.composables.icons.lucide.ChevronRight
 import com.composables.icons.lucide.Cpu
 import com.composables.icons.lucide.Lucide
+import com.composables.icons.lucide.SlidersHorizontal
 import com.composeunstyled.Text
 import com.composeunstyled.UnstyledIcon
 import com.composeunstyled.theme.Theme
@@ -111,6 +112,8 @@ fun BotEditor(
     onPickModel: () -> Unit = {},
     /** Opens the bot's skills, tools and connectors. */
     onCapabilities: () -> Unit = {},
+    /** Opens the bot's own Hermes settings. */
+    onConfig: () -> Unit = {},
 ) {
     PlatformBackHandler(enabled = busy == null, onBack = onBack)
     val meta = bot?.meta ?: BotMeta()
@@ -241,6 +244,8 @@ fun BotEditor(
                             )
                             Box(Modifier.fillMaxWidth().height(1.dp).background(Theme[colors][stroke]))
                             SettingRow(Lucide.Blocks, "Skills, tools and connectors", "What ${bot.label} can use in its chats", onClick = onCapabilities)
+                            Box(Modifier.fillMaxWidth().height(1.dp).background(Theme[colors][stroke]))
+                            SettingRow(Lucide.SlidersHorizontal, "Config", "${bot.label}'s voice, memory, approvals and the rest", onClick = onConfig)
                         }
                     }
                 }

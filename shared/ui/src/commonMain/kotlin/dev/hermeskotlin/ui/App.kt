@@ -52,6 +52,7 @@ import dev.hermeskotlin.ui.chat.ChatViewModel
 import dev.hermeskotlin.ui.chat.ModelConfirmDialog
 import dev.hermeskotlin.ui.chat.ModelSheet
 import dev.hermeskotlin.ui.sessions.CapabilitiesPage
+import dev.hermeskotlin.ui.sessions.ConfigPage
 import dev.hermeskotlin.core.chat.ChatState
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.safeDrawing
@@ -397,6 +398,7 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
         val modelPicker by bots.modelPicker.collectAsStateWithLifecycle()
         var pickingModel by remember { mutableStateOf(false) }
         var capabilitiesOpen by remember { mutableStateOf(false) }
+        var configOpen by remember { mutableStateOf(false) }
         val live = target.bot?.let { edited -> roster.all.firstOrNull { it.name == edited.name } ?: edited }
         BotEditor(
             bot = target.bot,
@@ -416,6 +418,7 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
             live = live,
             onPickModel = { pickingModel = true },
             onCapabilities = { capabilitiesOpen = true },
+            onConfig = { configOpen = true },
         )
         live?.let { bot ->
             ModelSheet(
@@ -447,6 +450,20 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
                         // Hermes fixes a chat's tools when it starts (#124211).
                         note = "Changes apply to ${bot.label}'s new chats. If its Bot Chat doesn't pick one up, Start fresh gives it a new chat with everything set here.",
                         viewModel = koinViewModel(key = "capabilities-${bot.name}"),
+                    )
+                }
+            }
+            if (configOpen) {
+                PlatformBackHandler(enabled = true) { configOpen = false }
+                Box(Modifier.fillMaxSize().background(Theme[colors][background]).windowInsetsPadding(WindowInsets.safeDrawing)) {
+                    ConfigPage(
+                        gateway = route.gateway,
+                        profile = bot.name,
+                        onBack = { configOpen = false },
+                        onSessionExpired = app::onSessionExpired,
+                        title = "${bot.label}'s config",
+                        note = "${bot.label}'s own settings, saved to its profile's config.yaml. Most apply from its next chat.",
+                        viewModel = koinViewModel(key = "config-${bot.name}"),
                     )
                 }
             }
