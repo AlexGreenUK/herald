@@ -353,7 +353,13 @@ fun ChatScreen(
         }
     }
     // Dictation stops when the app leaves the screen; a voice chat goes on like a call (VoiceController.onBackground).
-    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { viewModel.voice.onBackground() }
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) {
+        viewModel.voice.onBackground()
+        viewModel.onScreen(false)
+    }
+    LifecycleEventEffect(Lifecycle.Event.ON_START) { viewModel.onScreen(true) }
+    // A room replacing the chat takes it off screen without a stop.
+    DisposableEffect(viewModel) { onDispose { viewModel.onScreen(false) } }
     LaunchedEffect(viewModel) {
         viewModel.requests.collect { request ->
             when (request) {

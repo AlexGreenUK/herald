@@ -4,4 +4,5 @@
     <string name="shortcut_new_chat">New chat</string>
     <string name="shortcut_voice_short">Dictate</string>
     <string name="shortcut_voice">New chat with voice</string>
+    <string name="shortcut_voice_chat">Call Hermes</string>
 </resources>
