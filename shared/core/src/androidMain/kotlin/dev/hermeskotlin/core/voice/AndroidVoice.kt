@@ -202,6 +202,8 @@ class AndroidSpeechPlayer(private val context: Context) : SpeechPlayer {
                 // What the track still holds, counted before stopping: a stopped track's position can read 0, so
                 // waiting for it to catch up would sit through the whole reply's length again in silence.
                 val left = (written.get() - played()).coerceAtLeast(0)
+                // Nor can it tell sound from silence any more: what's showing now stays until the end.
+                sound.cancelAndJoin()
                 // Stopping a streaming track plays out what it holds first.
                 track.stop()
                 delay(left * 1000 / sampleRate + DRAIN_SLACK_MS)
