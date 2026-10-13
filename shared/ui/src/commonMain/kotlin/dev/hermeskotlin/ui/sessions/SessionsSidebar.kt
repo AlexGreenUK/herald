@@ -53,11 +53,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
@@ -1456,7 +1456,8 @@ private fun ProjectTag(label: String) {
         color = Theme[colors][textMuted],
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
-        modifier = Modifier.widthIn(max = PROJECT_TAG_MAX_WIDTH).semantics { contentDescription = "In project $label" },
+        // Read as words in place of the "·" text, not as well as it.
+        modifier = Modifier.widthIn(max = PROJECT_TAG_MAX_WIDTH).clearAndSetSemantics { contentDescription = "In project $label" },
     )
 }
 
