@@ -400,7 +400,8 @@ class ChatViewModel(
         val target = target ?: return
         val state = state.value
         val id = state.storedSessionId ?: return
-        val newest = state.messages.mapNotNull { it.sentAt }.maxOrNull() ?: return
+        // The machinery's rows (deliveries, routines) count too: they move the chat's activity on as well.
+        val newest = state.messages.mapNotNull { it.sentAt ?: (it as? ChatMessage.Event)?.timestamp }.maxOrNull() ?: return
         viewModelScope.launch { seen?.markLooked(target.gateway.gatewayUrl, id, newest, target.profile) }
     }
 

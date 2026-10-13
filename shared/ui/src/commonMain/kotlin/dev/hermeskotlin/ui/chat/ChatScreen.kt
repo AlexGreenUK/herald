@@ -1249,11 +1249,12 @@ private fun Messages(
     // Once the user sends from here, what follows is their own conversation, not news to mark or jump to.
     var unreadSettled by remember(readUpTo) { mutableStateOf(false) }
     LaunchedEffect(readUpTo, messages, olderMessages, loadingOlder) {
-        if (readUpTo == null || unreadFrom != null || unreadSettled || loadingOlder) return@LaunchedEffect
+        if (readUpTo == null || unreadFrom != null || unreadSettled) return@LaunchedEffect
         if (messages.any { it is ChatMessage.User && it.pending }) {
             unreadSettled = true
             return@LaunchedEffect
         }
+        if (loadingOlder) return@LaunchedEffect
         val key = when (val step = unreadLineStep(messages, readUpTo, olderMessages, unreadPagesLoaded)) {
             UnreadLineStep.LoadOlder -> {
                 val oldest = messages.firstOrNull()?.key
