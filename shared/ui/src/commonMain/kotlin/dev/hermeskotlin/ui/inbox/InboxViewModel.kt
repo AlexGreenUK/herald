@@ -358,6 +358,9 @@ class InboxViewModel(
 
     fun setFailures(on: Boolean) = save(_state.value.following.copy(failures = on))
 
+    /** Every job, new ones too, to [follow]: All on (into the Inbox) or All off. */
+    fun setAll(follow: Follow) = save(_state.value.following.all(follow))
+
     private fun save(next: Following) {
         val before = _state.value.following
         _state.update { it.copy(following = next, saving = true) }
@@ -367,7 +370,12 @@ class InboxViewModel(
                 _state.update { it.copy(following = following, saving = false) }
                 load(quiet = true)
             }.onFailure { e ->
-                _state.update { it.copy(following = before, saving = false, message = e.message ?: "Couldn't save that.") }
+                val message = if (next.default != Follow.Off || next.jobs.containsValue(Follow.Off)) {
+                    "Couldn't save that. All on and switching jobs off need the gateway's plugin ${InboxApi.ALL_JOBS_PLUGIN_VERSION}: update it in Settings."
+                } else {
+                    e.message ?: "Couldn't save that."
+                }
+                _state.update { it.copy(following = before, saving = false, message = message) }
             }
         }
     }

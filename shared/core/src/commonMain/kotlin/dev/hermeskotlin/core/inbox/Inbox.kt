@@ -74,23 +74,29 @@ data class InboxRun(
 }
 
 /** How one job reaches the Inbox: not at all, into it quietly, or with a notification. */
-enum class Follow(val wire: String?) {
-    Off(null),
+enum class Follow(val wire: String) {
+    Off("off"),
     Quiet("quiet"),
     Notify("notify");
 
     companion object {
-        fun of(wire: String?): Follow = entries.firstOrNull { it.wire == wire && wire != null } ?: Off
+        fun of(wire: String?): Follow = entries.firstOrNull { it.wire == wire } ?: Off
     }
 }
 
-/** What this phone follows on the gateway: per job, and whether any failed run notifies. */
-data class Following(val jobs: Map<String, Follow> = emptyMap(), val failures: Boolean = false) {
-    fun of(jobId: String): Follow = jobs[jobId] ?: Follow.Off
-    val any: Boolean get() = failures || jobs.values.any { it != Follow.Off }
+/**
+ * What this phone follows on the gateway: [default] for every job (new ones too), [jobs] where a job differs
+ * from it, and whether any failed run notifies.
+ */
+data class Following(val jobs: Map<String, Follow> = emptyMap(), val failures: Boolean = false, val default: Follow = Follow.Off) {
+    fun of(jobId: String): Follow = jobs[jobId] ?: default
+    val any: Boolean get() = failures || default != Follow.Off || jobs.values.any { it != Follow.Off }
 
     fun with(jobId: String, follow: Follow): Following =
-        copy(jobs = if (follow == Follow.Off) jobs - jobId else jobs + (jobId to follow))
+        copy(jobs = if (follow == default) jobs - jobId else jobs + (jobId to follow))
+
+    /** Every job set to [follow], new ones too: what was set per job is dropped. */
+    fun all(follow: Follow): Following = copy(jobs = emptyMap(), default = follow)
 }
 
 @Serializable
@@ -99,6 +105,7 @@ private data class FollowReply(
     val error: String? = null,
     val jobs: Map<String, String> = emptyMap(),
     val failures: Boolean = false,
+    val default: String = "off",
 )
 
 @Serializable
@@ -116,8 +123,10 @@ class InboxApi(private val push: PushApi, private val keys: PushKeys) {
     suspend fun following(): Following = follow("following") {}
 
     suspend fun setFollowing(following: Following): Following = follow("follow") {
-        putJsonObject("jobs") { following.jobs.forEach { (job, mode) -> mode.wire?.let { put(job, it) } } }
+        putJsonObject("jobs") { following.jobs.forEach { (job, mode) -> put(job, mode.wire) } }
         put("failures", following.failures)
+        // A plugin before 0.4.1 refuses "off" and a default: say them only when they matter.
+        if (following.default != Follow.Off) put("default", following.default.wire)
     }
 
     /** The runs this phone follows, newest first; [before] (unix seconds) pages back. */
@@ -144,7 +153,8 @@ class InboxApi(private val push: PushApi, private val keys: PushKeys) {
     private suspend fun follow(op: String, more: JsonObjectBuilder.() -> Unit): Following {
         val reply = decode(FollowReply.serializer(), push.cron("$op ${request(more)}"))
         if (!reply.ok) throw RpcException(0, reply.error ?: "The gateway refused.")
-        return Following(reply.jobs.mapValues { Follow.of(it.value) }.filterValues { it != Follow.Off }, reply.failures)
+        val default = Follow.of(reply.default)
+        return Following(reply.jobs.mapValues { Follow.of(it.value) }.filterValues { it != default }, reply.failures, default)
     }
 
     private fun request(more: JsonObjectBuilder.() -> Unit) = buildJsonObject {
@@ -162,6 +172,9 @@ class InboxApi(private val push: PushApi, private val keys: PushKeys) {
     companion object {
         /** The oldest plugin with `/herald-push cron`. */
         const val MIN_PLUGIN_VERSION = "0.4.0"
+
+        /** The oldest plugin that follows every job by default and switches single jobs off. */
+        const val ALL_JOBS_PLUGIN_VERSION = "0.4.1"
 
         /** What a call says when the plugin predates the Inbox; the Inbox page shows its update notice for it. */
         const val TOO_OLD = "The gateway's herald-push plugin is too old for the Inbox."

@@ -65,6 +65,25 @@ class InboxTest {
     }
 
     @Test
+    fun allOnFollowsEveryJobAndSingleJobsCanBeSwitchedOff() {
+        val all = Following().with("brief", Follow.Notify).all(Follow.Quiet)
+        // What was set per job is dropped; every job, new ones too, goes into the Inbox.
+        assertEquals(emptyMap(), all.jobs)
+        assertEquals(Follow.Quiet, all.of("anything"))
+        assertTrue(all.any)
+
+        val noisyOff = all.with("noisy", Follow.Off).with("brief", Follow.Notify)
+        assertEquals(mapOf("noisy" to Follow.Off, "brief" to Follow.Notify), noisyOff.jobs)
+        assertEquals(Follow.Off, noisyOff.of("noisy"))
+        // Back to what the default says: not kept per job.
+        assertEquals(mapOf("brief" to Follow.Notify), noisyOff.with("noisy", Follow.Quiet).jobs)
+
+        val off = noisyOff.all(Follow.Off)
+        assertEquals(Follow.Off, off.of("brief"))
+        assertFalse(off.any)
+    }
+
+    @Test
     fun theFirstLookStartsReadAndLaterRunsAreUnread() = runTest {
         val store = InboxStore(InMemoryKeyValueStore())
         store.bind("https://gw", now = 2_000)

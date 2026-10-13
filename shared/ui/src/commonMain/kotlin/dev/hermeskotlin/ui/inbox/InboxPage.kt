@@ -740,6 +740,7 @@ private fun FollowView(state: InboxUiState, viewModel: InboxViewModel) {
         contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 96.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        item(key = "all") { AllJobsRow(state.following.default, enabled = !state.saving, onSet = viewModel::setAll) }
         item(key = "failures") {
             FailuresRow(state.following.failures, enabled = !state.saving, onChange = viewModel::setFailures)
         }
@@ -747,6 +748,44 @@ private fun FollowView(state: InboxUiState, viewModel: InboxViewModel) {
         items(state.jobs, key = { it.id }) { job ->
             FollowRow(job, state.following.of(job.id), enabled = !state.saving) { viewModel.setFollow(job, it) }
         }
+    }
+}
+
+/**
+ * Every job at once: Off, Inbox or Notify for all of them, jobs made later included. A job set differently below
+ * keeps its own setting until this is changed again. Jobs that stay silent never bring anything either way.
+ */
+@Composable
+private fun AllJobsRow(default: Follow, enabled: Boolean, onSet: (Follow) -> Unit) {
+    val shape = RoundedCornerShape(Theme[radii][radiusLarge])
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(Theme[colors][surface], shape)
+            .border(1.dp, Theme[colors][stroke], shape)
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text("All jobs", style = Theme[typography][body].copy(fontWeight = FontWeight.Medium), color = Theme[colors][text])
+            Text(
+                "Sets every job at once, and jobs made later. Jobs that stay silent never show up. Switch single jobs off below.",
+                style = Theme[typography][bodySmall].copy(fontSize = 12.5.sp),
+                color = Theme[colors][textTertiary],
+            )
+        }
+        SegmentedControl(
+            options = Follow.entries,
+            selected = default,
+            onSelect = { if (enabled) onSet(it) },
+            optionLabel = {
+                when (it) {
+                    Follow.Off -> "All off"
+                    Follow.Quiet -> "All in Inbox"
+                    Follow.Notify -> "All notify"
+                }
+            },
+        )
     }
 }
 
