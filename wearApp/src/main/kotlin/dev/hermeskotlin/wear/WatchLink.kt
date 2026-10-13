@@ -6,7 +6,6 @@ import androidx.wear.tiles.TileService
 import com.google.android.gms.wearable.CapabilityClient
 import com.google.android.gms.wearable.Wearable
 import dev.hermeskotlin.wearlink.CALL_EVENT_TYPES
-import dev.hermeskotlin.wearlink.CALL_GAP_MS
 import dev.hermeskotlin.wearlink.InOrder
 import dev.hermeskotlin.wearlink.CallEnd
 import dev.hermeskotlin.wearlink.CallEvents
@@ -347,12 +346,7 @@ class WatchLink(
         if (events.callId != now.id || !now.active) return
         val order = callSends
         order.add(events.seq, events)
-        if (order.waiting && callSendGap?.isActive != true) {
-            callSendGap = scope.launch(main) {
-                delay(CALL_GAP_MS)
-                order.skipGap()
-            }
-        }
+        if (order.waiting && callSendGap?.isActive != true) callSendGap = scope.launch(main) { order.skipGaps() }
     }
 
     fun newChat() {
@@ -390,7 +384,7 @@ class WatchLink(
             WearPaths.CALL_UPDATE -> WearJson.decode<CallUpdate>(data)?.let { scope.launch(main) { onCallUpdate(it) } }
             WearPaths.CALL_SEND -> WearJson.decode<CallEvents>(data)?.let { scope.launch(main) { onCallSend(it) } }
             WearPaths.STATUS -> WearJson.decode<PhoneStatus>(data)?.let {
-                _liveVoice.value = it.liveVoice
+                it.liveVoice?.let { live -> _liveVoice.value = live }
                 _phone.value = when {
                     !it.signedIn -> PhoneState.SignedOut
                     it.connected -> PhoneState.Ready

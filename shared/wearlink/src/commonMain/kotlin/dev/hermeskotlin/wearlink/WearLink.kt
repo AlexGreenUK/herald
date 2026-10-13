@@ -1,5 +1,6 @@
 package dev.hermeskotlin.wearlink
 
+import kotlinx.coroutines.delay
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -213,8 +214,11 @@ data class PhoneStatus(
     val signedIn: Boolean,
     val connected: Boolean,
     val failed: Boolean = false,
-    /** The gateway talks live (GPT-Live): the watch can hold a voice call instead of sending what it heard. */
-    val liveVoice: Boolean = false,
+    /**
+     * The gateway talks live (GPT-Live): the watch can hold a voice call instead of sending what it heard. Null
+     * when the phone hasn't asked the gateway yet (or is older): the watch keeps what it was last told.
+     */
+    val liveVoice: Boolean? = null,
 )
 
 /*
@@ -301,8 +305,8 @@ object WearJson {
 /**
  * Puts a call's numbered batches ([CallEvents.seq], from 1) back in the order they were sent, since messages may
  * overtake each other: each goes to [deliver] once all before it have. A batch that never comes (its message
- * failed) holds the rest only until [skipGap], which the caller runs a moment after [waiting] turns true.
- * Not thread-safe: one thread uses it.
+ * failed) holds the rest only until [skipGap], which [skipGaps] runs a moment after [waiting] turns true.
+ * Not thread-safe: one thread uses it, [skipGaps] too.
  */
 class InOrder<T>(private val deliver: (T) -> Unit) {
     private var last = 0
@@ -310,6 +314,9 @@ class InOrder<T>(private val deliver: (T) -> Unit) {
 
     /** Some came early, and wait for one missing. */
     val waiting: Boolean get() = early.isNotEmpty()
+
+    /** The batch they wait for, null when none wait: the same after [CALL_GAP_MS], it's time to [skipGap]. */
+    val missing: Int? get() = if (early.isEmpty()) null else last + 1
 
     fun add(seq: Int, item: T) {
         if (seq <= last || seq in early) return
@@ -322,6 +329,19 @@ class InOrder<T>(private val deliver: (T) -> Unit) {
         if (early.isEmpty()) return
         last = early.keys.min() - 1
         drain()
+    }
+
+    /**
+     * Skips each gap still there [gapMs] after it opened, until none wait: started when [waiting] turns true.
+     * Past one gap may be another, and nothing more may come to start a new wait. Each gap gets its full wait:
+     * one that opened during the last is skipped only when it's still there.
+     */
+    suspend fun skipGaps(gapMs: Long = CALL_GAP_MS) {
+        while (waiting) {
+            val gap = missing
+            delay(gapMs)
+            if (missing == gap) skipGap()
+        }
     }
 
     private fun drain() {

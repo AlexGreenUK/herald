@@ -74,8 +74,8 @@ class PushSetupTest {
     private inner class FakeGateway(
         var installed: Boolean,
         var enabled: Boolean = installed,
-        var version: String = PushApi.MIN_PLUGIN_VERSION,
-        val latest: String = PushApi.MIN_PLUGIN_VERSION,
+        var version: String = PushApi.PLUGIN_VERSION,
+        val latest: String = PushApi.PLUGIN_VERSION,
     ) {
         val calls = mutableListOf<JsonObject>()
         val registered = mutableSetOf<String>()
@@ -222,18 +222,39 @@ class PushSetupTest {
     }
 
     @Test
-    fun anOldPluginIsBroughtToTheReviewedCommit() = runTest {
+    fun anOldPluginIsBroughtToTheReviewedCommitOnlyWhenTheUserAsks() = runTest {
         val keys = FakeKeys()
         val s = setup(keys)
         val gateway = FakeGateway(installed = true, version = "0.1.0")
         connect(s, gateway)
         s.setup.enable()
 
+        // Too old to work with, but code on the gateway changes only when the user says so.
+        assertEquals(listOf("info"), gateway.actions())
+        assertEquals(PushStatus.State.Outdated, s.setup.status.value.state)
+        assertEquals(PluginUpdate("0.1.0", PushApi.PLUGIN_VERSION, needed = true), s.setup.status.value.update)
+        assertTrue(gateway.registered.isEmpty())
+
+        s.setup.updatePlugin()
         val reinstall = gateway.calls.first { (it["params"] as? JsonObject)?.get("action")?.jsonPrimitive?.contentOrNull == "install" }["params"] as JsonObject
         assertEquals(true, reinstall["force"]!!.jsonPrimitive.booleanOrNull)
         assertEquals(PushApi.PLUGIN_REF, reinstall["ref"]!!.jsonPrimitive.content)
         assertEquals(setOf("device-1"), gateway.registered)
         assertEquals(PushStatus.State.On, s.setup.status.value.state)
+        assertNull(s.setup.status.value.update)
+    }
+
+    @Test
+    fun aWorkingButOlderPluginIsOfferedAnUpdateAndKeepsWorking() = runTest {
+        val keys = FakeKeys()
+        val s = setup(keys)
+        val gateway = FakeGateway(installed = true, version = PushApi.MIN_PLUGIN_VERSION)
+        connect(s, gateway)
+        s.setup.enable()
+
+        assertEquals(listOf("info", "register"), gateway.actions())
+        assertEquals(PushStatus.State.On, s.setup.status.value.state)
+        assertEquals(PluginUpdate(PushApi.MIN_PLUGIN_VERSION, PushApi.PLUGIN_VERSION, needed = false), s.setup.status.value.update)
     }
 
     @Test

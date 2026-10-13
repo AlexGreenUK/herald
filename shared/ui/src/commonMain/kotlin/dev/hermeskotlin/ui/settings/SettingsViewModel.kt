@@ -102,6 +102,11 @@ class SettingsViewModel(
         viewModelScope.launch(Dispatchers.Default) { if (on) push.enable() else push.disable() }
     }
 
+    /** The user asked for the newer plugin Notifications anywhere offers. */
+    fun updatePushPlugin() {
+        viewModelScope.launch(Dispatchers.Default) { push.updatePlugin() }
+    }
+
     fun sendPushTest() {
         _pushTest.value = null
         viewModelScope.launch(Dispatchers.Default) { _pushTest.value = push.test() }

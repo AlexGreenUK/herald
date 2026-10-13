@@ -63,6 +63,8 @@ import dev.hermeskotlin.ui.sessions.ArchiveUndoToast
 import dev.hermeskotlin.ui.sessions.ChatMenu
 import dev.hermeskotlin.ui.sessions.SessionsSidebar
 import dev.hermeskotlin.ui.settings.AppLockCover
+import dev.hermeskotlin.ui.settings.PhoneQuestion
+import dev.hermeskotlin.ui.settings.PhoneQuestionDialog
 import dev.hermeskotlin.ui.settings.SettingsScreen
 import dev.hermeskotlin.ui.plugins.PluginWebView
 import dev.hermeskotlin.ui.signin.SignInScreen
@@ -85,6 +87,7 @@ val LocalAppVersion = staticCompositionLocalOf<String?> { null }
  * [onDarkTheme] tells the host which theme is showing, e.g. to color the system bar icons.
  * [releasesRepo] is the GitHub `owner/name` the build was released from, to look for newer releases.
  * While [locked] (App lock), a cover hides everything until [onUnlock] lets the user back in.
+ * [phoneQuestion] is a phone tool asking before it changes something, shown over any screen.
  */
 @Composable
 fun App(
@@ -93,6 +96,7 @@ fun App(
     onDarkTheme: (Boolean) -> Unit = {},
     locked: Boolean = false,
     onUnlock: () -> Unit = {},
+    phoneQuestion: PhoneQuestion? = null,
 ) {
     // Nothing is drawn until the stored settings are read, so the first frame has the right theme.
     val settings = koinInject<SettingsStore>().settings.collectAsStateWithLifecycle().value ?: return
@@ -121,7 +125,12 @@ fun App(
         ) {
             // The screens leave composition rather than sit under the cover, so their sheets and dialogs
             // (windows of their own) can't show over it. View models and drafts outlive this.
-            if (locked) AppLockCover(onUnlock) else Routes()
+            if (locked) {
+                AppLockCover(onUnlock)
+            } else {
+                Routes()
+                PhoneQuestionDialog(phoneQuestion)
+            }
         }
     }
 }

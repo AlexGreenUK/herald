@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
@@ -14,6 +15,42 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <!-- With Notifications anywhere, pick the ntfy stream up again after the phone restarts. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- The Sound phone tool: Do Not Disturb and the ringer, once the user grants Do Not Disturb access. -->
+    <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
+    <!-- The Alarms phone tool hands an alarm or a timer to the clock app. -->
+    <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
+    <!-- The Screen time phone tool, once the user grants Usage access in Android's settings. -->
+    <uses-permission
+        android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions" />
+    <!-- The Location phone tool, while Herald is open; the user picks precise or approximate. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <!-- Only if the user also allows location while Herald is closed, from its own row under the Location switch. -->
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+    <!-- The Calendar phone tool: reads events, and adds or moves one after the user allows it. -->
+    <uses-permission android:name="android.permission.READ_CALENDAR" />
+    <uses-permission android:name="android.permission.WRITE_CALENDAR" />
+    <!-- The Contacts phone tool looks people up by name, number or email; it never writes. -->
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+    <!--
+        The Health phone tool reads these three from Health Connect, each as the user allows there; while Herald is
+        closed too only if the user also allows that, from its own row under the Health switch.
+    -->
+    <uses-permission android:name="android.permission.health.READ_STEPS" />
+    <uses-permission android:name="android.permission.health.READ_SLEEP" />
+    <uses-permission android:name="android.permission.health.READ_HEART_RATE" />
+    <uses-permission android:name="android.permission.health.READ_HEALTH_DATA_IN_BACKGROUND" />
+    <!-- Location is one optional tool: a phone or tablet without GPS still installs Herald. -->
+    <uses-feature
+        android:name="android.hardware.location"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.location.gps"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.location.network"
+        android:required="false" />
 
     <!-- The assistant names the app it was called up over; apps are hidden from Herald unless it says which it looks up. -->
     <queries>
@@ -25,6 +62,47 @@
         <intent>
             <action android:name="android.speech.RecognitionService" />
         </intent>
+        <!-- The Alarms phone tool checks there's a clock app before it asks the user. -->
+        <intent>
+            <action android:name="android.intent.action.SET_ALARM" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SET_TIMER" />
+        </intent>
+        <!-- Screen time leaves out the home screen, as the phone's own does. -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.HOME" />
+        </intent>
+        <!-- The Open phone tool checks there's a browser, a maps app or a share target before it asks the user. -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="https" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="http" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.APP_BROWSER" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="geo" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="google.navigation" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SEND" />
+            <data android:mimeType="text/plain" />
+        </intent>
+        <!-- The Health phone tool: Health Connect, an app of its own before Android 14. -->
+        <package android:name="com.google.android.apps.healthdata" />
     </queries>
 
     <!--
@@ -89,6 +167,32 @@
                 android:resource="@xml/shortcuts" />
         </activity>
 
+        <!--
+            Health Connect's "privacy policy" link for Herald: the README's Privacy section, in the browser. Invisible.
+            The alias is for Android 14 and later, the activity's own filter for Health Connect as an app before that.
+        -->
+        <activity
+            android:name=".phone.HealthPrivacyActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE" />
+            </intent-filter>
+        </activity>
+        <activity-alias
+            android:name=".HealthPermissionsUsage"
+            android:exported="true"
+            android:permission="android.permission.START_VIEW_PERMISSION_USAGE"
+            android:targetActivity=".phone.HealthPrivacyActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW_PERMISSION_USAGE" />
+                <category android:name="android.intent.category.HEALTH_PERMISSIONS" />
+            </intent-filter>
+        </activity-alias>
+
         <!-- Wakes the app after a reboot or an update, so Notifications anywhere listens again. -->
         <receiver
             android:name=".notify.RestartReceiver"
@@ -111,6 +215,11 @@
 
         <receiver
             android:name=".notify.NotificationActionReceiver"
+            android:exported="false" />
+
+        <!-- Android's proximity alert for a place the agent watches (the Watched places phone tool). -->
+        <receiver
+            android:name=".phone.GeofenceReceiver"
             android:exported="false" />
 
         <!--
@@ -161,6 +270,19 @@
             android:noHistory="true"
             android:taskAffinity=""
             android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <!-- Allow on a phone tool's question: does the change from the tap, invisible and out of Herald's task. -->
+        <activity
+            android:name=".phone.PhoneActionActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <receiver
+            android:name=".phone.PhoneDenyReceiver"
+            android:exported="false" />
 
         <service
             android:name=".assist.HeraldRecognitionService"

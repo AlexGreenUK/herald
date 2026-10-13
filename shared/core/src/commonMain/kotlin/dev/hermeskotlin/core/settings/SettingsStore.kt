@@ -101,6 +101,10 @@ data class AppSettings(
      * The one thing that keeps Herald up in the background, with a quiet notification.
      */
     val pushAnywhere: Boolean = false,
+    /** The agent may use tools on this phone ([phoneToolsOn]); off, none of them, whatever their own switches say. */
+    val phoneTools: Boolean = false,
+    /** The phone tools switched on, by gateway name (`PhoneTool.id`). Each starts off. */
+    val phoneToolsOn: List<String> = emptyList(),
     /** Ask GitHub, where the app is published, whether a newer release is out. */
     val checkForUpdates: Boolean = true,
     /** Ask for a fingerprint, face or the screen lock when Herald opens, and keep it out of Recents. */
