@@ -78,6 +78,7 @@ private fun TableGrid(
     dividerThickness: Dp,
 ) {
     val columnCount = rows.maxOf { it.size }
+    val stripedRows = remember(rows.size) { (2 until rows.size step 2).toList() }
     Layout(
         content = {
             rows.forEachIndexed { rowIndex, cells ->
@@ -105,6 +106,8 @@ private fun TableGrid(
             // placed by the layout below.
             repeat(rows.size - 1) { Box(Modifier.background(if (it == 0) dividerColor else dividerColor.fainter())) }
             repeat(columnCount - 1) { Box(Modifier.background(dividerColor.fainter())) }
+            // A faint tint behind every second body row, so a long row can be followed across.
+            repeat(stripedRows.size) { Box(Modifier.background(dividerColor.fainter(0.3f))) }
         },
         modifier = Modifier.semantics { collectionInfo = CollectionInfo(rowCount = rows.size, columnCount = columnCount) },
     ) { measurables, _ ->
@@ -135,8 +138,11 @@ private fun TableGrid(
         val line = dividerThickness.roundToPx().coerceAtLeast(1)
         val rowLines = (0 until rows.size - 1).map { measurables[next++].measure(Constraints.fixed(width, line)) }
         val columnLines = (0 until columnCount - 1).map { measurables[next++].measure(Constraints.fixed(line, height)) }
+        val stripes = stripedRows.map { measurables[next++].measure(Constraints.fixed(width, rowHeights[it])) }
 
         layout(width, height) {
+            // Placed first, so the cells and lines are drawn over the tint.
+            stripes.forEachIndexed { i, placeable -> placeable.placeRelative(0, rowHeights.take(stripedRows[i]).sum()) }
             var index = 0
             var y = 0
             rows.forEachIndexed { rowIndex, cells ->
@@ -161,5 +167,5 @@ private fun TableGrid(
     }
 }
 
-/** The same line, fainter: the grid between cells should read as a hint, not as a frame. */
-private fun Color.fainter(): Color = copy(alpha = alpha * 0.55f)
+/** The same colour, fainter: the grid between cells should read as a hint, not as a frame. */
+private fun Color.fainter(strength: Float = 0.55f): Color = copy(alpha = alpha * strength)
