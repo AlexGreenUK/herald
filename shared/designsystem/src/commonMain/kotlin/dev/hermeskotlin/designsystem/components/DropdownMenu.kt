@@ -6,6 +6,8 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.IntrinsicSize
@@ -54,6 +56,9 @@ import dev.hermeskotlin.designsystem.textSecondary
 import dev.hermeskotlin.designsystem.textTertiary
 import dev.hermeskotlin.designsystem.typography
 
+/** Tallest a menu gets before it scrolls, so a long list (many projects) is a menu, not a wall. */
+private val MENU_MAX_HEIGHT = 440.dp
+
 /**
  * A small menu that opens right under its [anchor] (or above it, when [above], for an anchor at the bottom of
  * the screen), lined up with the anchor's end edge (or its start edge, per [alignment]). Controlled: open with [expanded]; picking an item, tapping
@@ -89,6 +94,11 @@ fun DropdownMenu(
                     .clip(shape)
                     .background(Theme[colors][surfaceElevated])
                     .border(1.dp, Theme[colors][stroke], shape)
+                    // The panel stops at the room on screen (or MENU_MAX_HEIGHT) and scrolls past it: the
+                    // library lays every row out and clips the rest, so rows past the edge couldn't be reached.
+                    // The rows stay the panel's own children, so arrow keys still move between them.
+                    .heightIn(max = MENU_MAX_HEIGHT)
+                    .verticalScroll(rememberScrollState())
                     .padding(vertical = 4.dp),
                 enter = fadeIn() + scaleIn(initialScale = 0.92f),
                 exit = fadeOut() + scaleOut(targetScale = 0.92f),
