@@ -400,19 +400,15 @@ class ChatViewModel(
         val target = target ?: return
         val state = state.value
         val id = state.storedSessionId ?: return
-        val newest = state.messages.mapNotNull { it.time }.maxOrNull() ?: return
+        val newest = state.messages.mapNotNull { it.sentAt }.maxOrNull() ?: return
         viewModelScope.launch { seen?.markLooked(target.gateway.gatewayUrl, id, newest, target.profile) }
     }
 
     fun open(target: ChatTarget) {
-        // The same chat with only a new read position (reopened from a notification): the screen places the
+        // The same chat, perhaps with a new read position (reopened from a notification): the screen places the
         // "New messages" line from the target; the chat itself, its draft and any voice chat stay as they are.
-        val current = this.target
-        if (current != null && current != target && current.copy(readUpTo = null) == target.copy(readUpTo = null)) {
+        if (this.target?.copy(readUpTo = null) == target.copy(readUpTo = null)) {
             this.target = target
-            return
-        }
-        if (this.target == target) {
             // An expired session or sign-out closes the host's chat; the same chat reopened after signing
             // back in needs a fresh session, not the stopped one this view model still holds.
             if (session.value !== host.session.value) {
@@ -1158,12 +1154,3 @@ class ChatViewModel(
         const val VOICE_CONNECT_WAIT_MS = 30_000L
     }
 }
-
-/** When a message happened (epoch seconds), when it has a time: a reply still being written has none yet. */
-private val ChatMessage.time: Double?
-    get() = when (this) {
-        is ChatMessage.User -> timestamp
-        is ChatMessage.Assistant -> timestamp
-        is ChatMessage.Event -> timestamp
-        else -> null
-    }
