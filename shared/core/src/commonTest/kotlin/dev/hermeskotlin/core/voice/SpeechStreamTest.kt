@@ -26,6 +26,23 @@ class SpeechStreamTest {
     }
 
     @Test
+    fun aFileAmongTheWordsOrOnAWindowsLineIsntVoiced() {
+        assertEquals("Here is the chart: ", speakableSoFar("Here is the chart: MEDIA:/tmp/out.png", complete = true))
+        assertEquals("See  and more.", speakableSoFar("See MEDIA:/tmp/a.png and more."))
+        assertEquals("One.\r\nTwo.", speakableSoFar("One.\r\nMEDIA:/tmp/a.png\r\nTwo."))
+    }
+
+    @Test
+    fun whatWasHeldBackIsVoicedOnceTheReplyIsComplete() {
+        assertEquals("Try running `ls", speakableSoFar("Try running `ls`"))
+        assertEquals("Try running `ls`", speakableSoFar("Try running `ls`", complete = true))
+        assertEquals("Thanks,\n", speakableSoFar("Thanks,\nME"))
+        assertEquals("Thanks,\nME", speakableSoFar("Thanks,\nME", complete = true))
+        // Code is still code.
+        assertEquals("Here:\n", speakableSoFar("Here:\n```py\nprint(", complete = true))
+    }
+
+    @Test
     fun anOpenCodeBlockHoldsBackWhatFollows() {
         assertEquals("Here:\n", speakableSoFar("Here:\n```py\nprint("))
     }
@@ -33,14 +50,17 @@ class SpeechStreamTest {
     /** Fed a character at a time, what can be voiced only ever grows, so each new part can be sent as it comes. */
     @Test
     fun whatCanBeVoicedOnlyGrowsAsTheReplyIsWritten() {
-        val reply = "Sure. `x` is set.\n```kotlin\nval a = 1\n```\nMEDIA:/tmp/a.png\nMore text, and `` a pair ``.\nMEDI is not a file. The end."
+        val reply = "Sure. `x` is set.\n```kotlin\nval a = 1\n```\nMEDIA:/tmp/a.png\r\nMore text, and `` a pair ``.\nMEDI is not a file, " +
+            "nor is ME. Chart: MEDIA:/tmp/c.png, done. The end `ok`"
         var before = ""
         for (i in 0..reply.length) {
             val now = speakableSoFar(reply.substring(0, i))
             assertTrue(now.startsWith(before), "at $i: “$now” doesn't continue “$before”")
             before = now
         }
-        assertEquals("Sure. `x` is set.\n\nMore text, and `` a pair ``.\nMEDI is not a file. The end.", before)
+        val complete = speakableSoFar(reply, complete = true)
+        assertTrue(complete.startsWith(before), "“$complete” doesn't continue “$before”")
+        assertEquals("Sure. `x` is set.\n\nMore text, and `` a pair ``.\nMEDI is not a file, nor is ME. Chart: , done. The end `ok`", complete)
     }
 
     @Test

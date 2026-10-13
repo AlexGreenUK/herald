@@ -142,19 +142,21 @@ internal fun parseSpeechFrame(text: String): SpeechStreamEvent? {
 }
 
 private val FENCE = Regex("```")
-private val MEDIA_LINE = Regex("""(?m)^[ \t]*MEDIA:\S+[ \t]*\n""")
+private val MEDIA_LINE = Regex("""(?m)^[ \t]*MEDIA:\S+[ \t]*\r?\n""")
+private val MEDIA_INLINE = Regex("""(?<!\S)MEDIA:\S+?(?=[.,;:!?)\]]*(?:\s|$))""")
 private const val MEDIA = "MEDIA:"
 
 /**
  * The part of a reply still being written that can be voiced so far. Code blocks are left out, and an open
  * one holds back everything after its start until it closes, so code is never read out; a file the agent
- * attaches (a `MEDIA:` line) is left out too. What could still turn into either (a backtick or two at the
- * end, a last line starting like `MEDIA:`) waits for the next words, so the result only ever grows as the
- * reply does and the new part can be sent as it comes.
+ * attaches (`MEDIA:` on a line of its own or among the words) is left out too. What could still turn into
+ * either (a backtick or two at the end, a last line or word starting like `MEDIA:`) waits for the next
+ * words, so the result only ever grows as the reply does and the new part can be sent as it comes. Once the
+ * reply is [complete], nothing is waiting for more: what was held back is voiced.
  */
-fun speakableSoFar(reply: String): String {
+fun speakableSoFar(reply: String, complete: Boolean = false): String {
     val ticks = reply.takeLastWhile { it == '`' }.length
-    val text = if (ticks in 1..2) reply.dropLast(ticks) else reply
+    val text = if (ticks in 1..2 && !complete) reply.dropLast(ticks) else reply
     val out = StringBuilder()
     var start = 0
     var inCode = false
@@ -164,9 +166,15 @@ fun speakableSoFar(reply: String): String {
         start = match.range.last + 1
     }
     if (!inCode) out.append(text, start, text.length)
-    val lastLine = out.substring(out.lastIndexOf("\n") + 1).trimStart()
-    if (lastLine.isNotEmpty() && (MEDIA.startsWith(lastLine) || lastLine.startsWith(MEDIA))) {
-        out.setLength(out.lastIndexOf("\n") + 1)
+    if (!complete) {
+        val lastLine = out.substring(out.lastIndexOf("\n") + 1).trimStart()
+        if (lastLine.isNotEmpty() && (MEDIA.startsWith(lastLine) || lastLine.startsWith(MEDIA))) {
+            out.setLength(out.lastIndexOf("\n") + 1)
+        }
+        val lastWord = out.takeLastWhile { !it.isWhitespace() }
+        if (lastWord.isNotEmpty() && (MEDIA.startsWith(lastWord) || lastWord.startsWith(MEDIA))) {
+            out.setLength(out.length - lastWord.length)
+        }
     }
-    return out.toString().replace(MEDIA_LINE, "")
+    return out.toString().replace(MEDIA_LINE, "").replace(MEDIA_INLINE, "")
 }
