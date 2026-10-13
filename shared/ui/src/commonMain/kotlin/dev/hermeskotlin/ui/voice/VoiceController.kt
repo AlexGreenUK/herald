@@ -272,15 +272,25 @@ class VoiceController(
         val voiced = coroutineScope {
             // The speech socket opens while the prompt goes out, so the first words don't wait for it.
             val opening = async { openSpeech(gateway, profile) }
-            if (!session.send(transcript)) {
-                opening.await()?.let { withContext(NonCancellable) { it.close() } }
-                _chat.update { it.copy(error = session.state.value.error ?: "Couldn't send that.") }
-                return@coroutineScope null
+            var handedOver = false
+            try {
+                if (!session.send(transcript)) {
+                    _chat.update { it.copy(error = session.state.value.error ?: "Couldn't send that.") }
+                    return@coroutineScope null
+                }
+                // The turn starts once the gateway takes it.
+                withTimeoutOrNull(TURN_START_MS) { session.state.first { it.running } }
+                val stream = opening.await()
+                handedOver = true
+                // Voiced while it's written where the gateway can; otherwise read out once it's done.
+                speakAsWritten(stream, session, sentAt)
+            } finally {
+                // Not voiced after all (the prompt didn't go, or the chat ended first): the socket doesn't stay open.
+                if (!handedOver) withContext(NonCancellable) {
+                    opening.cancel()
+                    runCatching { opening.await() }.getOrNull()?.close()
+                }
             }
-            // The turn starts once the gateway takes it.
-            withTimeoutOrNull(TURN_START_MS) { session.state.first { it.running } }
-            // Voiced while it's written where the gateway can; otherwise read out once it's done.
-            speakAsWritten(opening.await(), session, sentAt)
         } ?: return true
         // Skipped while the agent is still at work: listen again now rather than once it's done.
         if (voiced == Voiced.Skipped) return true

@@ -58,11 +58,17 @@ class StreamedSpeechTest {
             trySend("""{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{}}}""")
         }
         val submits = MutableStateFlow<List<JsonObject>>(emptyList())
+        /** Prompts are taken but never answered, as on a gateway that's slow to. */
+        var holdPrompts = false
         override val incoming: Flow<String> = inbound.receiveAsFlow()
 
         override suspend fun send(text: String) {
             val message = Json.parseToJsonElement(text).jsonObject
             val id = message["id"] ?: return
+            if (holdPrompts && message["method"]?.jsonPrimitive?.contentOrNull == "prompt.submit") {
+                submits.update { it + message }
+                return
+            }
             val result = when (message["method"]?.jsonPrimitive?.contentOrNull) {
                 "session.create" -> """{"session_id":"rt9","stored_session_id":"stored-9","message_count":0,"messages":[],"info":{}}"""
                 "prompt.submit" -> """{"status":"streaming"}""".also { submits.update { it + message } }
@@ -138,7 +144,12 @@ class StreamedSpeechTest {
     private suspend fun TestScope.chat(stream: Stream?, player: Player = Player()): Setup =
         chat(player) { stream }
 
-    private suspend fun TestScope.chat(player: Player = Player(), recorder: VoiceRecorder = OneRequest(), streams: () -> SpeechStream?): Setup {
+    private suspend fun TestScope.chat(
+        player: Player = Player(),
+        recorder: VoiceRecorder = OneRequest(),
+        holdPrompts: Boolean = false,
+        streams: () -> SpeechStream?,
+    ): Setup {
         val spoken = mutableListOf<String>()
         val client = createHttpClient(
             MockEngine { request ->
@@ -154,7 +165,7 @@ class StreamedSpeechTest {
             },
             PersistentCookiesStorage(InMemoryKeyValueStore()),
         )
-        val socket = Socket()
+        val socket = Socket().also { it.holdPrompts = holdPrompts }
         val connection = GatewayConnection(AuthApi(client, PersistentCookiesStorage(InMemoryKeyValueStore())), { _, _ -> socket }, backgroundScope)
         connection.start(gateway)
         connection.state.first { it is ConnectionState.Connected }
@@ -331,6 +342,20 @@ class StreamedSpeechTest {
         setup.voice.chat.first { it.phase == VoicePhase.Listening && stream.closed }
         assertTrue(stream.finished)
         setup.voice.stopChat()
+    }
+
+    /** Ended while the prompt is still going out: the speech socket opened beside it is closed, not left open. */
+    @Test
+    fun endingTheChatBeforeTheTurnStartsClosesTheSpeechSocket() = runTest {
+        val stream = Stream()
+        var opened = false
+        val setup = chat(holdPrompts = true) { opened = true; stream }
+        while (!opened) yield()
+
+        setup.voice.stopChat()
+        testScheduler.runCurrent()
+
+        assertTrue(stream.closed)
     }
 
     /** An older gateway without the socket isn't asked again every turn. */
