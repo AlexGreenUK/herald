@@ -128,7 +128,8 @@ sealed interface ChatRequest {
  * Identifies what the chat screen shows: a stored session, or a new chat (`storedSessionId == null`),
  * in [profile] (null: the gateway's launch profile). With [bot] it is that bot's permanent chat. A new
  * chat opened from outside (share sheet, shortcut) brings its [draft]. A new chat started in a project
- * runs in that project's folder, [cwd].
+ * runs in that project's folder, [cwd]. [readUpTo] is how far the user had read the chat when they opened
+ * it (epoch seconds), so the messages since can be marked as new; null when there was nothing new.
  */
 data class ChatTarget(
     val gateway: SavedGateway,
@@ -139,6 +140,7 @@ data class ChatTarget(
     val bot: BotIdentity? = null,
     val draft: ComposeDraft? = null,
     val cwd: String? = null,
+    val readUpTo: Double? = null,
 ) {
     /**
      * The profile whose last chat this is, which the next launch reads: a bot's chat counts where the Chats

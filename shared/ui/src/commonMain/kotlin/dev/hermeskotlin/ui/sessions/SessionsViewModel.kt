@@ -153,6 +153,9 @@ class SessionsViewModel(
         .flatMapLatest { scope -> scope?.let { (url, profile) -> seenStore.seen(url, profile) } ?: flowOf(null) }
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
+    /** How far [session] had been read before it is opened, when it has new messages since; read before [markSeen]. */
+    fun readUpTo(session: SessionSummary): Double? = seen.value?.readUpTo(session)
+
     private val waiting = attention.waiting
     private val running = attention.running
 

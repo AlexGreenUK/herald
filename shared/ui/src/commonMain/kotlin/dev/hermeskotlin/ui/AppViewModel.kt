@@ -200,9 +200,10 @@ class AppViewModel(
         access.retainOnly(gateways.all().gateways.map { it.gatewayUrl.host })
     }
 
-    fun openSession(sessionId: String, title: String) {
+    /** Opens a stored chat; [readUpTo] is how far it had been read, when it has new messages since. */
+    fun openSession(sessionId: String, title: String, readUpTo: Double? = null) {
         val gateway = signedInGateway() ?: return
-        _route.value = Route.Chat(ChatTarget(gateway, sessionId, title, profile = currentProfile()))
+        _route.value = Route.Chat(ChatTarget(gateway, sessionId, title, profile = currentProfile(), readUpTo = readUpTo))
     }
 
     /**

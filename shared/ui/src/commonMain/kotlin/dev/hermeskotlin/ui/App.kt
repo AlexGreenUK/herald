@@ -308,8 +308,8 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
                 profile = chatsProfile,
                 selectedId = openSessionId,
                 visible = sidebar.isOpen,
-                onOpenSession = {
-                    if (it.id != openSessionId) app.openSession(it.id, it.displayTitle)
+                onOpenSession = { session, readUpTo ->
+                    if (session.id != openSessionId) app.openSession(session.id, session.displayTitle, readUpTo)
                     closeDrawerToChat()
                 },
                 onNewChat = { cwd ->
