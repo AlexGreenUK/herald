@@ -2,10 +2,8 @@ package dev.hermeskotlin.core.chat
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
-import kotlin.test.assertTrue
 
 class ChatLinksTest {
 
@@ -22,12 +20,10 @@ class ChatLinksTest {
         links.follow(AppLink.NewChat)
         val plain = assertNotNull(links.pending.value)
         assertNull(plain.storedSessionId)
-        assertFalse(assertNotNull(plain.draft).dictate)
-        assertFalse(plain.draft.voiceChat)
+        assertNull(assertNotNull(plain.draft).start)
 
         links.follow(AppLink.NewChatVoice)
-        assertTrue(assertNotNull(links.pending.value?.draft).dictate)
-        assertFalse(assertNotNull(links.pending.value?.draft).voiceChat)
+        assertEquals(DraftStart.Dictation, links.pending.value?.draft?.start)
     }
 
     @Test
@@ -39,9 +35,8 @@ class ChatLinksTest {
         assertNull(chat.storedSessionId)
         assertNull(chat.bot)
         val draft = assertNotNull(chat.draft)
-        assertTrue(draft.voiceChat)
-        assertFalse(draft.dictate)
-        assertTrue(draft.withNotice("A notice.").voiceChat)
+        assertEquals(DraftStart.VoiceChat, draft.start)
+        assertEquals(DraftStart.VoiceChat, draft.withNotice("A notice.").start)
     }
 
     @Test

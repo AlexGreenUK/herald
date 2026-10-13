@@ -14,6 +14,7 @@ import dev.hermeskotlin.core.bots.BotsApi
 import dev.hermeskotlin.core.chat.ChatState
 import dev.hermeskotlin.core.chat.ComposeDraft
 import dev.hermeskotlin.core.chat.ControlAction
+import dev.hermeskotlin.core.chat.DraftStart
 import dev.hermeskotlin.core.chat.DraftStore
 import dev.hermeskotlin.core.chat.InputRequest
 import dev.hermeskotlin.core.chat.LastChat
@@ -78,11 +79,13 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonObject
 
 /** The model sheet: the catalog once loaded, and a pricey pick waiting for a yes. */
@@ -406,9 +409,21 @@ class ChatViewModel(
             loadModels()
             pets.bind(target.profile)
         }
-        // Start the shortcut's voice conversation only after its new chat session is bound.
-        if (target.draft?.voiceChat == true) {
-            viewModelScope.launch { _requests.send(ChatRequest.StartVoice) }
+        // After the new chat's session is bound: the call belongs to it.
+        if (target.draft?.start == DraftStart.VoiceChat) startVoiceWhenConnected(target)
+    }
+
+    /**
+     * Starts the Call Hermes shortcut's voice chat in [target] once the gateway is connected, as the Voice chat
+     * button can't be pressed before then either. A call that can't start in time isn't started late, when the
+     * person may have moved on; a notice says why.
+     */
+    private fun startVoiceWhenConnected(target: ChatTarget) {
+        viewModelScope.launch {
+            val connected = withTimeoutOrNull(VOICE_CONNECT_WAIT_MS) { connectionState.first { it is ConnectionState.Connected } }
+            if (this@ChatViewModel.target != target) return@launch
+            if (connected != null) _requests.send(ChatRequest.StartVoice)
+            else showAttachmentError("The call didn't start: Herald couldn't reach the gateway.")
         }
     }
 
@@ -422,7 +437,7 @@ class ChatViewModel(
         draft.notice?.let(::showAttachmentError)
         // After the notice: when the files overfill a tray that already held some, the tray limit is what to tell.
         if (draft.attachments.isNotEmpty()) addAttachments(draft.attachments)
-        if (draft.dictate) viewModelScope.launch { _requests.send(ChatRequest.StartDictation) }
+        if (draft.start == DraftStart.Dictation) viewModelScope.launch { _requests.send(ChatRequest.StartDictation) }
     }
 
     fun startVoiceChat() {
@@ -1095,5 +1110,8 @@ class ChatViewModel(
 
         /** How much of the selection a `/btw` question quotes. */
         const val ASIDE_QUOTE_MAX = 160
+
+        /** How long the Call Hermes shortcut waits for the gateway (a cold start connects in a few seconds). */
+        const val VOICE_CONNECT_WAIT_MS = 30_000L
     }
 }
