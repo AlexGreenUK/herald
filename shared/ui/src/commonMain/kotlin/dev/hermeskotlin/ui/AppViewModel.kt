@@ -120,6 +120,12 @@ class AppViewModel(
                         bot != null -> openBotLink(bot, link.title, stored, link.draft, stored?.let { lastLook(it, profile = bot) })
                         stored == null -> newChat(link.draft)
                         open != stored -> openSession(stored, link.title ?: "Chat", lastLook(stored, currentProfile()))
+                        // Usually the notification is for the chat left open: the reply came in while away.
+                        // It stays open, with the line placed from the last look.
+                        else -> (_route.value as? Route.Chat)?.let { route ->
+                            val readUpTo = lastLook(stored, route.target.profile)
+                            _route.value = Route.Chat(route.target.copy(readUpTo = readUpTo))
+                        }
                     }
                 }
         }

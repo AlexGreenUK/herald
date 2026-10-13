@@ -92,4 +92,23 @@ class SeenStoreTest {
         assertEquals(1_200.0, store.lastLook(home, "s1", profile = "scribe"))
         assertEquals(1_000.0, store.lastLook(home, "s1"))
     }
+
+    @Test
+    fun leavingTheAppOnAChatRecordsWhatWasOnScreenAsRead() = runTest {
+        val store = SeenStore(InMemoryKeyValueStore()) { clock }
+        store.markLooked(home, "s1", at = 1_300.0)
+
+        assertEquals(1_300.0, store.lastLook(home, "s1"))
+        // The reply that comes in afterwards is new.
+        assertTrue(store.seen(home).first().isUnread(session("s1", at = 1_400.0)))
+    }
+
+    @Test
+    fun aLastLookNeverMovesBack() = runTest {
+        val store = SeenStore(InMemoryKeyValueStore()) { clock }
+        store.markLooked(home, "s1", at = 1_300.0)
+        store.markLooked(home, "s1", at = 1_100.0)
+
+        assertEquals(1_300.0, store.lastLook(home, "s1"))
+    }
 }

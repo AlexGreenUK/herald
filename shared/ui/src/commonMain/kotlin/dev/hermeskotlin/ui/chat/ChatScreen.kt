@@ -358,6 +358,8 @@ fun ChatScreen(
     LifecycleEventEffect(Lifecycle.Event.ON_STOP) {
         viewModel.voice.onBackground()
         viewModel.onScreen(false)
+        // What's on screen now counts as read, so a reply that comes in while away is new.
+        viewModel.markLooked()
     }
     LifecycleEventEffect(Lifecycle.Event.ON_START) { viewModel.onScreen(true) }
     // A room replacing the chat takes it off screen without a stop.

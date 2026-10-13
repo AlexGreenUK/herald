@@ -387,4 +387,21 @@ class AppViewModelTest {
 
         assertEquals(1_000.0, chat.target.readUpTo)
     }
+
+    @Test
+    fun aNotificationForTheChatLeftOpenPlacesTheLineInIt() = runTest {
+        gateways.save(home)
+        signedIn(home)
+        lastChats.set(home.gatewayUrl, LastChat("s9", "Report"))
+        val app = viewModel()
+        assertEquals("s9", app.awaitChat(home).target.storedSessionId)
+        // The user left the app on this chat; a reply came in and its notification was tapped.
+        seen.markLooked(home.gatewayUrl, "s9", at = 1_300.0)
+
+        links.open("s9", "Report")
+        val chat = app.route.first { it is Route.Chat && it.target.readUpTo != null } as Route.Chat
+
+        assertEquals("s9", chat.target.storedSessionId)
+        assertEquals(1_300.0, chat.target.readUpTo)
+    }
 }
