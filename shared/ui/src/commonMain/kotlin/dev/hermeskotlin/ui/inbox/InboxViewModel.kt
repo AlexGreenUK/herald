@@ -390,6 +390,8 @@ class InboxViewModel(
             val saved = if (ready()) runCatching { api.setFollowing(next) } else Result.failure(IllegalStateException("Not connected"))
             saved.onSuccess { following ->
                 _state.update { it.copy(following = following, saving = false) }
+                // The gateway only lists what is followed now; the runs kept from before would stay on show.
+                store.prune(following::covers)
                 load(quiet = true)
             }.onFailure { e ->
                 val message = if (next.default != Follow.Off || next.jobs.containsValue(Follow.Off)) {

@@ -109,6 +109,22 @@ class InboxTest {
     }
 
     @Test
+    fun runsOfJobsNoLongerFollowedAreDropped() = runTest {
+        val store = InboxStore(InMemoryKeyValueStore())
+        store.bind("https://gw", now = 0)
+        store.replace(listOf(run(job = "a", at = 3_000), run(job = "b", at = 2_000)))
+
+        store.prune(Following().with("a", Follow.Notify)::covers)
+        assertEquals(listOf("a"), store.state.value.runs.map { it.job })
+
+        store.prune(Following().all(Follow.Off)::covers)
+        assertEquals(emptyList(), store.state.value.runs)
+        // The gateway lists nothing either, so nothing comes back.
+        store.replace(emptyList())
+        assertEquals(emptyList(), store.state.value.runs)
+    }
+
+    @Test
     fun readingARunInFullReplacesItsShortCopy() = runTest {
         val store = InboxStore(InMemoryKeyValueStore())
         store.bind("https://gw", now = 0)

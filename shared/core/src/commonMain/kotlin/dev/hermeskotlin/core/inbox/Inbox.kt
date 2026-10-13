@@ -117,6 +117,9 @@ enum class Follow(val wire: String) {
  */
 data class Following(val jobs: Map<String, Follow> = emptyMap(), val failures: Boolean = false, val default: Follow = Follow.Off) {
     fun of(jobId: String): Follow = jobs[jobId] ?: default
+
+    /** Whether [run] belongs in the Inbox: its job is followed, or it failed and failures are asked for. */
+    fun covers(run: InboxRun): Boolean = of(run.job) != Follow.Off || (failures && run.failed)
     val any: Boolean get() = failures || default != Follow.Off || jobs.values.any { it != Follow.Off }
 
     fun with(jobId: String, follow: Follow): Following =
@@ -252,6 +255,12 @@ class InboxStore(private val store: KeyValueStore) {
         val newest = runs.maxOfOrNull { it.at } ?: 0
         val pushed = s.runs.filter { it.key !in listed && it.at > newest }
         s.copy(runs = merge(pushed + runs))
+    }
+
+    /** Drops the kept runs [keep] says no to: what a phone stopped following no longer shows. */
+    suspend fun prune(keep: (InboxRun) -> Boolean) = edit { s ->
+        val kept = s.runs.filter(keep)
+        s.copy(runs = kept, read = s.read.trimmed(kept))
     }
 
     /** A run that came by push, or was read in full: added, or put in place of its shorter copy. */
