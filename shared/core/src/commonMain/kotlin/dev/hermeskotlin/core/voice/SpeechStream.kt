@@ -3,9 +3,12 @@ package dev.hermeskotlin.core.voice
 import dev.hermeskotlin.core.auth.AuthApi
 import dev.hermeskotlin.core.gateway.GatewayUrl
 import dev.hermeskotlin.core.network.ApiResult
+import dev.hermeskotlin.core.rpc.ticketProtocols
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.websocket.DefaultClientWebSocketSession
 import io.ktor.client.plugins.websocket.webSocketSession
+import io.ktor.client.request.header
+import io.ktor.http.HttpHeaders
 import io.ktor.http.encodeURLParameter
 import io.ktor.websocket.Frame
 import io.ktor.websocket.close
@@ -61,19 +64,19 @@ fun interface SpeechStreams {
 }
 
 /**
- * [SpeechStreams] over the gateway's socket. The socket takes a fresh single-use ticket (`?ticket=`, valid
- * 30 seconds), as Desktop's sibling sockets do, and `?profile=`, so the profile's own voice speaks.
+ * [SpeechStreams] over the gateway's socket. The socket takes a fresh single-use ticket (valid 30 seconds) in
+ * its subprotocol list, as `/api/ws` does, so it never lands in URLs or logs, and `?profile=`, so the
+ * profile's own voice speaks.
  */
 class GatewaySpeechStreams(private val client: HttpClient, private val auth: AuthApi) : SpeechStreams {
 
     override suspend fun open(url: GatewayUrl, profile: String?): SpeechStream? {
         val ticket = (auth.mintWsTicket(url) as? ApiResult.Success)?.value?.ticket ?: return null
-        val query = buildString {
-            append("ticket=").append(ticket.encodeURLParameter())
-            profile?.let { append("&profile=").append(it.encodeURLParameter()) }
-        }
+        val query = profile?.let { "?profile=" + it.encodeURLParameter() }.orEmpty()
         val session = try {
-            client.webSocketSession(url.siblingSocketUrl("api/audio/speak-stream") + "?" + query)
+            client.webSocketSession(url.siblingSocketUrl("api/audio/speak-stream") + query) {
+                header(HttpHeaders.SecWebSocketProtocol, ticketProtocols(ticket))
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
