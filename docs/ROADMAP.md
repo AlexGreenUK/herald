@@ -118,6 +118,7 @@ uses. The protocol itself is described in [hermes-protocol-research.md](hermes-p
 - [x] Token usage per turn (live turns) and per session with cost, context window and account limits (`session.usage`, `MessageCompletePayload.usage`, `GET /api/sessions/{id}`)
 - [x] Error banner and live status line (`error`, `status.update`, failed turns)
 - [x] Notices and warnings (`notice`, `MessageCompletePayload.warning`)
+- [x] A New messages line where the unread messages start; a chat with unread messages opens there instead of at the bottom, and the line goes once the chat is read (the last-read message is kept per chat on the phone)
 
 ### 5. Tool activity
 - [x] Tool rows in the reply: name, what it is doing, running spinner → done (`tool.start`, `tool.complete` summary)
