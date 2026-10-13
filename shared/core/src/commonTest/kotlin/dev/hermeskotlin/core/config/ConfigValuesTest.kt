@@ -3,6 +3,7 @@ package dev.hermeskotlin.core.config
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -35,8 +36,27 @@ class ConfigValuesTest {
 
         assertEquals(JsonPrimitive(120L), parseConfigInput(e, " 120 ").getOrThrow())
         assertEquals(JsonPrimitive(0.75), parseConfigInput(e, "0.75").getOrThrow())
-        assertEquals(JsonPrimitive(0), parseConfigInput(e, "").getOrThrow())
         assertEquals("“ninety” isn't a number.", parseConfigInput(e, "ninety").exceptionOrNull()?.message)
+    }
+
+    @Test
+    fun anEmptiedNumberIsUnsetNotZero() {
+        // A speed or timeout of 0 means something; the empty field says "Not set".
+        assertEquals(JsonNull, parseConfigInput(entry(ConfigControl.Number, JsonPrimitive(300)), "  ").getOrThrow())
+    }
+
+    @Test
+    fun fallbacksThePhoneWouldNotWriteStillSave() {
+        // A bare model string and an object without a provider, as written by hand.
+        val current = json("""["gpt-4o-mini",{"model":"llama3"},{"provider":"openrouter","model":"x"}]""")
+        val e = entry(ConfigControl.Fallbacks, current, key = "fallback_providers")
+
+        assertEquals("gpt-4o-mini\nllama3\nopenrouter:x", e.editText())
+        // One line added: the rest stay exactly as they were.
+        assertEquals(
+            json("""["gpt-4o-mini",{"model":"llama3"},{"provider":"openrouter","model":"x"},{"provider":"groq","model":"y"}]"""),
+            parseConfigInput(e, e.editText() + "\ngroq:y").getOrThrow(),
+        )
     }
 
     @Test
