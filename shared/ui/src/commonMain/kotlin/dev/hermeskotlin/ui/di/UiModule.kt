@@ -7,6 +7,7 @@ import dev.hermeskotlin.ui.bots.BotsViewModel
 import dev.hermeskotlin.ui.chat.ChatViewModel
 import dev.hermeskotlin.ui.connect.ConnectViewModel
 import dev.hermeskotlin.ui.sessions.CapabilitiesViewModel
+import dev.hermeskotlin.ui.sessions.ConfigViewModel
 import dev.hermeskotlin.ui.plugins.PluginsViewModel
 import dev.hermeskotlin.ui.sessions.InsightsViewModel
 import dev.hermeskotlin.ui.sessions.ScheduledViewModel
@@ -26,6 +27,7 @@ val uiModule = module {
     viewModelOf(::RoomsViewModel)
     viewModelOf(::ScheduledViewModel)
     viewModelOf(::CapabilitiesViewModel)
+    viewModelOf(::ConfigViewModel)
     viewModelOf(::PluginsViewModel)
     viewModelOf(::InsightsViewModel)
     viewModelOf(::ChatViewModel)
