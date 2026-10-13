@@ -47,6 +47,7 @@ import dev.hermeskotlin.core.voice.AudioApi
 import dev.hermeskotlin.core.voice.LiveCalls
 import dev.hermeskotlin.core.voice.VoiceKeepAlive
 import dev.hermeskotlin.core.voice.SpeechPlayer
+import dev.hermeskotlin.core.voice.SpeechStreams
 import dev.hermeskotlin.core.voice.VoiceRecorder
 import dev.hermeskotlin.core.voice.DeviceDictation
 import dev.hermeskotlin.ui.voice.VoiceController
@@ -177,10 +178,15 @@ class ChatViewModel(
     liveCalls: LiveCalls,
     voiceKeepAlive: VoiceKeepAlive,
     deviceDictation: DeviceDictation,
+    speechStreams: SpeechStreams,
 ) : ViewModel(), ChatActions {
 
     /** Dictation and voice chat for the open chat. */
-    val voice = VoiceController(audioApi, recorder, player, viewModelScope, appScope, voiceKeepAlive, deviceDictation, liveCalls)
+    val voice = VoiceController(
+        audioApi, recorder, player, viewModelScope, appScope, voiceKeepAlive, deviceDictation,
+        speechStreams = speechStreams,
+        liveCalls = liveCalls,
+    )
 
     /** The profile's pet and its gallery. */
     val pets = PetController(petApi, viewModelScope)

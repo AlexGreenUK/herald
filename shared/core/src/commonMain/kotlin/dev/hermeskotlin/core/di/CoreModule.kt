@@ -50,6 +50,8 @@ import dev.hermeskotlin.core.rooms.RoomLinks
 import dev.hermeskotlin.core.rooms.RoomSeenStore
 import dev.hermeskotlin.core.rooms.RoomsApi
 import dev.hermeskotlin.core.voice.AudioApi
+import dev.hermeskotlin.core.voice.GatewaySpeechStreams
+import dev.hermeskotlin.core.voice.SpeechStreams
 import io.ktor.client.HttpClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -121,6 +123,7 @@ val coreModule = module {
     single { SidebarModeStore(get()) }
     single { JourneyApi(get()) }
     single { AudioApi(get()) }
+    single<SpeechStreams> { GatewaySpeechStreams(get(), get()) }
     // Outside requests (pictures from the web, GitHub) get a client without the gateway's cookies.
     single(named(OUTSIDE_CLIENT)) { createHttpClient() }
     single { MediaApi(get(), get(named(OUTSIDE_CLIENT))) }

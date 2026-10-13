@@ -106,6 +106,7 @@ class ChatViewModelTest {
                 override fun release() = Unit
             },
             NoDeviceDictation,
+            { _, _ -> null },
         )
         viewModels.put("chat", vm)
         return vm to chatHost
