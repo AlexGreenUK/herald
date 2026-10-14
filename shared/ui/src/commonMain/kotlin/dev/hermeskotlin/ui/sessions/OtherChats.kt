@@ -191,7 +191,9 @@ class OtherChatsWatch {
             if (newlyWaiting(was.waiting, chat.waiting)) {
                 if (was.waiting != null) waitingSince[chat.id] = nowMillis
                 calls += OtherChatEvent(chat.id, chat.title, chat.waiting!!.call(), chat.bot, atMillis = nowMillis)
-            } else if (chat.replied && !was.replied) {
+            } else if (chat.replied && (!was.replied || (chat.activityAt ?: 0.0) > (was.activityAt ?: 0.0))) {
+                // A new reply in a chat that was already unread: its activity moved on, though the short turn
+                // before it may have come and gone between two looks. Merely listed again unchanged isn't news.
                 replies += chat
                 news += chat.id
             }
