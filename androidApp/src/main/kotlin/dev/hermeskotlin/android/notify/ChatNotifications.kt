@@ -327,9 +327,10 @@ class ChatNotifications(private val context: Context) {
 
     /**
      * A finished run of a cron job the user follows: the job as the title, the start of what it said, and a tap
-     * that opens it in the Inbox. One notification per job, so a job's next run replaces its last.
+     * that opens it in the Inbox. One notification per job (a job id is only unique in its profile, [bot]), so a
+     * job's next run replaces its last.
      */
-    fun postCronRun(key: String, job: String, title: String, text: String, failed: Boolean) {
+    fun postCronRun(key: String, bot: String, job: String, title: String, text: String, failed: Boolean) {
         val body = text.toPlainText().take(MAX_PREVIEW).ifBlank { if (failed) "The run failed." else "Finished." }
         val notification = base(if (failed) CHANNEL_INBOX_FAILED else CHANNEL_INBOX)
             .setContentTitle(if (failed) "$title failed" else title)
@@ -338,7 +339,7 @@ class ChatNotifications(private val context: Context) {
             .setCategory(if (failed) NotificationCompat.CATEGORY_ERROR else NotificationCompat.CATEGORY_MESSAGE)
             .setContentIntent(openInbox(key))
             .build()
-        post("cron:$job", INBOX_ID, notification)
+        post("cron:$bot/$job", INBOX_ID, notification)
     }
 
     private fun openInbox(key: String): PendingIntent {
