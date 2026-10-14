@@ -300,7 +300,9 @@ class SessionsViewModel(
     fun refreshProfiles() {
         val url = gateway?.gatewayUrl ?: return
         viewModelScope.launch {
-            (profiles.roster(url) as? ApiResult.Success)?.let { _roster.value = it.value }
+            val roster = (profiles.roster(url) as? ApiResult.Success)?.value ?: return@launch
+            // Another gateway taken up meanwhile has its own profiles.
+            if (gateway?.gatewayUrl == url) _roster.value = roster
         }
     }
 

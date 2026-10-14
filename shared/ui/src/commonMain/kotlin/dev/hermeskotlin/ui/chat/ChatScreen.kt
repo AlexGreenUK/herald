@@ -93,6 +93,7 @@ import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.lazy.LazyListLayoutInfo
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.only
@@ -173,7 +174,10 @@ import dev.hermeskotlin.core.bots.Bot
 import dev.hermeskotlin.core.bots.handle
 import dev.hermeskotlin.core.bots.mentionQuery
 import dev.hermeskotlin.core.bots.mentionable
+import dev.hermeskotlin.ui.bots.AVATAR_EDGE
 import dev.hermeskotlin.ui.bots.BotAvatar
+import dev.hermeskotlin.ui.bots.BotFaces
+import dev.hermeskotlin.ui.bots.DecodedBotAvatar
 import dev.hermeskotlin.ui.bots.LocalBotFaces
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.Pencil
@@ -331,6 +335,8 @@ fun ChatScreen(
     onDismissOtherChat: (OtherChatEvent) -> Unit = {},
     /** Goes to the next chat needing the user; false when none does. Null offers no Next. */
     onNextChat: (() -> Boolean)? = null,
+    /** The profile the gateway was launched as, which answers a chat that names none; null until it's known. */
+    launchProfile: String? = null,
 ) {
     LaunchedEffect(target) { viewModel.open(target) }
     val state = viewModel.state.collectAsStateWithLifecycle().value
@@ -410,66 +416,71 @@ fun ChatScreen(
     val mentions = remember(mention, faces, target.bot) {
         mention?.let { faces.bots.mentionable(it.query, self = target.bot?.name) }.orEmpty()
     }
-    ChatView(
-        // A bot's chat is titled "Bot Chat" on the gateway; the bot's name says more.
-        title = target.bot?.label ?: state.title?.takeIf { it.isNotBlank() } ?: target.title ?: "New chat",
-        titleFace = LocalBotFaces.current.let { faces ->
-            faces.find(target.bot?.name)?.let { bot -> { BotAvatar(bot, faces.picture(bot), size = 22.dp) } }
-        },
-        state = state,
-        picker = picker,
-        connected = connected,
-        connectionLabel = connectionLabel(connection),
-        linkStatus = linkStatus(connection),
-        onRetryConnection = viewModel::retryConnection,
-        attachments = attachments,
-        attachmentError = attachmentError,
-        comments = viewModel.comments.collectAsStateWithLifecycle().value,
-        voiceChat = viewModel.voice.chat.collectAsStateWithLifecycle().value,
-        dictation = viewModel.voice.dictation.collectAsStateWithLifecycle().value,
-        suggestions = viewModel.suggestions.collectAsStateWithLifecycle().value,
-        mentions = mentions,
-        onMention = { bot ->
-            val typed = mention ?: return@ChatView
-            viewModel.composer.edit { replace(typed.start, typed.end, "@${bot.handle} ") }
-        },
-        sprite = viewModel.pets.sprite.collectAsStateWithLifecycle().value,
-        // Re-rolled per conversation, kept while a new chat gets its stored id.
-        placeholder = remember(target) { (if (target.storedSessionId == null) NEW_CHAT_PROMPTS else FOLLOW_UP_PROMPTS).random() },
-        notice = notice,
-        actions = viewModel,
-        editing = viewModel.editing.collectAsStateWithLifecycle().value,
-        // Only for the chat it was taken for, not one the screen moved on to (a branch, a fresh start).
-        readUpTo = target.readUpTo?.takeIf { state.storedSessionId == target.storedSessionId },
-        onOpenSidebar = onOpenSidebar,
-        // Already on an untouched new chat: nothing to start over from.
-        onNewChat = onNewChat.takeIf { target.storedSessionId != null || state.messages.isNotEmpty() },
-        onOpenMenu = onOpenMenu,
-        onOpenModels = { modelsOpen = true },
-        onAttach = { attachOpen = true },
-        onDictate = toggleDictation,
-        onVoiceChat = startVoiceChat,
-        onOpenPets = { petsOpen = true },
-        onOpenControl = viewModel::openControl,
-        onViewImage = { viewing = it },
-        onOpenFile = { file ->
-            // A picture opens in the viewer, like one the reply delivered.
-            if (file.kind == GatewayFileKind.Image) {
-                viewing = ViewerImage(file.name, fetch = { viewModel.downloadFile(file) })
-            } else {
-                previewing = file
-            }
-        },
-        onNotice = { notice = it },
-        wallpaper = rememberChatWallpaper(),
-        place = target.gateway.label,
-        profile = target.profile,
-        sessionsBadge = sessionsBadge,
-        otherChatBanner = otherChatBanner,
-        onOpenOtherChat = onOpenOtherChat,
-        onDismissOtherChat = onDismissOtherChat,
-        onNextChat = onNextChat?.let { next -> { if (!next()) notice = "Nothing waiting" } },
-    )
+    // The bot of the chat's profile, named above its replies; null keeps the app's mark and "Hermes".
+    // Worked out on every roster change, but equal unless what's drawn changed, so the chat isn't redrawn for it.
+    val speaker = replySpeaker(faces, target.bot?.name, target.profile, launchProfile)
+    ProvideReplySpeaker(speaker) {
+        ChatView(
+            // A bot's chat is titled "Bot Chat" on the gateway; the bot's name says more.
+            title = target.bot?.label ?: state.title?.takeIf { it.isNotBlank() } ?: target.title ?: "New chat",
+            titleFace = LocalBotFaces.current.let { faces ->
+                faces.find(target.bot?.name)?.let { bot -> { BotAvatar(bot, faces.picture(bot), size = 22.dp) } }
+            },
+            state = state,
+            picker = picker,
+            connected = connected,
+            connectionLabel = connectionLabel(connection),
+            linkStatus = linkStatus(connection),
+            onRetryConnection = viewModel::retryConnection,
+            attachments = attachments,
+            attachmentError = attachmentError,
+            comments = viewModel.comments.collectAsStateWithLifecycle().value,
+            voiceChat = viewModel.voice.chat.collectAsStateWithLifecycle().value,
+            dictation = viewModel.voice.dictation.collectAsStateWithLifecycle().value,
+            suggestions = viewModel.suggestions.collectAsStateWithLifecycle().value,
+            mentions = mentions,
+            onMention = { bot ->
+                val typed = mention ?: return@ChatView
+                viewModel.composer.edit { replace(typed.start, typed.end, "@${bot.handle} ") }
+            },
+            sprite = viewModel.pets.sprite.collectAsStateWithLifecycle().value,
+            // Re-rolled per conversation, kept while a new chat gets its stored id.
+            placeholder = remember(target) { (if (target.storedSessionId == null) NEW_CHAT_PROMPTS else FOLLOW_UP_PROMPTS).random() },
+            notice = notice,
+            actions = viewModel,
+            editing = viewModel.editing.collectAsStateWithLifecycle().value,
+            // Only for the chat it was taken for, not one the screen moved on to (a branch, a fresh start).
+            readUpTo = target.readUpTo?.takeIf { state.storedSessionId == target.storedSessionId },
+            onOpenSidebar = onOpenSidebar,
+            // Already on an untouched new chat: nothing to start over from.
+            onNewChat = onNewChat.takeIf { target.storedSessionId != null || state.messages.isNotEmpty() },
+            onOpenMenu = onOpenMenu,
+            onOpenModels = { modelsOpen = true },
+            onAttach = { attachOpen = true },
+            onDictate = toggleDictation,
+            onVoiceChat = startVoiceChat,
+            onOpenPets = { petsOpen = true },
+            onOpenControl = viewModel::openControl,
+            onViewImage = { viewing = it },
+            onOpenFile = { file ->
+                // A picture opens in the viewer, like one the reply delivered.
+                if (file.kind == GatewayFileKind.Image) {
+                    viewing = ViewerImage(file.name, fetch = { viewModel.downloadFile(file) })
+                } else {
+                    previewing = file
+                }
+            },
+            onNotice = { notice = it },
+            wallpaper = rememberChatWallpaper(),
+            place = target.gateway.label,
+            profile = target.profile,
+            sessionsBadge = sessionsBadge,
+            otherChatBanner = otherChatBanner,
+            onOpenOtherChat = onOpenOtherChat,
+            onDismissOtherChat = onDismissOtherChat,
+            onNextChat = onNextChat?.let { next -> { if (!next()) notice = "Nothing waiting" } },
+        )
+    }
 
     AttachSheet(visible = attachOpen, onDismiss = { attachOpen = false }, picker = attachmentPicker)
     PetSheet(
@@ -2067,12 +2078,51 @@ private fun AssistantReply(
     }
 }
 
-/** Who's speaking above a reply: the small mark, "Hermes", and when it finished. */
+/**
+ * The bot answering in a chat, as drawn above each reply: its name and its face. A data class of only what's drawn,
+ * so a roster refresh that changes something else (a bot's latest chat) doesn't redraw the chat.
+ */
+internal data class ReplySpeaker(val name: String, val face: Bot, val picture: ByteArray?) {
+    // The picture is compared by identity: the roster keeps the same bytes until the picture changes.
+    override fun equals(other: Any?): Boolean =
+        other is ReplySpeaker && name == other.name && face.name == other.face.name && face.uiMeta == other.face.uiMeta &&
+            picture === other.picture
+
+    override fun hashCode(): Int = name.hashCode() * 31 + face.name.hashCode()
+}
+
+/** The chat's bot, provided by the chat screen; null (no roster, an older gateway) shows the app's mark and "Hermes". */
+internal val LocalReplySpeaker = staticCompositionLocalOf<ReplySpeaker?> { null }
+
+/** The speaker's picture, decoded once for every reply that shows it; null draws its shape. */
+internal val LocalReplySpeakerPicture = staticCompositionLocalOf<ImageBitmap?> { null }
+
+/** Provides [speaker] to the replies under [content], its picture decoded once for all of them. */
+@Composable
+internal fun ProvideReplySpeaker(speaker: ReplySpeaker?, content: @Composable () -> Unit) {
+    val picture = speaker?.picture?.let { rememberImageBitmap(it, maxEdge = AVATAR_EDGE) }
+    CompositionLocalProvider(LocalReplySpeaker provides speaker, LocalReplySpeakerPicture provides picture, content = content)
+}
+
+/**
+ * The bot of a chat: the open bot's own, else the bot of the chat's [profile], or of [launchProfile] when the chat
+ * names none (the gateway answers those as the profile it was launched as, which needn't be `default`). Null when
+ * that isn't known yet or the roster has no such bot, which keeps the app's mark and "Hermes".
+ */
+internal fun replySpeaker(faces: BotFaces, botName: String?, profile: String?, launchProfile: String?): ReplySpeaker? {
+    val name = profile ?: launchProfile
+    val bot = botName?.let(faces::find)
+        ?: name?.let { wanted -> faces.bots.firstOrNull { it.name.equals(wanted, ignoreCase = true) } }
+    return bot?.let { ReplySpeaker(it.label, it, faces.picture(it)) }
+}
+
+/** Who's speaking above a reply: the chat's bot (or the app's mark and "Hermes"), and when it finished. */
 @Composable
 internal fun ReplyHeader(epochSeconds: Double?) {
+    val speaker = LocalReplySpeaker.current
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        AppMark(20.dp, glow = false)
-        Text("Hermes", style = Theme[typography][label], color = Theme[colors][textSecondary])
+        if (speaker != null) DecodedBotAvatar(speaker.face, LocalReplySpeakerPicture.current, size = 20.dp) else AppMark(20.dp, glow = false)
+        Text(speaker?.name ?: "Hermes", style = Theme[typography][label], color = Theme[colors][textSecondary])
         MessageTimeLabel(epochSeconds)
     }
 }

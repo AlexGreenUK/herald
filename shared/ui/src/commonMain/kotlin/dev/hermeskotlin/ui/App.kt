@@ -333,6 +333,7 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
     // the foreground; that keeps the gateway's live list polled then (every 10 s, as while the sidebar shows), and
     // never in the background.
     val sessions: SessionsViewModel = koinViewModel()
+    val profileRoster by sessions.roster.collectAsStateWithLifecycle()
     val others: OtherChatsViewModel = koinViewModel { parametersOf(sessions) }
     val settings = LocalAppSettings.current
     val alerts = settings.otherChatsAlerts
@@ -480,6 +481,8 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
                         }
                         return next != null
                     },
+                    // Only one the gateway named: a guessed `default` could name the wrong bot.
+                    launchProfile = profileRoster?.takeIf { it.launchKnown }?.launch,
                 )
             }
         }
