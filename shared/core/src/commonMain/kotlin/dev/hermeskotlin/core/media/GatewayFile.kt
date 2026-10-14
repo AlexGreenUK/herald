@@ -40,10 +40,17 @@ data class GatewayFile(val path: String, val line: Int? = null) {
                 return null
             }
             var line: Int? = null
-            val fragment = rest.substringAfter('#', "")
-            if ('#' in rest) {
+            // In a URI a literal `#` is escaped, so the first one starts the fragment. A path written plainly can
+            // hold one in a name (`issue#12.md`, `C#/App.cs`): only a last `#L12` is cut, or an anchor after a
+            // name that already has its extension (`guide.md#v1.2-notes`), or one with no dot at all (`#setup`).
+            val hash = if (scheme == "file") rest.indexOf('#') else rest.lastIndexOf('#')
+            val fragment = if (hash < 0) "" else rest.substring(hash + 1)
+            val named = hash >= 0 && '.' in rest.substring(0, hash).substringAfterLast('/')
+            val isFragment = hash >= 0 &&
+                (scheme == "file" || LINE_FRAGMENT.matches(fragment) || ('/' !in fragment && ('.' !in fragment || named)))
+            if (isFragment) {
                 line = LINE_FRAGMENT.matchEntire(fragment)?.groupValues?.get(1)?.toIntOrNull()
-                rest = rest.substringBefore('#')
+                rest = rest.substring(0, hash)
             }
             var path = percentDecode(rest)
             // Windows drive paths come through file:// as /C:/...

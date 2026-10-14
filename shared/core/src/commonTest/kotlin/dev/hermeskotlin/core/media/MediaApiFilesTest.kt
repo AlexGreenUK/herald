@@ -69,10 +69,24 @@ class MediaApiFilesTest {
             }
         }))
 
-        val bytes = assertIs<ApiResult.Success<ByteArray>>(api.download(url, "/a.txt", "rin")).value
+        val bytes = assertIs<ApiResult.Success<ByteArray>>(api.download(url, "/a.txt")).value
 
         assertEquals("bytes", bytes.decodeToString())
         assertEquals(listOf("/api/fs/download", "/api/files/download"), paths)
+    }
+
+    @Test
+    fun aProfilesFileIsntFetchedFromTheHostInstead() = runTest {
+        val paths = mutableListOf<String>()
+        val api = MediaApi(createHttpClient(MockEngine { request ->
+            paths += request.url.encodedPath
+            respond("""{"detail":"Not Found"}""", HttpStatusCode.NotFound, json)
+        }))
+
+        val result = assertIs<ApiResult.Failed>(api.download(url, "/a.txt", "rin"))
+
+        assertEquals(MediaApi.NO_PROFILE_DOWNLOAD, result.message)
+        assertEquals(listOf("/api/fs/download"), paths)
     }
 
     @Test

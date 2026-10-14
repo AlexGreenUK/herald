@@ -37,6 +37,13 @@ class GatewayFileTest {
         assertEquals(GatewayFile("/src/App.kt", line = 12), GatewayFile.fromLink("file:///src/App.kt#L12"))
         assertEquals(GatewayFile("/src/App.kt", line = 12), GatewayFile.fromLink("/src/App.kt#L12-L20"))
         assertEquals(GatewayFile("/src/App.kt"), GatewayFile.fromLink("/src/App.kt#readme"))
+        // A `#` in a plainly written name is part of it; in a URI it would be escaped.
+        assertEquals(GatewayFile("/home/me/issue#12.md"), GatewayFile.fromLink("/home/me/issue#12.md"))
+        assertEquals(GatewayFile("/tmp/C#/Program.cs", line = 3), GatewayFile.fromLink("/tmp/C#/Program.cs#L3"))
+        assertEquals(GatewayFile("/tmp/issue#12.md"), GatewayFile.fromLink("file:///tmp/issue%2312.md"))
+        assertEquals(GatewayFile("/tmp/notes"), GatewayFile.fromLink("file:///tmp/notes#12.md"))
+        // An anchor after a name with its extension is cut, dots and all.
+        assertEquals(GatewayFile("/docs/guide.md"), GatewayFile.fromLink("/docs/guide.md#v1.2-notes"))
         assertEquals(GatewayFile("C:/Users/me/a.txt"), GatewayFile.fromLink("file:///C:/Users/me/a.txt"))
     }
 

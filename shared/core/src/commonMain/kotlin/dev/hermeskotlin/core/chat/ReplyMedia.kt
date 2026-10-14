@@ -120,16 +120,22 @@ fun extractReplyMedia(text: String, generated: List<GeneratedImage> = emptyList(
     return cleaned to media.values.filterNot { it.gatewayPath in echoes || it.source in echoes }
 }
 
-/** A bare `file://` URI in prose; trailing sentence punctuation isn't part of it. */
-private val BARE_FILE_URI = Regex("""(?<![<(\[\w])file://[^\s<>()\[\]`]+?(?=[.,;:!?'"]*(?:\s|$))""")
+/**
+ * A link already written (group 1: a `[label](dest)` link or a `<...>` autolink), or else a bare `file://`
+ * URI in prose (not inside a web address), trailing sentence punctuation left out of it.
+ */
+private val BARE_FILE_URI = Regex(
+    """(\[[^\]\n]*]\([^)\n]*\)|<[^<>\s]+>)|(?<![<(\[\w/=#&?])file://[^\s<>()\[\]`]+?(?=[.,;:!?'"]*(?:\s|$))""",
+)
 
 /**
  * [text] with each bare `file://` URI outside code made a Markdown autolink (`<file:///x>`), so a tap
- * can open it like a `[name](file:///x)` link; Markdown only links web addresses written bare.
+ * can open it like a `[name](file:///x)` link; Markdown only links web addresses written bare. One in a
+ * link's label or in an autolink stays as it is: a link can't hold another.
  */
 fun linkFileUris(text: String): String {
     if ("file://" !in text) return text
-    return BARE_FILE_URI.replaceOutsideCode(text) { groups -> "<${groups[0]}>" }
+    return BARE_FILE_URI.replaceOutsideCode(text) { groups -> if (groups[1].isNotEmpty()) groups[0] else "<${groups[0]}>" }
 }
 
 /**

@@ -73,7 +73,8 @@ class MediaApi(
 
     /**
      * A whole gateway file a reply linked to (`GET /api/fs/download`, which reads through the profile's
-     * backend like the preview does), falling back to [file] on a gateway without it.
+     * backend like the preview does), falling back to [file] on a gateway without it when no [profile]
+     * is asked for.
      */
     suspend fun download(url: GatewayUrl, path: String, profile: String? = null): ApiResult<ByteArray> {
         // Streamed and counted: unlike the managed route, /api/fs/download has no size cap of its own.
@@ -96,10 +97,12 @@ class MediaApi(
         }
         // FastAPI's own "Not Found" means no such route; the route's own 404 says "File not found".
         val noRoute = result is ApiResult.Failed && (result.status == 405 || result.status == 404 && result.message in setOf("Not Found", "HTTP 404"))
-        return if (noRoute) {
-            file(url, path)
-        } else {
-            result
+        return when {
+            !noRoute -> result
+            // The managed route reads the host's disk, not the profile's backend: the same path in a
+            // sandboxed profile could be a different file there, or none.
+            profile != null -> ApiResult.Failed(501, NO_PROFILE_DOWNLOAD)
+            else -> file(url, path)
         }
     }
 
@@ -116,6 +119,8 @@ class MediaApi(
         const val MAX_DOWNLOAD_BYTES = 64L * 1024 * 1024
 
         const val TOO_LARGE = "It's over 64 MB, too large to fetch to the phone from the chat."
+
+        const val NO_PROFILE_DOWNLOAD = "This gateway can't hand over whole files from a profile yet. Update Hermes on it."
     }
 
     /** The image's bytes, decoded from the `data_url` the gateway answers with (media folders only). */

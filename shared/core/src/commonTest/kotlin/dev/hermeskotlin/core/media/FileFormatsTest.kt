@@ -58,4 +58,23 @@ class FileFormatsTest {
         assertEquals("Already <file:///a.md>", dev.hermeskotlin.core.chat.linkFileUris("Already <file:///a.md>"))
         assertEquals("no links", dev.hermeskotlin.core.chat.linkFileUris("no links"))
     }
+
+    @Test
+    fun aFileUriAlreadyInALinkIsntLinkedAgain() {
+        listOf(
+            "[see file:///a.md](https://x.dev) then",
+            "Open <https://h.dev/x?u=file:///y> now",
+            "Open https://h.dev/x?u=file:///y now",
+            "Open https://h.dev/file:///y now",
+            "Open https://h.dev/#file:///y or https://h.dev/?file:///y now",
+        ).forEach { assertEquals(it, dev.hermeskotlin.core.chat.linkFileUris(it)) }
+        assertEquals(
+            "[a](https://x.dev) and <file:///b.md>",
+            dev.hermeskotlin.core.chat.linkFileUris("[a](https://x.dev) and file:///b.md"),
+        )
+        assertEquals(
+            "![chart](https://x.dev/c.png)<br>see <file:///b.md>",
+            dev.hermeskotlin.core.chat.linkFileUris("![chart](https://x.dev/c.png)<br>see file:///b.md"),
+        )
+    }
 }
