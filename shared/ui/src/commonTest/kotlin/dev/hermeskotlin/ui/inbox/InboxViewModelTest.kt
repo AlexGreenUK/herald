@@ -322,6 +322,26 @@ class InboxViewModelTest {
     }
 
     @Test
+    fun aFollowPageThatCouldntReadReadsAgainWhenItComesIntoSight() = runTest(dispatcher) {
+        var reads = 0
+        val socket = PluginGateway(CoroutineScope(dispatcher)) { arg ->
+            when {
+                arg.startsWith("inbox") -> """{"ok":true,"runs":[]}"""
+                arg.startsWith("following") -> if (reads++ == 0) """{"ok":false,"error":"busy"}""" else """{"ok":true,"jobs":{},"failures":false,"default":"quiet"}"""
+                else -> """{"ok":true,"jobs":{},"failures":false,"default":"quiet"}"""
+            }
+        }
+        val vm = viewModel(socket)
+        vm.bind(one)
+        vm.chooseJobs()
+        assertFalse(vm.state.value.followingLoaded)
+        // The drawer closed with the page waiting, and opens again: no retry tap needed.
+        vm.setVisible(true)
+        assertTrue(vm.state.value.followingLoaded)
+        assertEquals(Follow.Quiet, vm.state.value.following.default)
+    }
+
+    @Test
     fun comingIntoSightLooksAgainAndGoingOutOfItDoesnt() = runTest(dispatcher) {
         val socket = PluginGateway(CoroutineScope(dispatcher)) { """{"ok":true,"runs":[]}""" }
         val vm = viewModel(socket)

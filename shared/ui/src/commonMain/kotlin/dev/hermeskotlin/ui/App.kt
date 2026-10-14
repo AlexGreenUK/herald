@@ -377,7 +377,8 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
                 selectedRunning = chatState.running,
                 inboxLink = shownInboxLink,
                 onInboxLinkTaken = { link ->
-                    shownInboxLink = null
+                    // A newer link may be handed on already: it is left for the sidebar to take.
+                    if (shownInboxLink == link) shownInboxLink = null
                     inboxLinks.consume(link)
                 },
             )

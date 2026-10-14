@@ -340,13 +340,7 @@ class InboxViewModel(
         // with its controls off until what this phone follows has been read.
         viewModelScope.launch {
             connection.state.map { it is ConnectionState.Connected }.distinctUntilChanged().collect { connected ->
-                if (!connected || !visible || gateway == null) return@collect
-                load(quiet = _state.value.runs.isNotEmpty())
-                val s = _state.value
-                if (s.choosing && !s.followingLoaded && !s.saving && followJob?.isActive != true) {
-                    val gen = generation
-                    followJob = viewModelScope.launch { readFollowing(gen) }
-                }
+                if (connected && visible && gateway != null) lookAgain()
             }
         }
         viewModelScope.launch {
@@ -392,7 +386,17 @@ class InboxViewModel(
     fun setVisible(visible: Boolean) {
         val was = this.visible
         this.visible = visible
-        if (visible && !was && gateway != null) load(quiet = _state.value.runs.isNotEmpty())
+        if (visible && !was && gateway != null) lookAgain()
+    }
+
+    /**
+     * Reads the list again, and the follow page when it waits for what this phone follows (it was opened
+     * offline, or out of sight when the socket came back): the jobs too, which may not have loaded either.
+     */
+    private fun lookAgain() {
+        load(quiet = _state.value.runs.isNotEmpty())
+        val s = _state.value
+        if (s.choosing && !s.followingLoaded && !s.saving && followJob?.isActive != true) chooseJobs()
     }
 
     fun refresh() = load()
