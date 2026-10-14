@@ -344,6 +344,20 @@ class OtherChatsViewModelTest {
     }
 
     @Test
+    fun botChatsStillCountAfterAProfileSwitch() {
+        runTest(dispatcher) {
+            val vm = watching()
+            vm.setBotChats(listOf(botRow(unread = false)))
+            // Bots belong to the gateway: the roster, and so this list, isn't handed over again for a profile.
+            vm.bind(gateway, profile = "work")
+            advanceTimeBy(SETTLED)
+            vm.setBotChats(listOf(botRow(unread = true)))
+            advanceTimeBy(QUIET)
+            assertEquals("bot-b", vm.banner.value?.chatId)
+        }
+    }
+
+    @Test
     fun nothingIsWatchedWhileTheChatIsOutOfSight() {
         runTest(dispatcher) {
             val vm = watching()

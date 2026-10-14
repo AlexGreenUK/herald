@@ -461,7 +461,9 @@ class SessionsViewModel(
         _banner.value = null
         previewJob?.cancel()
         recentRows.value = emptyList()
-        botChats.value = emptyList()
+        // Bots are the gateway's, not the profile's: the roster doesn't change with the profile, so nothing would
+        // hand them back after a profile switch. Another gateway's roster replaces them as it loads.
+        if (newGateway) botChats.value = emptyList()
         load(refresh = false)
         if (newGateway) {
             _user.value = null
