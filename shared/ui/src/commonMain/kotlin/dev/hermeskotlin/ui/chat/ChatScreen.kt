@@ -443,7 +443,7 @@ fun ChatScreen(
         onOpenFile = { file ->
             // A picture opens in the viewer, like one the reply delivered.
             if (file.kind == GatewayFileKind.Image) {
-                viewing = ViewerImage(file.name, fetch = { (viewModel.downloadFile(file) as? FileDownload.Ready)?.bytes })
+                viewing = ViewerImage(file.name, fetch = { viewModel.downloadFile(file) })
             } else {
                 previewing = file
             }
@@ -666,7 +666,7 @@ internal fun ChatView(
                         CompositionLocalProvider(
                             LocalMediaLoader provides actions::loadMedia,
                             LocalOpenImage provides onViewImage,
-                            LocalFileLinks provides { link -> GatewayFile.fromLink(link)?.also(onOpenFile) != null },
+                            LocalFileLinks provides { link -> GatewayFile.fromLink(link)?.let(onOpenFile) },
                             LocalNotice provides onNotice,
                             LocalSubagents provides SubagentContext(state.subagents, actions::stopSubagent),
                             LocalCommentHost provides commentHost,

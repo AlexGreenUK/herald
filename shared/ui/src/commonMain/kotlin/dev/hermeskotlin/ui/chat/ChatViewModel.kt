@@ -685,7 +685,7 @@ class ChatViewModel(
         val gateway = target?.gateway?.gatewayUrl ?: return FileDownload.Failed("Not connected to a gateway.")
         return when (val result = media.download(gateway, file.path, target?.profile)) {
             is ApiResult.Success -> FileDownload.Ready(result.value)
-            else -> FileDownload.Failed(fileError(result))
+            else -> FileDownload.Failed(fileError(result, whole = true))
         }
     }
 
@@ -1222,8 +1222,11 @@ class ChatViewModel(
     }
 }
 
-/** Why a gateway file couldn't be read, in the words the file viewer shows. */
-internal fun fileError(result: ApiResult<*>): String = when (result) {
+/**
+ * Why a gateway file couldn't be read, in the words the file viewer shows. [whole] is for the whole file
+ * (Save, Share, a linked picture), where too large means past the phone's cap, not the preview's.
+ */
+internal fun fileError(result: ApiResult<*>, whole: Boolean = false): String = when (result) {
     is ApiResult.Failed -> when (result.status) {
         404 -> "It isn't on the gateway, or it has moved since the reply was written."
         403 -> if (result.message.contains("sensitive", ignoreCase = true)) {
@@ -1231,7 +1234,11 @@ internal fun fileError(result: ApiResult<*>): String = when (result) {
         } else {
             "The gateway won't share it: ${result.message.trimEnd('.')}."
         }
-        413 -> "It's too large for the gateway to preview. Save still gets it."
+        413 -> when {
+            !whole -> "It's too large for the gateway to preview. Save still gets it."
+            result.message == MediaApi.TOO_LARGE -> MediaApi.TOO_LARGE
+            else -> "It's too large for the gateway to hand over."
+        }
         else -> result.message.trimEnd('.') + "."
     }
     ApiResult.SessionExpired -> "Sign in again to open files."

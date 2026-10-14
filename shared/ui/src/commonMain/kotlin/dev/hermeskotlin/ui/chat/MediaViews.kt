@@ -44,6 +44,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -91,7 +92,7 @@ internal class ViewerImage(
     val name: String,
     val source: String? = null,
     val bytes: ByteArray? = null,
-    val fetch: (suspend () -> ByteArray?)? = null,
+    val fetch: (suspend () -> FileDownload)? = null,
 )
 
 /** The pictures and files a reply delivered, under its text. */
@@ -239,7 +240,21 @@ internal fun ImageViewer(image: ViewerImage, onDismiss: () -> Unit) {
     val load = LocalMediaLoader.current
     val actions = rememberMediaActions()
     val scope = rememberCoroutineScope()
-    val bytes by produceState(image.bytes, image) { if (value == null) value = image.fetch?.invoke() ?: image.source?.let { load(it) } }
+    // Why the picture couldn't be had, shown in place of a spinner that would never stop.
+    var failed by remember(image) { mutableStateOf<String?>(null) }
+    val bytes by produceState(image.bytes, image) {
+        if (value != null) return@produceState
+        val fetch = image.fetch
+        if (fetch != null) {
+            when (val result = fetch()) {
+                is FileDownload.Ready -> value = result.bytes
+                is FileDownload.Failed -> failed = result.message
+            }
+        } else {
+            value = image.source?.let { load(it) }
+            if (value == null) failed = "Couldn't load this picture."
+        }
+    }
     var notice by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(notice) {
         if (notice != null) {
@@ -274,7 +289,14 @@ internal fun ImageViewer(image: ViewerImage, onDismiss: () -> Unit) {
                         .graphicsLayer(scaleX = scale, scaleY = scale, translationX = offset.x, translationY = offset.y),
                 )
             } else {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Spinner() }
+                Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
+                    val error = failed ?: "Couldn't show this picture.".takeIf { bytes != null }
+                    if (error != null) {
+                        Text(error, style = Theme[typography][bodySmall], color = Color.White, textAlign = TextAlign.Center)
+                    } else {
+                        Spinner()
+                    }
+                }
             }
             Row(
                 Modifier

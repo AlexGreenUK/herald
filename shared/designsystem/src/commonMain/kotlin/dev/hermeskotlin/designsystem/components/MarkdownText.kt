@@ -284,17 +284,17 @@ private fun DisplayFormula(formula: MathFormula, math: MathStyle) {
 }
 
 /**
- * Where a tapped link that isn't a web or mail link goes, a file path for instance: true when it was
- * taken care of. Null (the default) leaves such links inert.
+ * Where a tapped link that isn't a web or mail link goes, a file path for instance; the handler ignores
+ * what it can't open. Null (the default) leaves such links inert.
  */
-val LocalFileLinks = staticCompositionLocalOf<((String) -> Boolean)?> { null }
+val LocalFileLinks = staticCompositionLocalOf<((String) -> Unit)?> { null }
 
 /**
  * Opens only web and mail links. The text may come from a page the agent read, so a link to an
  * `intent:`, `file:` or app scheme must not reach another app on a tap; [files] may still show it in
  * the app (a path on the gateway, opened in a preview).
  */
-private class WebLinksOnly(private val parent: UriHandler, private val files: ((String) -> Boolean)?) : UriHandler {
+private class WebLinksOnly(private val parent: UriHandler, private val files: ((String) -> Unit)?) : UriHandler {
     override fun openUri(uri: String) {
         val scheme = uri.substringBefore(':', "").lowercase()
         if (scheme in setOf("http", "https", "mailto")) runCatching { parent.openUri(uri) } else files?.invoke(uri)

@@ -109,7 +109,10 @@ import dev.hermeskotlin.designsystem.typography
 import dev.hermeskotlin.designsystem.warning
 import dev.hermeskotlin.designsystem.warningSoft
 import dev.hermeskotlin.designsystem.well
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** Where a file preview stands: loading, its text, or why it can't be shown. */
 sealed interface FileLoad {
@@ -229,16 +232,19 @@ internal fun FileViewerPage(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
+                // The switch takes the room the buttons leave: it fills its width and would push them off screen.
                 if (kind == GatewayFileKind.Markdown || kind == GatewayFileKind.Table || kind == GatewayFileKind.Json) {
                     SegmentedControl(
                         options = listOf(false, true),
                         selected = raw,
                         onSelect = { raw = it },
                         optionLabel = { if (it) "Source" else if (kind == GatewayFileKind.Json) "Formatted" else "Preview" },
+                        modifier = Modifier.weight(1f),
                         optionIcon = { if (it) Lucide.FileCode else kindIcon(kind) },
                     )
+                } else {
+                    Spacer(Modifier.weight(1f))
                 }
-                Spacer(Modifier.weight(1f))
                 if (textual) {
                     IconButton(
                         Lucide.WrapText,
@@ -253,7 +259,17 @@ internal fun FileViewerPage(
                     contentDescription = "Copy the text",
                     onClick = {
                         scope.launch {
-                            clipboard.setClipEntry(plainTextClipEntry(ready.text))
+                            val clip = clipFor(ready)
+                            // A clip is sent whole through the system; a failed one mustn't take the app down.
+                            try {
+                                clipboard.setClipEntry(plainTextClipEntry(clip.text))
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                notice = Notice("Couldn't copy it to the clipboard. Save gets the whole file.", error = true)
+                                return@launch
+                            }
+                            clip.note?.let { notice = Notice(it) }
                             copied = true
                             kotlinx.coroutines.delay(1_500)
                             copied = false
@@ -266,8 +282,9 @@ internal fun FileViewerPage(
 
         notice?.let { NoticeLine(it) }
         if (ready?.truncated == true) {
+            val shownBytes = remember(ready) { ready.text.encodeToByteArray().size.toLong() }
             Banner(
-                "Showing the first ${formatBytes(ready.text.encodeToByteArray().size.toLong())} of ${formatBytes(ready.byteSize)}. Save gets the whole file.",
+                "Showing the first ${formatBytes(shownBytes)} of ${formatBytes(ready.byteSize)}. Save gets the whole file.",
                 tint = Theme[colors][warning],
                 background = Theme[colors][warningSoft],
             )
@@ -304,7 +321,13 @@ private fun FileBody(file: GatewayFile, kind: GatewayFileKind, text: FileText, r
             DataTable(table, framed)
         }
         else -> {
-            val shown = if (kind == GatewayFileKind.Json && !raw && !text.truncated) remember(text) { prettyJson(text.text) } ?: text.text else text.text
+            // Indented off the main thread: parsing the whole 512 KB preview would stall a frame or more.
+            val formatting = kind == GatewayFileKind.Json && !text.truncated
+            val pretty by produceState<Pair<FileText, String?>?>(null, text, formatting) {
+                value = if (formatting) text to withContext(Dispatchers.Default) { prettyJson(text.text) } else null
+            }
+            val indented = pretty?.takeIf { it.first == text }?.second
+            val shown = if (!raw && indented != null) indented else text.text
             CodeView(
                 shown,
                 language = text.language ?: languageOf(file),
@@ -467,6 +490,28 @@ private fun languageOf(file: GatewayFile): String? = when (file.kind) {
     GatewayFileKind.Code -> file.extension.ifEmpty { file.name.lowercase() }
     else -> null
 }
+
+/** What Copy puts on the clipboard, and what to tell when that isn't the whole file. */
+internal class Clip(val text: String, val note: String?)
+
+/**
+ * The preview's text for the clipboard, cut to [max] characters: Android hands a clip to the system in
+ * one Binder call, and the 512 KB preview as UTF-16 is past its 1 MB limit. A cut never splits a
+ * surrogate pair.
+ */
+internal fun clipFor(file: FileText, max: Int = MAX_CLIP_CHARS): Clip {
+    if (file.text.length <= max) {
+        return Clip(file.text, if (file.truncated) "Copied the part shown. Save gets the whole file." else null)
+    }
+    val end = if (file.text[max - 1].isHighSurrogate()) max - 1 else max
+    return Clip(file.text.substring(0, end), "Copied the first ${groupThousands(end)} characters. Save gets the whole file.")
+}
+
+/** 100000 as 100,000. */
+private fun groupThousands(n: Int): String = n.toString().reversed().chunked(3).joinToString(",").reversed()
+
+/** About 200 KB as UTF-16 in a Binder parcel: well inside its limit. */
+private const val MAX_CLIP_CHARS = 100_000
 
 /** 1.4 KB, 12 MB: one decimal under ten, none above. */
 internal fun formatBytes(bytes: Long): String {
