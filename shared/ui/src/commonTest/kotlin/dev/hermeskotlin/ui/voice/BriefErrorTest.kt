@@ -95,6 +95,24 @@ class BriefErrorTest {
     }
 
     @Test
+    fun aDigitOrEmptyPasswordGoesToo() {
+        assertEquals("connect to https://host.example.com/x failed", briefError("connect to https://user:1234/56@host.example.com/x failed"))
+        assertEquals("connect to https://host.example.com/x failed", briefError("connect to https://user:/s3cret@host.example.com/x failed"))
+    }
+
+    @Test
+    fun aQueryHoldingAnAddressGoesWhole() {
+        assertEquals("GET /authorize failed", briefError("GET /authorize?client_secret=SECRET&redirect_uri=https://app.example.com/cb failed"))
+        assertEquals("Error: https://host.example.com/", briefError("Error: https://host.example.com/?email=a@b.com/x?k=S"))
+    }
+
+    @Test
+    fun aPathAfterAnEqualsOrABraceLosesItsQuery() {
+        assertEquals("failed path=/v1/speech", briefError("failed path=/v1/speech?key=SECRET"))
+        assertEquals("failed {/v1/speech}", briefError("failed {/v1/speech?key=SECRET}"))
+    }
+
+    @Test
     fun aQuoteInsideAQueryDoesntEndIt() {
         assertEquals("Failed: https://host.example.com/v1 more", briefError("Failed: https://host.example.com/v1?key=SEC'RET more"))
         assertEquals("403", briefError("403, url='wss://h.example.com/s?t=SEC'RET'"))
