@@ -60,8 +60,18 @@ class WatchNotifier(
         scope.launch {
             // Only what was actually posted counts, as in ChatNotifier.
             val notified = mutableSetOf<String>()
+            var wasVisible = visibility.visible.value
             combine(watcher.chats, visibility.visible, settings.settings) { chats, visible, prefs -> Triple(chats, visible, prefs ?: AppSettings()) }
                 .collect { (chats, visible, prefs) ->
+                    // Coming into sight, ChatNotifier takes every notification down. What this kept as posted is gone
+                    // from the shade, so it's forgotten too: requests still waiting are posted again on the next change
+                    // (leaving Herald at the latest). Not now: ChatNotifier's clearing may run after, and take them down.
+                    val cameIntoSight = visible && !wasVisible
+                    wasVisible = visible
+                    if (cameIntoSight) {
+                        notified.clear()
+                        return@collect
+                    }
                     val open = openChat()
                     val side = host.sideChats.value
                     val waiting = chats.values.filter { it.storedId != open && it.storedId !in side && bots.botWithChat(it.storedId) == null }
