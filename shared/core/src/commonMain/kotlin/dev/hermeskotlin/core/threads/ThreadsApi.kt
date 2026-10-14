@@ -44,12 +44,18 @@ class ThreadsApi(private val connection: GatewayConnection) {
 
     /**
      * A new chat titled [title] in [profile] (null: the gateway's launch profile), running in [cwd] when given.
-     * Answers its stored id. A title another chat has is a [ThreadTitleTakenException], with nothing left behind.
+     * Answers its runtime id and stored id. A title another chat has is a [ThreadTitleTakenException], with nothing
+     * left behind.
      */
-    suspend fun startChat(profile: String?, title: String, cwd: String?): String =
+    suspend fun startChat(profile: String?, title: String, cwd: String?): Pair<String, String> =
         client().createTitledChat(profile, title, taken = { ThreadTitleTakenException(title) }) {
             cwd?.let { put("cwd", it) }
-        }.second
+        }
+
+    /** Lets go of the runtime [runtime] of a chat about to be deleted; a failure is ignored. */
+    suspend fun close(runtime: String) {
+        runCatching { client().request("session.close", buildJsonObject { put("session_id", runtime) }) }
+    }
 
     /** The `ui_meta` block and its revision as `profiles.list` has them for the profile [name]. */
     private suspend fun stored(name: String): Stored {

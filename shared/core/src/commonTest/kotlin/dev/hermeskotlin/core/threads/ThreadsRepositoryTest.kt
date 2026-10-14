@@ -296,12 +296,34 @@ class ThreadsRepositoryTest {
 
         assertFailsWith<ThreadActionException> { repo.startFresh(repo.threads.value.first()) }
 
-        // Deleted before the old chat takes its title back, which the new one held.
+        // Its runtime let go of, then deleted before the old chat takes its title back, which the new one held.
         assertEquals(
-            listOf("DELETE fresh", """PATCH old {"title":"Misc","archived":false,"pinned":true,"profile":"work"}"""),
-            sent.filter { it.startsWith("DELETE") || "\"archived\":false" in it },
+            listOf("session.close", "DELETE fresh", """PATCH old {"title":"Misc","archived":false,"pinned":true,"profile":"work"}"""),
+            sent.filter { it == "session.close" || it.startsWith("DELETE") || "\"archived\":false" in it },
         )
         assertTrue(configured.isEmpty())
+    }
+
+    @Test
+    fun aSaveWhoseReplyWasLostStillCounts() = runTest {
+        val repo = repository(backgroundScope, rpc = { call ->
+            if (call.method == "profiles.configure") {
+                // The write lands; its reply doesn't.
+                configured += call.params
+                stored = """{"threads":[{"id":"t1","name":"Misc","sessionId":"fresh"},{"id":"t2","name":"Work","sessionId":"w"}]}"""
+                revision = 4
+                "error:5000"
+            } else {
+                null
+            }
+        })
+        repo.refresh(force = true)
+
+        val fresh = repo.startFresh(repo.threads.value.first())
+
+        assertEquals("fresh", fresh.sessionId)
+        assertTrue(sent.none { it.startsWith("DELETE") || "\"archived\":false" in it })
+        assertEquals("fresh", repo.threads.value.first().sessionId)
     }
 
     @Test

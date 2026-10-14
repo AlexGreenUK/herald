@@ -552,7 +552,7 @@ fun SessionsSidebar(
                         reorderingThreads = reorderingThreads && attentionFilter == AttentionFilter.All,
                         onReordered = { ids ->
                             reorderingThreads = false
-                            if (ids != threads.map { it.id }) viewModel.reorderThreads(ids)
+                            if (ids != shownThreads.map { it.thread.id }) viewModel.reorderThreads(ids)
                         },
                         // A filtered list stays short, so the end is always in sight: paging on would
                         // fetch the whole history. What's running or waiting is recent anyway. A project's
@@ -1471,14 +1471,16 @@ internal fun ThreadActionsSheet(
     onReorder: () -> Unit,
     onRemove: (ThreadRow) -> Unit,
 ) {
-    // Keep the last row while the sheet animates out.
-    var kept by remember { mutableStateOf(row) }
-    if (row != null) kept = row
+    // Keep the last row, and the section as it was then, while the sheet animates out: a move that lands
+    // meanwhile mustn't add or drop items.
+    var kept by remember { mutableStateOf(row to shown) }
+    if (row != null) kept = row to shown
     BottomSheet(visible = row != null, onDismiss = onDismiss) {
-        val r = kept ?: return@BottomSheet
-        val at = shown.indexOfFirst { it.id == r.thread.id }
-        val above = shown.getOrNull(at - 1)?.takeIf { at >= 0 }
-        val below = shown.getOrNull(at + 1)?.takeIf { at >= 0 }
+        val (r, order) = kept
+        r ?: return@BottomSheet
+        val at = order.indexOfFirst { it.id == r.thread.id }
+        val above = order.getOrNull(at - 1)?.takeIf { at >= 0 }
+        val below = order.getOrNull(at + 1)?.takeIf { at >= 0 }
         SheetHeader(r.thread.name, "Thread")
         fun act(block: (ThreadRow) -> Unit) = { onDismiss(); block(r) }
         SheetAction("Start fresh", Lucide.RotateCcw, act(onStartFresh))

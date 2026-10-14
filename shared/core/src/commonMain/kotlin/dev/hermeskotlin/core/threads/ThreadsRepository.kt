@@ -9,6 +9,8 @@ import dev.hermeskotlin.core.profiles.ProfilesApi
 import dev.hermeskotlin.core.sessions.SessionSummary
 import dev.hermeskotlin.core.sessions.SessionsApi
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -57,6 +59,9 @@ class ThreadsRepository(
     private var profileName: String? = null
     private var readAt = 0L
     private val writes = Mutex()
+
+    /** The threads being started fresh right now. */
+    private val starting = mutableSetOf<String>()
 
     /** Shows [profile]'s threads on [url] from now on; another scope's are dropped at once. */
     fun bind(url: GatewayUrl, profile: String?) {
@@ -153,36 +158,80 @@ class ThreadsRepository(
      */
     suspend fun startFresh(thread: ChatThread): FreshChat {
         val scope = requireScope()
+        // A second tap while the first is under way would make a second new chat.
+        if (!starting.add(thread.id)) throw ThreadActionException("${thread.name} is already starting fresh.")
+        try {
+            return startFresh(scope, thread)
+        } finally {
+            starting.remove(thread.id)
+        }
+    }
+
+    private suspend fun startFresh(scope: Scope, thread: ChatThread): FreshChat {
         val current = chatOf(thread)
         val liveId = current?.id ?: thread.sessionId
         val oldTitle = current?.title?.takeIf { it.isNotBlank() } ?: thread.name
         // An earlier id of a compressed chat may hold the pin; it lets go of it too.
         val earlier = thread.sessionId.takeIf { it != liveId }
         val archivedAs = fileAway(scope, liveId, thread.name)
-        earlier?.let { sessions.update(scope.url, it, archived = true, pinned = false, profile = scope.profile) }
-        var made: FreshChat? = null
-        try {
-            val fresh = newChat(scope, thread).also { made = it }
+        var made: Made? = null
+        val fresh = try {
+            earlier?.let { sessions.update(scope.url, it, archived = true, pinned = false, profile = scope.profile) }
+            val chat = newChat(scope, thread).also { made = it }.chat
             // Pinned, the gateway never prunes it.
-            sessions.update(scope.url, fresh.sessionId, pinned = true, profile = scope.profile).orThrow("Couldn't pin the new chat.")
-            change { it.pointedAt(thread.id, fresh.sessionId) }
-            // An empty chat isn't remembered until it has a message, so the launch would reopen the archived one.
-            lastChats?.let { store ->
-                val last = store.get(scope.url, scope.profile)?.sessionId
-                if (last == liveId || last == thread.sessionId) store.set(scope.url, LastChat(fresh.sessionId, fresh.title), scope.profile)
-            }
-            return fresh
-        } catch (e: CancellationException) {
-            throw e
+            sessions.update(scope.url, chat.sessionId, pinned = true, profile = scope.profile).orThrow("Couldn't pin the new chat.")
+            change { it.pointedAt(thread.id, chat.sessionId) }
+            chat
         } catch (e: Exception) {
-            // The new chat goes first: it may hold the title the old one gets back.
-            made?.let { sessions.delete(scope.url, it.sessionId, scope.profile) }
-            val restored = sessions.update(scope.url, liveId, title = oldTitle, archived = false, pinned = true, profile = scope.profile) is ApiResult.Success
-            earlier?.let { sessions.update(scope.url, it, archived = false, pinned = true, profile = scope.profile) }
-            val where = if (restored) "" else " Its chat is in the archive as \"$archivedAs\"."
-            throw ThreadActionException("Couldn't start ${thread.name} fresh. ${e.message.orEmpty()}".trim() + where)
+            val landed = made?.takeIf { e !is CancellationException && pointedAtAlready(scope, thread, it.chat) }
+            if (landed == null) {
+                // Undone even when cancelled half way, so nothing is left filed away with no thread to hold it.
+                val restored = withContext(NonCancellable) { undo(scope, made, liveId, oldTitle, earlier) }
+                if (e is CancellationException) throw e
+                val where = if (restored) "" else " Its chat is in the archive as \"$archivedAs\"."
+                throw ThreadActionException("Couldn't start ${thread.name} fresh. ${e.message.orEmpty()}".trim() + where)
+            }
+            landed.chat
         }
+        // An empty chat isn't remembered until it has a message, so the launch would reopen the archived one.
+        lastChats?.let { store ->
+            val last = store.get(scope.url, scope.profile)?.sessionId
+            if (last == liveId || last == thread.sessionId) store.set(scope.url, LastChat(fresh.sessionId, fresh.title), scope.profile)
+        }
+        return fresh
     }
+
+    /**
+     * Whether the thread already points at [chat] though saving it seemed to fail: the write landed and its reply
+     * was lost. Then the start went through and nothing is undone.
+     */
+    private suspend fun pointedAtAlready(scope: Scope, thread: ChatThread, chat: FreshChat): Boolean {
+        val read = try {
+            api.threads(name(scope))
+        } catch (_: Exception) {
+            return false
+        }
+        if (read.none { it.id == thread.id && it.sessionId == chat.sessionId }) return false
+        if (_scope.value == scope) _threads.value = read
+        return true
+    }
+
+    /**
+     * Deletes the new chat [made], letting go of its runtime first, and puts the chat [liveId] back as it was.
+     * The new chat goes first: it may hold the title the old one gets back. Answers whether the old one is back.
+     */
+    private suspend fun undo(scope: Scope, made: Made?, liveId: String, oldTitle: String, earlier: String?): Boolean {
+        made?.let {
+            api.close(it.runtime)
+            sessions.delete(scope.url, it.chat.sessionId, scope.profile)
+        }
+        val restored = sessions.update(scope.url, liveId, title = oldTitle, archived = false, pinned = true, profile = scope.profile) is ApiResult.Success
+        earlier?.let { sessions.update(scope.url, it, archived = false, pinned = true, profile = scope.profile) }
+        return restored
+    }
+
+    /** A new chat made for a thread: what opens, and the runtime it was made on. */
+    private class Made(val chat: FreshChat, val runtime: String)
 
     /** Renames, archives and unpins the chat [id] in one call, its new title stamped with the time. Answers that title. */
     private suspend fun fileAway(scope: Scope, id: String, name: String): String {
@@ -197,11 +246,12 @@ class ThreadsRepository(
     }
 
     /** A new chat named after [thread], or "<name> (2)" and on while another chat has the name. */
-    private suspend fun newChat(scope: Scope, thread: ChatThread): FreshChat {
+    private suspend fun newChat(scope: Scope, thread: ChatThread): Made {
         val titles = listOf(thread.name) + (2..MAX_SUFFIX).map { "${thread.name} ($it)" }
         titles.forEach { title ->
             try {
-                return FreshChat(api.startChat(scope.profile, title, thread.cwd), title)
+                val (runtime, stored) = api.startChat(scope.profile, title, thread.cwd)
+                return Made(FreshChat(stored, title), runtime)
             } catch (_: ThreadTitleTakenException) {
                 // Try the next name.
             }
