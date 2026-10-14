@@ -51,7 +51,7 @@ import kotlin.test.assertTrue
 import kotlin.time.Clock
 import kotlin.time.Instant
 
-/** The Sessions badge, the banner and Next, as [SessionsViewModel] works them out from the list and the live statuses. */
+/** The Sessions badge, the banner and Next, as [OtherChatsViewModel] works them out from the list and the live statuses. */
 @OptIn(ExperimentalCoroutinesApi::class)
 class OtherChatsViewModelTest {
 
@@ -105,7 +105,7 @@ class OtherChatsViewModelTest {
         }
     }
 
-    private fun TestScope.viewModel(socket: FakeSocket = FakeSocket()): SessionsViewModel {
+    private fun TestScope.viewModel(socket: FakeSocket = FakeSocket()): OtherChatsViewModel {
         val config = MockEngineConfig()
         config.dispatcher = dispatcher
         config.addHandler { request ->
@@ -140,25 +140,31 @@ class OtherChatsViewModelTest {
         val connection = GatewayConnection(auth, { _, _ -> socket }, scope)
         connection.start(gateway.gatewayUrl)
         val attention = AttentionTracker(connection, ChatHost(connection, SessionsApi(client), scope), ActiveSessions(connection, scope), scope)
-        val vm = SessionsViewModel(
+        sessions = SessionsViewModel(
             SessionsApi(client), auth, connection, LastChatStore(InMemoryKeyValueStore()), ProfilesApi(client),
             attention, SeenStore(InMemoryKeyValueStore()) { LOOKED }, DraftStore(InMemoryKeyValueStore()), ProjectsApi(connection),
             ThreadsRepository(ThreadsApi(connection), SessionsApi(client), ProfilesApi(client)),
         )
+        val vm = OtherChatsViewModel(sessions, SessionsApi(client), connection, attention)
         val scheduler = testScheduler
-        vm.clock = object : Clock {
+        val clock = object : Clock {
             override fun now(): Instant = Instant.fromEpochMilliseconds(START_MILLIS + scheduler.currentTime)
         }
+        sessions.clock = clock
+        vm.clock = clock
         return vm
     }
+
+    /** The sidebar's list, which [viewModel] reads: bound, read again and switched to the archive here. */
+    private lateinit var sessions: SessionsViewModel
 
     /**
      * Bound, with "Alerts for other chats" on ([banner] too, unless said) and the chat "a" on screen, past the
      * settling: what's there now is taken stock of.
      */
-    private fun TestScope.watching(socket: FakeSocket = FakeSocket(), banner: Boolean = true): SessionsViewModel {
+    private fun TestScope.watching(socket: FakeSocket = FakeSocket(), banner: Boolean = true): OtherChatsViewModel {
         val vm = viewModel(socket)
-        vm.bind(gateway)
+        sessions.bind(gateway)
         vm.setOpenChat(setOf("a"))
         vm.setOtherChats(enabled = true, banner = banner)
         vm.setChatShown(true)
@@ -167,9 +173,9 @@ class OtherChatsViewModelTest {
     }
 
     /** [id] has a reply the user hasn't seen, as the next list read says. */
-    private fun TestScope.replyIn(vm: SessionsViewModel, id: String) {
+    private fun TestScope.replyIn(id: String) {
         activity[id] = LOOKED + 100
-        vm.refresh()
+        sessions.refresh()
         advanceTimeBy(QUIET)
     }
 
@@ -179,7 +185,7 @@ class OtherChatsViewModelTest {
             val vm = watching()
             assertNull(vm.banner.value)
             activity["b"] = LOOKED + 100
-            vm.refresh()
+            sessions.refresh()
             // The list and the live statuses get a moment to agree first: a turn just starting isn't a reply.
             advanceTimeBy(1_000)
             assertNull(vm.banner.value)
@@ -209,7 +215,7 @@ class OtherChatsViewModelTest {
     fun aBannerCanBeDismissedAsItWasBeforeItsPreviewCame() {
         runTest(dispatcher) {
             val vm = watching()
-            replyIn(vm, "b")
+            replyIn("b")
             val filled = assertNotNull(vm.banner.value)
             assertNotNull(filled.preview)
             // The screen still holds the event from before the preview filled in.
@@ -224,7 +230,7 @@ class OtherChatsViewModelTest {
     fun theOpenChatNeverGetsABanner() {
         runTest(dispatcher) {
             val vm = watching()
-            replyIn(vm, "a")
+            replyIn("a")
             assertNull(vm.banner.value)
             assertEquals(SessionsBadge(), vm.badge.value)
             assertTrue(previewReads.isEmpty())
@@ -235,7 +241,7 @@ class OtherChatsViewModelTest {
     fun openingTheChatTakesItsBannerAndBadgeAwayAtOnce() {
         runTest(dispatcher) {
             val vm = watching()
-            replyIn(vm, "b")
+            replyIn("b")
             assertNotNull(vm.banner.value)
             // Opened from the sidebar: no waiting for the next look, or Next would go back to it.
             vm.setOpenChat(setOf("b"))
@@ -249,9 +255,9 @@ class OtherChatsViewModelTest {
     fun anotherProfileOrGatewayClearsTheBannerAndTheBadge() {
         runTest(dispatcher) {
             val vm = watching()
-            replyIn(vm, "b")
+            replyIn("b")
             assertNotNull(vm.banner.value)
-            vm.bind(gateway, profile = "work")
+            sessions.bind(gateway, profile = "work")
             assertNull(vm.banner.value)
             assertEquals(SessionsBadge(), vm.badge.value)
             assertNull(vm.nextChat())
@@ -267,9 +273,9 @@ class OtherChatsViewModelTest {
         runTest(dispatcher) {
             val vm = watching()
             previewGate = CompletableDeferred()
-            replyIn(vm, "b")
+            replyIn("b")
             assertEquals(null, assertNotNull(vm.banner.value).preview)
-            vm.bind(gateway, profile = "work")
+            sessions.bind(gateway, profile = "work")
             previewGate?.complete(Unit)
             advanceTimeBy(SETTLED)
             assertNull(vm.banner.value)
@@ -280,14 +286,14 @@ class OtherChatsViewModelTest {
     fun theArchiveShowingKeepsWhatIsNews() {
         runTest(dispatcher) {
             val vm = watching()
-            replyIn(vm, "b")
+            replyIn("b")
             assertEquals(SessionsBadge(replies = 1), vm.badge.value)
             // The sidebar beside the chat goes to Archived and back: the recent chats didn't go anywhere.
-            vm.setFilter(SessionListFilter.Archived)
+            sessions.setFilter(SessionListFilter.Archived)
             advanceTimeBy(QUIET)
             assertEquals(SessionsBadge(replies = 1), vm.badge.value)
             assertNotNull(vm.banner.value)
-            vm.setFilter(SessionListFilter.Recent)
+            sessions.setFilter(SessionListFilter.Recent)
             advanceTimeBy(QUIET)
             assertEquals(SessionsBadge(replies = 1), vm.badge.value)
             assertEquals("b", vm.nextChat()?.id)
@@ -298,8 +304,8 @@ class OtherChatsViewModelTest {
     fun aChatOpenedFromTheBannerWhileTheArchiveShowsStartsAtItsNewMessages() {
         runTest(dispatcher) {
             val vm = watching()
-            replyIn(vm, "b")
-            vm.setFilter(SessionListFilter.Archived)
+            replyIn("b")
+            sessions.setFilter(SessionListFilter.Archived)
             advanceTimeBy(QUIET)
             assertEquals(LOOKED, vm.openListed("b"))
         }
@@ -312,7 +318,7 @@ class OtherChatsViewModelTest {
             val vm = watching(socket)
             activity["c"] = LOOKED + 100
             socket.live["b"] = "waiting"
-            vm.refresh()
+            sessions.refresh()
             advanceTimeBy(15_000)
             val banner = assertNotNull(vm.banner.value)
             assertEquals("b", banner.chatId)
@@ -363,7 +369,7 @@ class OtherChatsViewModelTest {
             val vm = watching()
             vm.setBotChats(listOf(botRow(unread = false)))
             // Bots belong to the gateway: the roster, and so this list, isn't handed over again for a profile.
-            vm.bind(gateway, profile = "work")
+            sessions.bind(gateway, profile = "work")
             advanceTimeBy(SETTLED)
             vm.setBotChats(listOf(botRow(unread = true)))
             advanceTimeBy(QUIET)
@@ -376,7 +382,7 @@ class OtherChatsViewModelTest {
         runTest(dispatcher) {
             val vm = watching()
             vm.setChatShown(false)
-            replyIn(vm, "b")
+            replyIn("b")
             assertNull(vm.banner.value)
             // Back: the reply came while away, so it's on the badge, though no banner tells of it.
             vm.setChatShown(true)
@@ -391,12 +397,12 @@ class OtherChatsViewModelTest {
         runTest(dispatcher) {
             val socket = FakeSocket()
             val vm = viewModel(socket)
-            vm.bind(gateway)
+            sessions.bind(gateway)
             vm.setOpenChat(setOf("a"))
             // The switch is off by default: the chat on screen alone watches nothing.
             vm.setChatShown(true)
             advanceTimeBy(SETTLED)
-            replyIn(vm, "b")
+            replyIn("b")
             advanceTimeBy(30_000)
             assertNull(vm.banner.value)
             assertEquals(SessionsBadge(), vm.badge.value)
@@ -409,7 +415,7 @@ class OtherChatsViewModelTest {
     fun turningAlertsOffForgetsWhatWasNews() {
         runTest(dispatcher) {
             val vm = watching()
-            replyIn(vm, "b")
+            replyIn("b")
             assertNotNull(vm.banner.value)
             vm.setOtherChats(enabled = false, banner = true)
             assertNull(vm.banner.value)
@@ -426,7 +432,7 @@ class OtherChatsViewModelTest {
     fun withTheBannerOffAReplyOnlyCountsOnTheBadge() {
         runTest(dispatcher) {
             val vm = watching(banner = false)
-            replyIn(vm, "b")
+            replyIn("b")
             assertNull(vm.banner.value)
             assertEquals(SessionsBadge(replies = 1), vm.badge.value)
             assertTrue(previewReads.isEmpty())
@@ -445,7 +451,7 @@ class OtherChatsViewModelTest {
             advanceTimeBy(SETTLED)
             assertEquals(reads, listReads)
             // Still watched: a reply after it shows.
-            replyIn(vm, "b")
+            replyIn("b")
             assertNotNull(vm.banner.value)
             // Away for longer, the list is read again.
             vm.setChatShown(false)
@@ -460,11 +466,11 @@ class OtherChatsViewModelTest {
     fun anArchiveReadWhileAwayDoesNotStandForTheRecentChats() {
         runTest(dispatcher) {
             val vm = watching()
-            vm.setFilter(SessionListFilter.Archived)
+            sessions.setFilter(SessionListFilter.Archived)
             advanceTimeBy(QUIET)
             vm.setChatShown(false)
             // "b" replies while Settings shows; the change read is the archive's, which says nothing of "b".
-            replyIn(vm, "b")
+            replyIn("b")
             val reads = listReads
             vm.setChatShown(true)
             advanceTimeBy(SETTLED)
