@@ -58,6 +58,9 @@ class GatewayFileTest {
         assertEquals(GatewayFile("/opt/data/docs/My Notes.md"), file.resolve("My%20Notes.md"))
         assertEquals(GatewayFile("/x.md"), GatewayFile("/index.md").resolve("x.md"))
         assertEquals(GatewayFile("C:/work/notes/b.md"), GatewayFile("C:/work/docs/a.md").resolve("../notes/b.md"))
+        assertEquals(GatewayFile("C:/work/notes/b.md"), GatewayFile("C:/work/docs/a.md").resolve("..\\notes\\b.md"))
+        assertEquals(GatewayFile("C:/b.md"), GatewayFile("C:/work/docs/a.md").resolve("/b.md"))
+        assertEquals(GatewayFile("/opt/data/docs/my chart.png"), file.resolve("<my chart.png>"))
     }
 
     @Test
@@ -76,6 +79,7 @@ class GatewayFileTest {
         assertEquals(GatewayFile("/repo/src/App.kt", line = 12), file.resolve("../src/App.kt#L12"))
         assertEquals(GatewayFile("/repo/src/App.kt", line = 12), file.resolve("../src/App.kt#L12-L20"))
         assertEquals(GatewayFile("/repo/src/App.kt", line = 42), file.resolve("../src/App.kt:42"))
+        assertEquals(GatewayFile("/repo/docs/Makefile", line = 12), file.resolve("Makefile:12"))
         assertEquals(GatewayFile("/repo/docs/setup.md"), file.resolve("setup.md#install"))
         assertEquals(GatewayFile("/repo/docs/guide.md", line = 12), file.resolve("#L12"))
         assertNull(file.resolve("#install"))

@@ -23,17 +23,22 @@ data class GatewayFile(val path: String, val line: Int? = null) {
      * another scheme, a bare `#anchor`, or a link to a folder.
      */
     fun resolve(link: String): GatewayFile? {
-        val trimmed = link.trim()
+        // A destination written `<my chart.png>` may come with its brackets.
+        val trimmed = link.trim().removeSurrounding("<", ">").trim()
         if (trimmed.isEmpty()) return null
-        if (trimmed.startsWith("/") || trimmed.startsWith("~/") || SCHEME.containsMatchIn(trimmed) && !NAME_AND_LINE.matches(trimmed)) {
-            return fromLink(trimmed)
+        if (trimmed.startsWith("/") || trimmed.startsWith("~/") || SCHEME.containsMatchIn(trimmed) && !isNameAndLine(trimmed)) {
+            val absolute = fromLink(trimmed) ?: return null
+            // In a file on a Windows drive, `/b.md` is on that drive.
+            val drive = DRIVE_ROOT.find(path)?.value
+            return if (drive != null && absolute.path.startsWith("/")) absolute.copy(path = drive.dropLast(1) + absolute.path) else absolute
         }
         if (trimmed.startsWith("#")) {
             val line = LINE_FRAGMENT.matchEntire(trimmed.substring(1))?.groupValues?.get(1)?.toIntOrNull()?.takeIf { it > 0 }
             return line?.let { copy(line = it) }
         }
         // Read as if it hung off the root, so escapes, anchors and `:12` come off the same way they do in a reply.
-        val relative = fromLink("/$trimmed") ?: return null
+        // A file written on Windows may separate its folders with `\`.
+        val relative = fromLink("/" + trimmed.replace('\\', '/')) ?: return null
         if (relative.path.endsWith("/") || relative.path.substringAfterLast('/') in setOf(".", "..")) return null
         val joined = normalize(folder + relative.path)
         if (joined == "/" || joined == "~/" || joined.endsWith(":/")) return null
@@ -93,8 +98,16 @@ data class GatewayFile(val path: String, val line: Int? = null) {
         private val LINE_SUFFIX = Regex(""":(\d+)(?::\d+)?$""")
         private val WINDOWS_DRIVE = Regex("""^/[A-Za-z]:/""")
 
-        /** `App.kt:42`: a name and a line, not a scheme (a scheme has no dot before its colon here; `tel:` stays a scheme). */
-        private val NAME_AND_LINE = Regex("""^[^/:#]*\.[^/:#]*:\d+(?::\d+)?$""")
+        /**
+         * `App.kt:42` or `Makefile:12`: a name and a line, not a scheme. The name has a dot or is a file
+         * known without one, so `tel:12345` stays a scheme.
+         */
+        private fun isNameAndLine(link: String): Boolean {
+            val name = NAME_AND_LINE.matchEntire(link)?.groupValues?.get(1) ?: return false
+            return '.' in name || name.lowercase() in GatewayFileKind.CODE_NAMES
+        }
+
+        private val NAME_AND_LINE = Regex("""^([^/:#]+):\d+(?::\d+)?$""")
 
         /**
          * [path] with empty and `.` segments dropped and each `..` taking off the one before it. Past `/` (or a
@@ -196,7 +209,7 @@ enum class GatewayFileKind(val label: String) {
             "css", "scss", "less", "vue", "svelte", "xml", "svg", "yaml", "yml", "toml", "ini", "cfg", "conf", "properties",
             "gradle", "dart", "ex", "exs", "hs", "zig", "nim", "tf", "proto", "graphql", "diff", "patch",
         )
-        private val CODE_NAMES = setOf("dockerfile", "makefile", "justfile", "procfile", "gemfile", "rakefile")
+        internal val CODE_NAMES = setOf("dockerfile", "makefile", "justfile", "procfile", "gemfile", "rakefile")
         private val BINARY = setOf(
             "pdf", "zip", "gz", "tgz", "bz2", "xz", "7z", "rar", "tar", "apk", "aab", "jar", "exe", "dll", "so", "dylib", "bin",
             "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp", "epub", "mp3", "wav", "ogg", "opus", "flac", "m4a",
