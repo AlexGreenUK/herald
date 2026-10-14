@@ -202,9 +202,10 @@ internal fun InboxPage(
                 else -> InboxView(state, viewModel, onBack = onBack, onOpenSettings = onOpenSettings, foldersList = foldersList, runsList = runsList)
             }
         }
-        // Over the page's foot, where the lists leave room for it: each page fills the height itself.
+        // Over the page's foot, where the lists leave room for it: each page fills the height itself. Above the
+        // sidebar's New chat button, which lies over that foot too.
         state.message?.let {
-            MessageBanner(it, onDismiss = viewModel::dismissMessage, modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 24.dp))
+            MessageBanner(it, onDismiss = viewModel::dismissMessage, modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 96.dp))
         }
     }
 }
