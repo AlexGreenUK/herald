@@ -129,6 +129,28 @@ class OtherChatsTest {
     }
 
     @Test
+    fun anotherRequestOfTheSameKindIsNewWhenItsIdIsKnown() {
+        val watch = OtherChatsWatch()
+        watch.update(chats(waiting("b").copy(requestId = "r1"), waiting("c")), 1)
+        // The same request heard again isn't new.
+        assertNull(watch.update(chats(waiting("b").copy(requestId = "r1"), waiting("c")), 2))
+        // Approved on Desktop, and the next approval asked before the next look.
+        val next = assertNotNull(watch.update(chats(waiting("b").copy(requestId = "r2"), waiting("c")), 3))
+        assertEquals("b", next.chatId)
+        assertEquals(OtherChatCall.Approval, next.call)
+        // It goes to the back of Next's queue, as a new one.
+        assertEquals(listOf("c", "b"), watch.queue(chats(waiting("b"), waiting("c"))).map { it.id })
+    }
+
+    @Test
+    fun anUnknownIdIsNoNewRequest() {
+        val watch = OtherChatsWatch()
+        watch.update(chats(waiting("b")), 1)
+        assertNull(watch.update(chats(waiting("b").copy(requestId = "r1")), 2))
+        assertNull(watch.update(chats(waiting("b")), 3))
+    }
+
+    @Test
     fun severalAtOnceLeadWithARequestAndCountTheRest() {
         val watch = OtherChatsWatch()
         watch.update(chats(idle("a"), idle("b"), idle("c")), 1)
@@ -161,7 +183,8 @@ class OtherChatsTest {
     @Test
     fun repliesSinceLeavingAreNewsWithoutABanner() {
         val watch = OtherChatsWatch()
-        watch.update(chats(idle("b", at = 50.0), idle("c", at = 50.0), idle("d", at = 50.0)), 1)
+        // Time away counts from the newest activity the last look saw (the gateway's clock), here c's.
+        watch.update(chats(idle("b", at = 50.0), reply("c", at = 90.0), idle("d", at = 50.0)), 1)
         watch.left(100.0)
         // "b" replied after the chat screen went; "c" was already unread from before, not news.
         val back = chats(reply("b", at = 150.0), reply("c", at = 90.0), idle("d"))
@@ -172,6 +195,24 @@ class OtherChatsTest {
         watch.reset()
         assertNull(watch.update(back, 3))
         assertEquals(SessionsBadge(replies = 1), watch.badge(back))
+    }
+
+    @Test
+    fun timeAwayCountsOnTheGatewaysClock() {
+        // The phone's clock runs far ahead of the gateway's: a reply on the gateway's clock still counts.
+        val ahead = OtherChatsWatch()
+        ahead.update(chats(idle("b", at = 50.0), idle("c", at = 60.0)), 1)
+        ahead.left(10_000.0)
+        val back = chats(reply("b", at = 70.0), idle("c", at = 60.0))
+        assertNull(ahead.update(back, 2))
+        assertEquals(SessionsBadge(replies = 1), ahead.badge(back))
+        // Behind it: what was already unread before leaving doesn't turn into news.
+        val behind = OtherChatsWatch()
+        behind.update(chats(reply("b", at = 500.0), idle("c", at = 400.0)), 1)
+        behind.left(10.0)
+        val later = chats(reply("b", at = 500.0), idle("c", at = 400.0))
+        assertNull(behind.update(later, 2))
+        assertEquals(SessionsBadge(), behind.badge(later))
     }
 
     @Test

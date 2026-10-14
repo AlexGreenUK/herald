@@ -6,7 +6,8 @@ import dev.hermeskotlin.core.chat.Waiting
 /**
  * A chat other than the one on screen, as the Sessions badge, the banner and Next see it. [waiting]: what it
  * waits on the user for; [unread]: it has activity the user hasn't seen; [running]: a turn is going.
- * [activityAt] (epoch seconds) orders replies; [bot] names the bot whose Bot Chat this is.
+ * [activityAt] (epoch seconds) orders replies; [bot] names the bot whose Bot Chat this is. [requestId]: the
+ * open request's id when this phone heard it, so a second request of the same kind still counts as new.
  */
 data class OtherChat(
     val id: String,
@@ -16,6 +17,7 @@ data class OtherChat(
     val running: Boolean = false,
     val activityAt: Double? = null,
     val bot: String? = null,
+    val requestId: String? = null,
 ) {
     /** A turn finished with something the user hasn't read. Mid-turn activity isn't a reply yet. */
     val replied: Boolean get() = unread && !running && waiting == null
@@ -105,13 +107,15 @@ private fun Waiting.call(): OtherChatCall = when (this) {
 
 /**
  * Whether [now] is a new request compared with [before]. Learning what an unseen request was (Unknown to a kind,
- * or back) isn't new; one kind after another is (an approval answered, then a question).
+ * or back) isn't new; one kind after another is (an approval answered, then a question), and so is another
+ * request of the same kind when this phone heard both (an approval answered on Desktop, then the next one).
  */
-private fun newlyWaiting(before: Waiting?, now: Waiting?): Boolean = when {
-    now == null -> false
-    before == null -> true
-    before == Waiting.Unknown || now == Waiting.Unknown -> false
-    else -> before != now
+private fun newlyWaiting(before: OtherChat, now: OtherChat): Boolean = when {
+    now.waiting == null -> false
+    before.waiting == null -> true
+    before.requestId != null && now.requestId != null -> before.requestId != now.requestId
+    before.waiting == Waiting.Unknown || now.waiting == Waiting.Unknown -> false
+    else -> before.waiting != now.waiting
 }
 
 /**
@@ -133,17 +137,27 @@ class OtherChatsWatch {
      */
     private val news = mutableSetOf<String>()
 
-    /** When the chat screen was last left (epoch seconds), so replies since then count on the way back. */
+    /**
+     * When the chat screen was last left, on the gateway's clock (epoch seconds), so replies since then count on
+     * the way back. The gateway's clock, not the phone's: [OtherChat.activityAt] is the gateway's, and the two
+     * may disagree by minutes.
+     */
     private var leftAt: Double? = null
+
+    /** The newest [OtherChat.activityAt] seen, the gateway's "now" as far as this phone knows it. */
+    private var newestActivity: Double? = null
 
     /** Forgets what was seen: the next [update] only takes stock. What is news stays. */
     fun reset() {
         previous = null
     }
 
-    /** The chat screen goes out of sight at [nowSeconds]: replies after it are news when it comes back. */
+    /**
+     * The chat screen goes out of sight: replies after the newest activity seen so far are news when it comes
+     * back. [nowSeconds] (the phone's clock) stands in only when no activity was seen yet.
+     */
     fun left(nowSeconds: Double) {
-        if (leftAt == null) leftAt = nowSeconds
+        if (leftAt == null) leftAt = newestActivity ?: nowSeconds
         previous = null
     }
 
@@ -151,6 +165,7 @@ class OtherChatsWatch {
     fun clear() {
         previous = null
         leftAt = null
+        newestActivity = null
         news.clear()
         waitingSince.clear()
     }
@@ -170,6 +185,9 @@ class OtherChatsWatch {
         // Unsettled, nothing counts as seen: the first settled look takes stock again rather than reporting
         // everything the catch-up brought in.
         previous = current.takeIf { settled }
+        current.chats.values.mapNotNull { it.activityAt }.maxOrNull()?.let { newest ->
+            newestActivity = maxOf(newestActivity ?: newest, newest)
+        }
         waitingSince.keys.retainAll { current.chats[it]?.waiting != null }
         for (chat in current.chats.values) {
             if (chat.waiting != null && chat.id !in waitingSince) waitingSince[chat.id] = nowMillis
@@ -188,7 +206,7 @@ class OtherChatsWatch {
         val replies = mutableListOf<OtherChat>()
         for (chat in current.chats.values) {
             val was = before.chats[chat.id] ?: continue
-            if (newlyWaiting(was.waiting, chat.waiting)) {
+            if (newlyWaiting(was, chat)) {
                 if (was.waiting != null) waitingSince[chat.id] = nowMillis
                 calls += OtherChatEvent(chat.id, chat.title, chat.waiting!!.call(), chat.bot, atMillis = nowMillis)
             } else if (chat.replied && (!was.replied || (chat.activityAt ?: 0.0) > (was.activityAt ?: 0.0))) {
@@ -234,27 +252,42 @@ fun previewOf(text: String?): String? {
             !fence && !inCode
         }
         // A table's rule row says nothing.
-        .filterNot { it.trim().matches(Regex("""^\|?[\s:|-]+\|?$""")) && it.contains('-') }
+        .filterNot { it.trim().matches(TABLE_RULE) && it.contains('-') }
         .map { line ->
             line.trim()
-                .replace(Regex("""^#{1,6}\s+"""), "")
-                .replace(Regex("""^>\s?"""), "")
-                .replace(Regex("""^([-*+]|\d+[.)])\s+"""), "")
-                .replace(Regex("""^\|\s*|\s*\|$"""), "")
-                .replace(Regex("""\s*\|\s*"""), " · ")
+                .replace(HEADING, "")
+                .replace(QUOTE, "")
+                .replace(BULLET, "")
+                .replace(TABLE_EDGE, "")
+                .replace(TABLE_PIPE, " · ")
         }
         .filter { it.isNotBlank() }
         .joinToString(" ")
-        .replace(Regex("""!\[([^\]]*)]\([^)]*\)"""), "$1")
-        .replace(Regex("""\[([^\]]+)]\([^)]*\)"""), "$1")
-        .replace(Regex("""(\*\*|__)(.+?)\1"""), "$2")
-        .replace(Regex("""(?<![\w*])[*_](\S(?:.*?\S)?)[*_](?![\w*])"""), "$1")
-        .replace(Regex("""~~(.+?)~~"""), "$1")
-        .replace(Regex("""`([^`]*)`"""), "$1")
-        .replace(Regex("""\s+"""), " ")
+        .replace(IMAGE, "$1")
+        .replace(LINK, "$1")
+        .replace(STRONG, "$2")
+        .replace(EMPHASIS, "$1")
+        .replace(STRIKE, "$1")
+        .replace(CODE, "$1")
+        .replace(SPACES, " ")
         .trim()
     return cut(plain)
 }
+
+// Compiled once: a preview runs them over every line of a reply.
+private val TABLE_RULE = Regex("""^\|?[\s:|-]+\|?$""")
+private val HEADING = Regex("""^#{1,6}\s+""")
+private val QUOTE = Regex("""^>\s?""")
+private val BULLET = Regex("""^([-*+]|\d+[.)])\s+""")
+private val TABLE_EDGE = Regex("""^\|\s*|\s*\|$""")
+private val TABLE_PIPE = Regex("""\s*\|\s*""")
+private val IMAGE = Regex("""!\[([^\]]*)]\([^)]*\)""")
+private val LINK = Regex("""\[([^\]]+)]\([^)]*\)""")
+private val STRONG = Regex("""(\*\*|__)(.+?)\1""")
+private val EMPHASIS = Regex("""(?<![\w*])[*_](\S(?:.*?\S)?)[*_](?![\w*])""")
+private val STRIKE = Regex("""~~(.+?)~~""")
+private val CODE = Regex("""`([^`]*)`""")
+private val SPACES = Regex("""\s+""")
 
 /** [text] cut to [PREVIEW_CHARS] with an ellipsis, never between the two halves of an emoji; empty: null. */
 private fun cut(text: String): String? {
@@ -265,7 +298,7 @@ private fun cut(text: String): String? {
 }
 
 /** A command as it will run, on one line: not Markdown, so `__init__.py` or `*.txt` keep their marks. */
-private fun commandPreview(command: String): String? = cut(command.replace(Regex("""\s+"""), " ").trim())
+private fun commandPreview(command: String): String? = cut(command.replace(SPACES, " ").trim())
 
 /** What [request] asks, for the banner: the command to approve, the question, what a value is for. */
 fun previewOf(request: InputRequest?): String? = when (request) {
