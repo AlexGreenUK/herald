@@ -262,7 +262,7 @@ class SessionsViewModel(
      */
     fun setChatShown(shown: Boolean) {
         if (chatShown.value == shown) return
-        if (shown) watch.reset() else watch.left(getTimeMillis() / 1000.0)
+        if (shown) watch.reset() else watch.left(clock.now().toEpochMilliseconds() / 1000.0)
         freshList.value = false
         // The banner stays: a rotation passes through here, and its own timer takes away one gone stale meanwhile.
         chatShown.value = shown
@@ -349,11 +349,12 @@ class SessionsViewModel(
                 .debounce(OTHERS_SETTLE_MS)
             }.collect { (others, settled) ->
                 _others.value = others
-                val event = watch.update(others, getTimeMillis(), settled)
+                val event = watch.update(others, clock.now().toEpochMilliseconds(), settled)
                 _badge.value = watch.badge(others)
                 // A banner for something since dealt with (answered, read, archived) goes.
                 _banner.update { shown -> shown?.takeIf { others.stillTrue(it) } }
                 if (event != null) {
+                    previewJob?.cancel()
                     // What is asked is already here; a reply's text is read from the gateway just after.
                     val shown = if (event.waiting) event.copy(preview = previewOf(requestsByChat.value[event.chatId])) else event
                     _banner.value = shown
@@ -371,13 +372,19 @@ class SessionsViewModel(
     private fun fillReplyPreview(event: OtherChatEvent) {
         val url = gateway?.gatewayUrl ?: return
         val profile = event.bot ?: this.profile
-        viewModelScope.launch {
+        // One read at a time: a newer banner replaces the one this was for, and another gateway's banner
+        // must never get the last one's words (two banners can share a chat id and a millisecond).
+        previewJob?.cancel()
+        previewJob = viewModelScope.launch {
             val page = api.messages(url, event.chatId, limit = PREVIEW_ROWS, profile = profile) as? ApiResult.Success ?: return@launch
             val reply = page.value.messages.lastOrNull { it.role == "assistant" && !it.isHidden && it.text.isNotBlank() }
             val preview = previewOf(reply?.text) ?: return@launch
             _banner.update { shown -> if (shown == event) shown.copy(preview = preview) else shown }
         }
     }
+
+    /** The read filling in the banner's preview, if one is under way. */
+    private var previewJob: Job? = null
 
     private class Listed(val rows: List<OtherChatRow>, val waiting: Map<String, Waiting>, val running: Map<String, Boolean>)
 
@@ -432,6 +439,7 @@ class SessionsViewModel(
         _others.value = OtherChats()
         _badge.value = SessionsBadge()
         _banner.value = null
+        previewJob?.cancel()
         botChats.value = emptyList()
         load(refresh = false)
         if (newGateway) {
