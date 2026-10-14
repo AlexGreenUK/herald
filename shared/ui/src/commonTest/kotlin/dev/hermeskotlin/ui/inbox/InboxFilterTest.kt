@@ -130,11 +130,41 @@ class InboxFilterTest {
     }
 
     @Test
+    fun theFailedFilterFallsBackOnceNoRunFailed() {
+        val state = InboxUiState(runs = runs, filter = InboxFilter.Failed)
+        assertEquals(InboxFilter.Failed, state.shownFilter)
+        val fine = state.copy(runs = runs.filter { !it.failed })
+        assertEquals(InboxFilter.All, fine.shownFilter)
+    }
+
+    @Test
+    fun chipsShowWhileAFilterIsPickedSoThereIsAWayBack() {
+        assertFalse(showsChips(chips = 1, failed = 0, selected = InboxFilter.All))
+        assertTrue(showsChips(chips = 1, failed = 0, selected = InboxFilter.Job("default", "brief")))
+        assertTrue(showsChips(chips = 2, failed = 0, selected = InboxFilter.All))
+        assertTrue(showsChips(chips = 1, failed = 1, selected = InboxFilter.All))
+    }
+
+    @Test
     fun aRenamedGroupKeepsItsFilter() {
         assertEquals(InboxFilter.Group("Bar"), InboxFilter.Group("RUBIX").afterRename("RUBIX", "Bar"))
         assertEquals(InboxFilter.Group("Home"), InboxFilter.Group("Home").afterRename("RUBIX", "Bar"))
         assertEquals(InboxFilter.Group(null), InboxFilter.Group(null).afterRename("RUBIX", "Bar"))
         assertEquals(InboxFilter.All, InboxFilter.All.afterRename("RUBIX", "Bar"))
+    }
+
+    @Test
+    fun aPageBackAddsOnlyRunsNotThereAndPagesFromTheOldestTime() {
+        assertEquals(100L, pageCursor(runs))
+        assertEquals(null, pageCursor(emptyList()))
+        // The page repeats the oldest second the list had: those runs are there already.
+        val page = listOf(runs.last(), run("brief", 90), run("pulse", 90), run("pulse", 90))
+        val (added, more) = pageIn(runs, page, limit = 4)
+        assertEquals(listOf(90L, 90L), added.map { it.at })
+        assertTrue(more)
+        // A short page is the end; so is a full one that brought nothing new.
+        assertFalse(pageIn(runs, page.take(2), limit = 4).more)
+        assertFalse(pageIn(runs, runs.take(4), limit = 4).more)
     }
 
     @Test

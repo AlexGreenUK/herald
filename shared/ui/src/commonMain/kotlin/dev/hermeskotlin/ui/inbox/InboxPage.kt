@@ -51,6 +51,7 @@ import dev.hermeskotlin.designsystem.components.Dialog
 import dev.hermeskotlin.designsystem.components.SheetAction
 import dev.hermeskotlin.designsystem.components.SheetHeader
 import dev.hermeskotlin.designsystem.components.TextField
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.snapshotFlow
 import dev.hermeskotlin.core.inbox.InboxGroups
@@ -130,13 +131,18 @@ internal fun InboxPage(
 ) {
     val state = viewModel.state.collectAsStateWithLifecycle().value
     LaunchedEffect(gateway) { viewModel.bind(gateway) }
+    // In sight: the page reads the gateway when it comes into view, and on its nudges only while it shows.
+    DisposableEffect(visible) {
+        viewModel.setVisible(visible)
+        onDispose { viewModel.setVisible(false) }
+    }
+
     LaunchedEffect(openKey) {
         if (openKey != null) {
             viewModel.openKey(openKey)
             onOpenedKey()
         }
     }
-    LaunchedEffect(Unit) { viewModel.refresh() }
     LaunchedEffect(state.message) {
         if (state.message != null) {
             delay(4_000)
@@ -154,7 +160,7 @@ internal fun InboxPage(
 
     Column(Modifier.fillMaxSize()) {
         when {
-            state.open != null -> RunView(state.open, state.nameOf(state.open), state.openLoading, state.openPartial, onBack = viewModel::closeRun)
+            state.open != null -> RunView(state.open, state.nameOf(state.open), state.openLoading, state.openNote, onBack = viewModel::closeRun)
             state.choosing -> FollowView(state, viewModel)
             state.grouping -> GroupsView(state, viewModel)
             else -> InboxView(state, viewModel, onBack = onBack, onOpenSettings = onOpenSettings)
@@ -217,6 +223,7 @@ internal fun InboxView(state: InboxUiState, viewModel: InboxActions, onBack: () 
             items(state.folders, key = { it.filter.key }) { folder ->
                 FolderCard(
                     folder,
+                    recent = state.more,
                     newestName = state.nameOf(folder.newest),
                     onClick = { viewModel.setFilter(folder.filter) },
                     onLongClick = (folder.filter as? InboxFilter.Job)?.let { f ->
@@ -242,6 +249,9 @@ internal fun InboxView(state: InboxUiState, viewModel: InboxActions, onBack: () 
                 }
                 item(key = run.key) { RunCard(run, state.nameOf(run), unread = state.isUnread(run), onClick = { viewModel.open(run) }) }
             }
+            if (state.more || state.moreError != null) {
+                item(key = "more") { MoreRow(state.loadingMore, state.moreError, onClick = viewModel::loadMore) }
+            }
         }
     }
 }
@@ -260,8 +270,8 @@ private fun FilterChips(state: InboxUiState, onSelect: (InboxFilter) -> Unit, on
         state.chips.map { Triple(it.filter, it.label, it.unread) }
     }
     val failed = state.failed
-    if (chips.size < 2 && failed == 0) return
     val selected = state.shownFilter
+    if (!showsChips(chips.size, failed, selected)) return
     Row(
         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -295,7 +305,7 @@ private fun FilterChips(state: InboxUiState, onSelect: (InboxFilter) -> Unit, on
 /** A folder: its name, unread count, when it last reported and that report's opening words. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun FolderCard(folder: InboxFolder, newestName: String, onClick: () -> Unit, onLongClick: (() -> Unit)?) {
+private fun FolderCard(folder: InboxFolder, newestName: String, recent: Boolean, onClick: () -> Unit, onLongClick: (() -> Unit)?) {
     val shape = RoundedCornerShape(Theme[radii][radiusLarge])
     val group = folder.filter is InboxFilter.Group
     Row(
@@ -340,7 +350,9 @@ private fun FolderCard(folder: InboxFolder, newestName: String, onClick: () -> U
             }
             Text(
                 buildString {
-                    append(if (folder.runs == 1) "1 report" else "${folder.runs} reports")
+                    // Only the newest runs are on the phone while the gateway has more: the count says so.
+                    val reports = if (folder.runs == 1) "report" else "reports"
+                    append(if (recent) "${folder.runs} recent $reports" else "${folder.runs} $reports")
                     append(" · ")
                     append(timeLabel(folder.newest.at))
                     if (folder.failed > 0) append(" · ${folder.failed} failed")
@@ -462,9 +474,24 @@ private fun RunCard(run: InboxRun, name: String, unread: Boolean, onClick: () ->
     }
 }
 
+/** The foot of the list: the reports before the oldest one shown, from the gateway. */
+@Composable
+private fun MoreRow(loading: Boolean, error: String?, onClick: () -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (error != null) Text(error, style = Theme[typography][bodySmall], color = Theme[colors][danger])
+        Button(
+            if (loading) "Loading…" else if (error != null) "Try again" else "Older reports",
+            onClick = onClick,
+            variant = ButtonVariant.Ghost,
+            size = ButtonSize.Small,
+            enabled = !loading,
+        )
+    }
+}
+
 /** One run in full, as Markdown. */
 @Composable
-internal fun RunView(run: InboxRun, name: String, loading: Boolean, partial: Boolean, onBack: () -> Unit) {
+internal fun RunView(run: InboxRun, name: String, loading: Boolean, note: RunNote?, onBack: () -> Unit) {
     SubpageHeader(name, onBack = onBack, subtitle = (if (run.failed) "Failed · " else "") + messageTime(run.at.toDouble(), uses24HourClock()))
     Column(
         Modifier
@@ -473,9 +500,13 @@ internal fun RunView(run: InboxRun, name: String, loading: Boolean, partial: Boo
             .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        if (partial) {
+        if (note != null) {
             Text(
-                "Only the start of this report is on the phone. Connect to the gateway to read the rest.",
+                when (note) {
+                    RunNote.Offline -> "Only the start of this report is on the phone. Connect to the gateway to read the rest."
+                    RunNote.Gone -> "Only the start of this report is on the phone: the gateway no longer has it."
+                    RunNote.Failed -> "Only the start of this report is on the phone: the gateway couldn't send the rest."
+                },
                 style = Theme[typography][bodySmall],
                 color = Theme[colors][textTertiary],
             )
@@ -748,20 +779,43 @@ internal fun FollowView(state: InboxUiState, viewModel: InboxActions) {
         ListSkeleton()
         return
     }
+    // A save replaces all this phone follows on the gateway, so nothing changes until that has been read.
+    val enabled = state.canEditFollowing
     LazyColumn(
         Modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 96.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        item(key = "all") { AllJobsRow(state.following.default, enabled = !state.saving, onSet = viewModel::setAll) }
+        state.followingError?.let { error ->
+            item(key = "following-error") { FollowingNotice(error, onRetry = viewModel::chooseJobs) }
+        }
+        item(key = "all") { AllJobsRow(state.following.default, enabled = enabled, onSet = viewModel::setAll) }
         item(key = "failures") {
-            FailuresRow(state.following.failures, enabled = !state.saving, onChange = viewModel::setFailures)
+            FailuresRow(state.following.failures, enabled = enabled, onChange = viewModel::setFailures)
         }
         item(key = "label") { DayLabel("Jobs") }
         // A job id is only unique in its profile's cron store.
         items(state.jobs, key = { "${it.profile ?: "default"}/${it.id}" }) { job ->
-            FollowRow(job, state.following.of(job.id), enabled = !state.saving) { viewModel.setFollow(job, it) }
+            FollowRow(job, state.following.of(job.id), enabled = enabled) { viewModel.setFollow(job, it) }
         }
+    }
+}
+
+/** What this phone follows couldn't be read (or a save's outcome is unknown): the page waits, with a retry. */
+@Composable
+private fun FollowingNotice(text: String, onRetry: () -> Unit) {
+    val shape = RoundedCornerShape(Theme[radii][radiusLarge])
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(Theme[colors][surface], shape)
+            .border(1.dp, Theme[colors][stroke], shape)
+            .clickable(onClickLabel = "Try again", onClick = onRetry)
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text(text, style = Theme[typography][bodySmall], color = Theme[colors][textSecondary])
+        Text("Try again", style = Theme[typography][bodySmall].copy(fontWeight = FontWeight.SemiBold), color = Theme[colors][accentText])
     }
 }
 
