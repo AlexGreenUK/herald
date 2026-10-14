@@ -54,6 +54,20 @@ class WearLinkTest {
     }
 
     @Test
+    fun anAccentsRevisionChangesWithAnyOfItsColors() {
+        val purple = WatchAccent.of(-5796870, -5796870, -16119284, -5796870)
+        assertEquals(purple.revision, WatchAccent.of(-5796870, -5796870, -16119284, -5796870).revision)
+        val changed = listOf(
+            WatchAccent.of(-5796871, -5796870, -16119284, -5796870),
+            WatchAccent.of(-5796870, -5796871, -16119284, -5796870),
+            WatchAccent.of(-5796870, -5796870, -16119285, -5796870),
+            WatchAccent.of(-5796870, -5796870, -16119284, -5796871),
+        )
+        for (accent in changed) assertEquals(accent, accent.updateFor(purple.revision))
+        assertNull(purple.updateFor(purple.revision))
+    }
+
+    @Test
     fun aRecordingCarriesItsAskAndItsAudioInOnePiece() {
         val path = WearPaths.recordingPath("ask/1")
         assertTrue(path.startsWith(WearPaths.PREFIX))

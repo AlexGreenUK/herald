@@ -213,6 +213,12 @@ data class PhoneStatusRequest(val accentRevision: String? = null)
 @Serializable
 data class WatchAccent(val revision: String, val fill: Int, val text: Int, val onFill: Int, val dim: Int) {
     fun updateFor(cachedRevision: String?): WatchAccent? = takeUnless { revision == cachedRevision }
+
+    companion object {
+        /** Its revision is the colors themselves, so any change to them reaches a watch that kept the old ones. */
+        fun of(fill: Int, text: Int, onFill: Int, dim: Int): WatchAccent =
+            WatchAccent(listOf(fill, text, onFill, dim).joinToString("-") { it.toUInt().toString(16) }, fill, text, onFill, dim)
+    }
 }
 
 /**

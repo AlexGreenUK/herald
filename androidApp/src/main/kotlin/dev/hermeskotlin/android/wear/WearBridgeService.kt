@@ -1,6 +1,5 @@
 package dev.hermeskotlin.android.wear
 
-import androidx.compose.ui.graphics.toArgb
 import com.google.android.gms.wearable.ChannelClient
 import com.google.android.gms.wearable.MessageEvent
 import com.google.android.gms.wearable.Wearable
@@ -8,20 +7,21 @@ import com.google.android.gms.wearable.WearableListenerService
 import dev.hermeskotlin.android.notify.ChatNotifier
 import dev.hermeskotlin.core.settings.SettingsStore
 import dev.hermeskotlin.core.wear.WatchRelay
-import dev.hermeskotlin.designsystem.AccentPalette
 import dev.hermeskotlin.ui.voice.WatchCalls
+import dev.hermeskotlin.ui.voice.watchAccent
 import dev.hermeskotlin.wearlink.CallEnd
 import dev.hermeskotlin.wearlink.CallEvents
 import dev.hermeskotlin.wearlink.CallStart
 import dev.hermeskotlin.wearlink.PhoneStatusRequest
 import dev.hermeskotlin.wearlink.RecordedAsk
-import dev.hermeskotlin.wearlink.WatchAccent
 import dev.hermeskotlin.wearlink.WatchAsk
 import dev.hermeskotlin.wearlink.WatchStop
 import dev.hermeskotlin.wearlink.WearJson
 import dev.hermeskotlin.wearlink.WearPaths
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.tasks.await
@@ -58,15 +58,12 @@ class WearBridgeService : WearableListenerService() {
             WearPaths.CALL_END -> WearJson.decode<CallEnd>(event.data)?.let(calls::end)
             WearPaths.CHATS -> relay.chats(node)
             WearPaths.STATUS -> {
-                val accent = settings.settings.value?.let {
-                    val palette = AccentPalette.named(it.accent)
-                    val colors = palette.dark
-                    // Bump the revision if the transmitted dark palette definitions change.
-                    WatchAccent("dark:${palette.name}:1", colors.accent.toArgb(), colors.text.toArgb(),
-                        colors.onAccent.toArgb(), colors.soft.copy(alpha = 1f).toArgb())
+                val cached = WearJson.decode<PhoneStatusRequest>(event.data)?.accentRevision
+                scope.launch {
+                    // Waited for: a watch's ask often starts Herald, and the stored settings are still being read then.
+                    val accent = watchAccent(settings.settings.filterNotNull().first().accent)
+                    relay.status(node, accent = accent.updateFor(cached))
                 }
-                val request = WearJson.decode<PhoneStatusRequest>(event.data)
-                relay.status(node, accent = accent?.updateFor(request?.accentRevision))
             }
         }
     }
