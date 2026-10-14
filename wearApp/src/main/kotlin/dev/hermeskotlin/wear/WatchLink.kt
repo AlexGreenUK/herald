@@ -385,7 +385,8 @@ class WatchLink(
             WearPaths.CALL_UPDATE -> WearJson.decode<CallUpdate>(data)?.let { scope.launch(main) { onCallUpdate(it) } }
             WearPaths.CALL_SEND -> WearJson.decode<CallEvents>(data)?.let { scope.launch(main) { onCallSend(it) } }
             WearPaths.STATUS -> WearJson.decode<PhoneStatus>(data)?.let {
-                it.accent?.let(store::setAccent)
+                // The tile draws its mic in the accent too.
+                if (it.accent?.let(store::setAccent) == true) TileService.getUpdater(context).requestUpdate(AskTileService::class.java)
                 it.liveVoice?.let { live -> _liveVoice.value = live }
                 _phone.value = when {
                     !it.signedIn -> PhoneState.SignedOut

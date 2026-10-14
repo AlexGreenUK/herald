@@ -1,8 +1,8 @@
 package dev.hermeskotlin.wear
 
 import androidx.compose.ui.graphics.Color
-import dev.hermeskotlin.wearlink.WatchAccent
 import dev.hermeskotlin.wearlink.ReplyPhase
+import dev.hermeskotlin.wearlink.WatchAccent
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -41,6 +41,11 @@ class WatchTextTest {
         assertEquals(Color.White, colors.onPrimaryContainer)
     }
 
+    @Test
+    fun tileRingIsTheAccentAtAQuarter() {
+        assertEquals(0x402F6BF5, softRing(0xFF2F6BF5.toInt()))
+        assertEquals(0x40A78BFA, softRing(0xFFA78BFA.toInt()))
+    }
 
     @Test
     fun agoSaysHowLongAgoTheWayAListDoes() {

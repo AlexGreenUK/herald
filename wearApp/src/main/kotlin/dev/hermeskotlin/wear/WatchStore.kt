@@ -23,10 +23,16 @@ class WatchStore(context: Context) {
         ?.let { WearJson.decode<WatchAccent>(it.encodeToByteArray()) })
     val accent: StateFlow<WatchAccent?> = _accent.asStateFlow()
 
-    fun setAccent(value: WatchAccent) {
-        if (_accent.value == value) return
+    /**
+     * Keeps the phone's accent; false when it's the one already kept. Locked: two status replies can land at once,
+     * and the saved copy must end on the same one as [accent].
+     */
+    @Synchronized
+    fun setAccent(value: WatchAccent): Boolean {
+        if (_accent.value == value) return false
         _accent.value = value
         prefs.edit { putString(ACCENT, WearJson.encode(value).decodeToString()) }
+        return true
     }
 
     private val _chat = MutableStateFlow(
