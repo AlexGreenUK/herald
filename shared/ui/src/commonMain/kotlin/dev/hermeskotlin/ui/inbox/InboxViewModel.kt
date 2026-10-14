@@ -317,6 +317,9 @@ class InboxViewModel(
     private var saveJob: Job? = null
     private var moreJob: Job? = null
 
+    /** Where the Inbox's lists were left (the folders, and the run list per folder), for the page to put back. */
+    val places = mutableMapOf<String, ListPlace>()
+
     init {
         viewModelScope.launch {
             store.state.collect { kept ->
@@ -361,6 +364,7 @@ class InboxViewModel(
         generation++
         listOf(bindJob, loadJob, openJob, followJob, saveJob, moreJob).forEach { it?.cancel() }
         older = emptyList()
+        places.clear()
         if (!first) {
             // Nothing of the last gateway's carries over: its jobs, what it follows, the run open, the filter.
             val block = _state.value.block?.takeIf { it == InboxBlock.PushOff }

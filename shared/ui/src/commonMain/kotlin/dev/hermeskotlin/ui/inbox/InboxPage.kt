@@ -116,6 +116,9 @@ import dev.hermeskotlin.ui.components.uses24HourClock
 import dev.hermeskotlin.ui.sessions.MessageBanner
 import dev.hermeskotlin.ui.sessions.SubpageHeader
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.Flow
+import androidx.compose.runtime.rememberUpdatedState
 import org.koin.compose.viewmodel.koinViewModel
 
 /**
@@ -140,9 +143,35 @@ internal fun InboxPage(
         viewModel.setVisible(visible)
         onDispose { viewModel.setVisible(false) }
     }
-    // Kept across a report opened and closed, so the list comes back where it was.
-    val foldersList = rememberLazyListState()
-    val runsList = rememberLazyListState()
+    // The two lists keep their place while the page is away: a report, the follow or groups page, or a folder
+    // opened over the folders. A list off screen can come back at its top, so where each was when it went is
+    // kept (the run list's per folder) and put back when it returns. A folder opened afresh starts at its top.
+    val foldersList = rememberLazyListState(viewModel.places[ShownList.Folders.name]?.index ?: 0, viewModel.places[ShownList.Folders.name]?.offset ?: 0)
+    val runsKey = ShownList.Runs.name + "/" + state.shownFilter.key
+    val runsList = rememberLazyListState(viewModel.places[runsKey]?.index ?: 0, viewModel.places[runsKey]?.offset ?: 0)
+    val showing = when {
+        state.open != null || state.choosing || state.grouping -> null
+        state.atFolders -> ShownList.Folders.name
+        else -> runsKey
+    }
+    var last by remember { mutableStateOf(showing) }
+    var lastPlace by remember { mutableStateOf(ListPlace()) }
+    val showingNow by rememberUpdatedState(showing)
+    LaunchedEffect(foldersList) { foldersList.places().collect { if (showingNow == ShownList.Folders.name) lastPlace = it } }
+    // The run list is on screen whichever folder it shows. (Compared with [runsKey] here, the collector kept the
+    // key of the folder it started in, so in any other folder every move was dropped.)
+    LaunchedEffect(runsList) {
+        runsList.places().collect { if (showingNow?.startsWith(ShownList.Runs.name) == true) lastPlace = it }
+    }
+    LaunchedEffect(showing) {
+        val before = last
+        if (before != null && before != showing) viewModel.places[before] = lastPlace
+        last = showing
+        if (showing == null) return@LaunchedEffect
+        val place = viewModel.places[showing] ?: ListPlace()
+        lastPlace = place
+        if (showing == ShownList.Folders.name) foldersList.restore(place) else runsList.restore(place)
+    }
     LaunchedEffect(openKey) {
         if (openKey != null) {
             viewModel.openKey(openKey)
@@ -952,3 +981,19 @@ private fun String.toPreview(): String = this
 
 @Composable
 private fun timeLabel(at: Long): String = messageTime(at.toDouble(), uses24HourClock())
+
+/** Where a list was scrolled to: its first item showing, and how far that item is scrolled off the top. */
+data class ListPlace(val index: Int = 0, val offset: Int = 0)
+
+/** Where this list is, each time it moves. */
+private fun LazyListState.places(): Flow<ListPlace> =
+    snapshotFlow { ListPlace(firstVisibleItemIndex, firstVisibleItemScrollOffset) }.distinctUntilChanged()
+
+/** The Inbox's two lists. */
+private enum class ShownList { Folders, Runs }
+
+/** Puts the list back at [place], unless it is there already. */
+private suspend fun LazyListState.restore(place: ListPlace) {
+    if (firstVisibleItemIndex == place.index && firstVisibleItemScrollOffset == place.offset) return
+    scrollToItem(place.index, place.offset)
+}
