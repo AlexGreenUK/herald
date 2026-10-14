@@ -52,6 +52,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.composables.icons.lucide.ArrowLeft
+import com.composables.icons.lucide.BookOpen
 import com.composables.icons.lucide.Braces
 import com.composables.icons.lucide.Check
 import com.composables.icons.lucide.Copy
@@ -111,6 +112,8 @@ import dev.hermeskotlin.designsystem.warningSoft
 import dev.hermeskotlin.designsystem.well
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -121,6 +124,9 @@ sealed interface FileLoad {
     data class Ready(val text: FileText) : FileLoad
 
     data class Failed(val message: String) : FileLoad
+
+    /** A PDF fetched whole and opened: its pages, drawn as they scroll near. */
+    class Pdf internal constructor(internal val pages: PdfPages) : FileLoad
 }
 
 /** A linked file's whole bytes for Save and Share, or why the gateway wouldn't hand them over. */
@@ -132,9 +138,10 @@ sealed interface FileDownload {
 
 /**
  * A file on the gateway that a reply linked to, opened full screen over the chat: Markdown rendered, JSON
- * indented, CSV and TSV as a table, code and text with line numbers, scrolled both ways. Save and Share
- * fetch the whole file; the preview only reads the start the gateway hands out. A file with nothing to
- * show (a PDF, an archive, a file the gateway calls binary) gets Save and Share buttons. Back closes it.
+ * indented, CSV and TSV as a table, code and text with line numbers, scrolled both ways, a PDF's pages.
+ * Save and Share fetch the whole file; a text preview only reads the start the gateway hands out, while
+ * a PDF is fetched whole once and kept for them. A file with nothing to show (an archive, a file the
+ * gateway calls binary) gets Save and Share buttons. Back closes it.
  */
 @Composable
 internal fun FileViewer(
@@ -159,9 +166,37 @@ internal fun FileViewerPage(
     preset: FileLoad? = null,
 ) {
     val kind = file.kind
+    val openPdf = rememberPdfOpener()
+    // A PDF's whole bytes once fetched for its pages, so Save and Share don't fetch them again.
+    var fetched by remember(file) { mutableStateOf<ByteArray?>(null) }
     val result by produceState(preset ?: if (kind.previewable) FileLoad.Loading else null, file, preset) {
-        if (preset == null && kind.previewable) value = load(file)
+        if (preset != null || !kind.previewable) return@produceState
+        if (kind != GatewayFileKind.Pdf) {
+            value = load(file)
+            return@produceState
+        }
+        val got = download(file)
+        if (got is FileDownload.Failed) {
+            value = FileLoad.Failed(got.message)
+            return@produceState
+        }
+        fetched = (got as FileDownload.Ready).bytes
+        // Opened past a Back tap, so an open document is never dropped unclosed; it closes with the page.
+        when (val opened = withContext(NonCancellable) { openPdf(got.bytes) }) {
+            is PdfOpen.Failed -> value = FileLoad.Failed(opened.message)
+            is PdfOpen.Ready -> {
+                if (!isActive) {
+                    opened.pages.close()
+                    return@produceState
+                }
+                value = FileLoad.Pdf(opened.pages)
+                awaitDispose { opened.pages.close() }
+            }
+        }
     }
+    val pdf = result as? FileLoad.Pdf
+    // Save and Share wait for the PDF the preview is already fetching, rather than fetch it a second time.
+    val fetching = kind == GatewayFileKind.Pdf && result == FileLoad.Loading
     val ready = (result as? FileLoad.Ready)?.text?.takeUnless { it.binary }
     var wrap by remember(file) { mutableStateOf(false) }
     var raw by remember(file) { mutableStateOf(false) }
@@ -173,7 +208,11 @@ internal fun FileViewerPage(
     var copied by remember(file) { mutableStateOf(false) }
 
     fun withBytes(action: suspend (ByteArray) -> Unit) {
-        if (busy) return
+        if (busy || fetching) return
+        fetched?.let { bytes ->
+            scope.launch { action(bytes) }
+            return
+        }
         busy = true
         scope.launch {
             when (val result = download(file)) {
@@ -206,7 +245,8 @@ internal fun FileViewerPage(
                 Text(
                     listOfNotNull(
                         file.folder.ifEmpty { "/" },
-                        ready?.byteSize?.let(::formatBytes),
+                        (ready?.byteSize ?: fetched?.size?.toLong())?.let(::formatBytes),
+                        pdf?.pages?.aspects?.size?.let { if (it == 1) "1 page" else "$it pages" },
                         file.line?.let { "line $it" },
                     ).joinToString(" · "),
                     style = Theme[typography][caption],
@@ -215,7 +255,7 @@ internal fun FileViewerPage(
                     overflow = TextOverflow.MiddleEllipsis,
                 )
             }
-            if (busy) {
+            if (busy || fetching) {
                 Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) { Spinner(Modifier.size(18.dp)) }
             } else {
                 IconButton(Lucide.Download, contentDescription = "Save ${file.name}", onClick = {
@@ -294,7 +334,15 @@ internal fun FileViewerPage(
             AnimatedContent(result, transitionSpec = { fadeIn() togetherWith fadeOut() }, contentKey = { it?.let { r -> r::class } }) { state ->
                 when {
                     state == FileLoad.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Spinner() }
-                    state is FileLoad.Failed -> Unavailable(file, kind, state.message, onSave = { withBytes { notice = Notice(actions.save(it, file.name)) } })
+                    state is FileLoad.Pdf -> PdfDocumentView(state.pages, Modifier.fillMaxSize())
+                    // A PDF that came but won't open (a password, damage) can still go to an app that reads it.
+                    state is FileLoad.Failed -> Unavailable(
+                        file,
+                        kind,
+                        state.message,
+                        onSave = { withBytes { notice = Notice(actions.save(it, file.name)) } },
+                        onShare = { withBytes { actions.share(it, file.name) } }.takeIf { fetched != null },
+                    )
                     ready == null -> Unavailable(file, kind, null, onSave = { withBytes { notice = Notice(actions.save(it, file.name)) } }, onShare = {
                         withBytes { actions.share(it, file.name) }
                     })
@@ -431,7 +479,7 @@ private fun Unavailable(file: GatewayFile, kind: GatewayFileKind, error: String?
             color = Theme[colors][textTertiary],
             textAlign = TextAlign.Center,
         )
-        if (error == null && onShare != null) {
+        if (onShare != null) {
             Spacer(Modifier.height(20.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Button("Save", onClick = onSave, leadingIcon = Lucide.Download, size = ButtonSize.Small)
@@ -481,6 +529,7 @@ internal fun kindIcon(kind: GatewayFileKind): ImageVector = when (kind) {
     GatewayFileKind.Table -> Lucide.FileSpreadsheet
     GatewayFileKind.Code -> Lucide.FileCode
     GatewayFileKind.Image -> Lucide.FileImage
+    GatewayFileKind.Pdf -> Lucide.BookOpen
     GatewayFileKind.Other -> Lucide.File
 }
 
