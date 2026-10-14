@@ -9,6 +9,8 @@ import dev.hermeskotlin.core.bots.BotMeta
 import dev.hermeskotlin.core.connection.ConnectionState
 import dev.hermeskotlin.core.connection.GatewayConnection
 import dev.hermeskotlin.core.gateway.GatewayRepository
+import dev.hermeskotlin.core.inbox.InboxRun
+import dev.hermeskotlin.core.inbox.InboxStore
 import dev.hermeskotlin.core.network.HermesJson
 import dev.hermeskotlin.core.phone.PhoneToolsBridge
 import dev.hermeskotlin.core.push.PushGateway
@@ -49,6 +51,7 @@ class PushListener(
     private val bots: BotNotifier,
     private val gateways: GatewayRepository,
     private val phoneTools: PhoneToolsBridge,
+    private val inbox: InboxStore,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val guard = PushGuard(PushMessage.MAX_AGE_G2P_SECONDS) { System.currentTimeMillis() / 1000 }
@@ -94,7 +97,23 @@ class PushListener(
             PushMessage.PING -> notifications.postPushTest()
             // Only a nudge: the call itself is fetched over the authenticated socket.
             PushMessage.PHONE_REQUEST -> phoneTools.wake()
+            PushMessage.CRON_RUN -> showCronRun(message)
         }
+    }
+
+    /**
+     * A finished run of a job this phone follows: into the Inbox kept on the phone (so it reads offline), and a
+     * notification when the user asked for one. In sight and connected, the Inbox shows it already.
+     */
+    private suspend fun showCronRun(message: PushMessage) {
+        val run = InboxRun.from(message) ?: return
+        val url = gateways.current()?.gatewayUrl?.value ?: return
+        inbox.bind(url, System.currentTimeMillis() / 1000)
+        inbox.add(run)
+        if (!message.notify) return
+        if (visibility.visible.value && connection.state.value is ConnectionState.Connected) return
+        // The name the user gave the job on this phone, when they did.
+        notifications.postCronRun(run.key, run.job, inbox.state.value.groups.nameOf(run), run.text, run.failed)
     }
 
     /** The message inside [event], or null for anything that isn't a valid envelope signed by [gateway]. */

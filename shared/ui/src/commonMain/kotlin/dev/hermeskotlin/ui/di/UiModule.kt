@@ -10,6 +10,7 @@ import dev.hermeskotlin.ui.sessions.CapabilitiesViewModel
 import dev.hermeskotlin.ui.sessions.ConfigViewModel
 import dev.hermeskotlin.ui.plugins.PluginsViewModel
 import dev.hermeskotlin.ui.sessions.InsightsViewModel
+import dev.hermeskotlin.ui.inbox.InboxViewModel
 import dev.hermeskotlin.ui.sessions.ScheduledViewModel
 import dev.hermeskotlin.ui.rooms.RoomsViewModel
 import dev.hermeskotlin.ui.sessions.SessionsViewModel
@@ -30,6 +31,7 @@ val uiModule = module {
     viewModelOf(::BotsViewModel)
     viewModelOf(::RoomsViewModel)
     viewModelOf(::ScheduledViewModel)
+    viewModelOf(::InboxViewModel)
     viewModelOf(::CapabilitiesViewModel)
     viewModelOf(::ConfigViewModel)
     viewModelOf(::PluginsViewModel)

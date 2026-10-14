@@ -247,6 +247,7 @@ uses. The protocol itself is described in [hermes-protocol-research.md](hermes-p
 - [x] Insights page in the sidebar, after Desktop's (`GET /api/analytics/usage`): cost, sessions, tokens and cache share over 7/30/90 days, tokens by day (tap a day), top models, tools and skills. `usage.bars` (subscription limits) not yet
 
 ### Notifications & background
+- [x] Inbox: finished runs of the cron jobs you follow, newest first and grouped by day, each read in full as Markdown; per job Off, Inbox (quiet) or Notify, plus a notification for any failed run; an unread count on the sidebar tile. Chips along the top show one job's history (a chip per job, with its unread count) or only the failed runs; or, switched to My groups, the user's own groups of jobs (such as RUBIX and Personal, with Other for the rest), made, renamed and filled on a Chips and groups page and kept on the phone. Runs come from the herald-push plugin (0.4.0, `/herald-push cron`), which reads the gateway's cron output files, so a job keeps its own delivery (Telegram and so on). Pushed runs are kept on the phone and read offline
 - [x] Foreground service that keeps the WS alive during long runs
 - [x] One constant, quiet ongoing notification ("Herald · Connected to Hermes") in place of a Live Update; what a turn does shows in the app
 - [x] Local notifications: approval waiting, run finished; tapping one opens its chat

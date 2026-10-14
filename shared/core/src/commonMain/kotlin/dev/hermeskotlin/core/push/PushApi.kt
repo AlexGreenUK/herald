@@ -287,6 +287,9 @@ class PushApi(private val connection: GatewayConnection) {
         return output("phone answer $body")?.let(::phoneReply)?.ok == true
     }
 
+    /** What `/herald-push cron <arg>` printed (the Inbox's calls), or null when the plugin isn't loaded. */
+    suspend fun cron(arg: String): String? = output("cron $arg")
+
     private fun phoneReply(output: String): PhoneReply? =
         runCatching { HermesJson.decodeFromString(PhoneReply.serializer(), output) }.getOrNull()
 
@@ -323,10 +326,10 @@ class PushApi(private val connection: GatewayConnection) {
         const val PLUGIN_REPO = "https://github.com/Giton22/hermes-herald-push"
 
         /** The plugin commit this Herald was built and reviewed against. */
-        const val PLUGIN_REF = "37926e1e68ec29eb517b3f25313686ce7a22930e"
+        const val PLUGIN_REF = "18b8610910782facd60802a89619df0f8f324146"
 
         /** The version at [PLUGIN_REF]: an older copy on the gateway is offered this as an update. */
-        const val PLUGIN_VERSION = "0.3.3"
+        const val PLUGIN_VERSION = "0.4.1"
 
         /** The oldest plugin this Herald works with; an older copy waits for the user to update it. */
         const val MIN_PLUGIN_VERSION = "0.1.1"

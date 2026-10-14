@@ -62,6 +62,10 @@ import dev.hermeskotlin.core.config.ConfigEntry
 import dev.hermeskotlin.ui.sessions.ChoiceSheet
 import kotlinx.serialization.json.JsonElement
 import dev.hermeskotlin.ui.sessions.ScheduledActions
+import dev.hermeskotlin.ui.inbox.FollowView
+import dev.hermeskotlin.ui.inbox.GroupsView
+import dev.hermeskotlin.ui.inbox.InboxView
+import dev.hermeskotlin.ui.inbox.RunView
 import dev.hermeskotlin.ui.sessions.ScheduledView
 import dev.hermeskotlin.ui.sessions.CapabilityTab
 import dev.hermeskotlin.ui.sessions.InsightsView
@@ -141,6 +145,11 @@ enum class PreviewScene(val label: String) {
     Assistant("The assistant, called up over another app"),
     AssistantAnswer("The assistant, after a question about the screen"),
     Scheduled("Scheduled jobs"),
+    Inbox("The Inbox's folders"),
+    InboxFolder("A folder in the Inbox"),
+    InboxReport("A report read in full"),
+    InboxJobs("The jobs in the Inbox"),
+    InboxGroups("Folders and groups"),
     ScheduledJob("A scheduled job and its runs"),
     JobEditor("A new scheduled job"),
     Usage("Usage and context"),
@@ -422,6 +431,31 @@ fun HeraldPreview(scene: PreviewScene, dark: Boolean = true, accent: String = DE
                             onOpenRun = {},
                         )
                     }
+                }
+                PreviewScene.Inbox, PreviewScene.InboxFolder -> OpenSidebar {
+                    SidebarPage {
+                        Column(Modifier.fillMaxSize()) {
+                            InboxView(
+                                if (scene == PreviewScene.Inbox) InboxSamples.folders() else InboxSamples.folder(),
+                                PreviewInboxActions,
+                                onBack = {},
+                                onOpenSettings = {},
+                            )
+                        }
+                    }
+                }
+                PreviewScene.InboxReport -> OpenSidebar {
+                    SidebarPage {
+                        Column(Modifier.fillMaxSize()) {
+                            RunView(InboxSamples.report(), "☀️ Morning briefing", loading = false, partial = false, onBack = {})
+                        }
+                    }
+                }
+                PreviewScene.InboxJobs -> OpenSidebar {
+                    SidebarPage { Column(Modifier.fillMaxSize()) { FollowView(InboxSamples.jobs(), PreviewInboxActions) } }
+                }
+                PreviewScene.InboxGroups -> OpenSidebar {
+                    SidebarPage { Column(Modifier.fillMaxSize()) { GroupsView(InboxSamples.groups(), PreviewInboxActions) } }
                 }
                 PreviewScene.JobEditor -> OpenSidebar {
                     SidebarPage {
