@@ -23,6 +23,9 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -54,6 +57,7 @@ import dev.hermeskotlin.designsystem.components.TextField
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.semantics.Role
 import dev.hermeskotlin.core.inbox.InboxGroups
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -136,7 +140,9 @@ internal fun InboxPage(
         viewModel.setVisible(visible)
         onDispose { viewModel.setVisible(false) }
     }
-
+    // Kept across a report opened and closed, so the list comes back where it was.
+    val foldersList = rememberLazyListState()
+    val runsList = rememberLazyListState()
     LaunchedEffect(openKey) {
         if (openKey != null) {
             viewModel.openKey(openKey)
@@ -158,19 +164,31 @@ internal fun InboxPage(
         viewModel.setFilter(InboxFilter.All)
     }
 
-    Column(Modifier.fillMaxSize()) {
-        when {
-            state.open != null -> RunView(state.open, state.nameOf(state.open), state.openLoading, state.openNote, onBack = viewModel::closeRun)
-            state.choosing -> FollowView(state, viewModel)
-            state.grouping -> GroupsView(state, viewModel)
-            else -> InboxView(state, viewModel, onBack = onBack, onOpenSettings = onOpenSettings)
+    Box(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize()) {
+            when {
+                state.open != null -> RunView(state.open, state.nameOf(state.open), state.openLoading, state.openNote, onBack = viewModel::closeRun)
+                state.choosing -> FollowView(state, viewModel)
+                state.grouping -> GroupsView(state, viewModel)
+                else -> InboxView(state, viewModel, onBack = onBack, onOpenSettings = onOpenSettings, foldersList = foldersList, runsList = runsList)
+            }
         }
-        state.message?.let { MessageBanner(it, onDismiss = viewModel::dismissMessage, modifier = Modifier.padding(bottom = 96.dp)) }
+        // Over the page's foot, where the lists leave room for it: each page fills the height itself.
+        state.message?.let {
+            MessageBanner(it, onDismiss = viewModel::dismissMessage, modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 24.dp))
+        }
     }
 }
 
 @Composable
-internal fun InboxView(state: InboxUiState, viewModel: InboxActions, onBack: () -> Unit, onOpenSettings: () -> Unit) {
+internal fun InboxView(
+    state: InboxUiState,
+    viewModel: InboxActions,
+    onBack: () -> Unit,
+    onOpenSettings: () -> Unit,
+    foldersList: LazyListState = rememberLazyListState(),
+    runsList: LazyListState = rememberLazyListState(),
+) {
     val unread = state.unread
     val folders = state.groups.layout == InboxLayout.Folders
     val inFolder = folders && state.shownFilter != InboxFilter.All
@@ -217,6 +235,7 @@ internal fun InboxView(state: InboxUiState, viewModel: InboxActions, onBack: () 
         )
         state.atFolders -> LazyColumn(
             Modifier.fillMaxSize(),
+            state = foldersList,
             contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 96.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
@@ -237,6 +256,7 @@ internal fun InboxView(state: InboxUiState, viewModel: InboxActions, onBack: () 
         }
         else -> LazyColumn(
             Modifier.fillMaxSize(),
+            state = runsList,
             contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 96.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
@@ -361,7 +381,7 @@ private fun FolderCard(folder: InboxFolder, newestName: String, recent: Boolean,
                 color = if (folder.failed > 0) Theme[colors][danger] else Theme[colors][textMuted],
             )
             Text(
-                (if (group) "$newestName: " else "") + folder.newest.text.toPreview(),
+                (if (group) "$newestName: " else "") + remember(folder.newest.text) { folder.newest.text.toPreview() },
                 style = Theme[typography][bodySmall].copy(fontSize = 13.sp, lineHeight = 19.sp),
                 color = Theme[colors][textSecondary],
                 maxLines = 2,
@@ -464,7 +484,7 @@ private fun RunCard(run: InboxRun, name: String, unread: Boolean, onClick: () ->
                 color = if (run.failed) Theme[colors][danger] else Theme[colors][textMuted],
             )
             Text(
-                run.text.toPreview(),
+                remember(run.text) { run.text.toPreview() },
                 style = Theme[typography][bodySmall].copy(fontSize = 13.sp, lineHeight = 19.sp),
                 color = Theme[colors][textSecondary],
                 maxLines = 3,
@@ -846,6 +866,7 @@ private fun AllJobsRow(default: Follow, enabled: Boolean, onSet: (Follow) -> Uni
             options = Follow.entries,
             selected = default,
             onSelect = { if (enabled) onSet(it) },
+            enabled = enabled,
             optionLabel = {
                 when (it) {
                     Follow.Off -> "All off"
@@ -866,7 +887,7 @@ private fun FailuresRow(on: Boolean, enabled: Boolean, onChange: (Boolean) -> Un
             .clip(shape)
             .background(Theme[colors][surface])
             .border(1.dp, Theme[colors][stroke], shape)
-            .clickable(enabled = enabled) { onChange(!on) }
+            .toggleable(value = on, enabled = enabled, role = Role.Switch, onValueChange = onChange)
             .padding(14.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -906,6 +927,7 @@ private fun FollowRow(job: CronJob, follow: Follow, enabled: Boolean, onChange: 
                 options = Follow.entries,
                 selected = follow,
                 onSelect = { if (enabled) onChange(it) },
+                enabled = enabled,
                 optionLabel = {
                     when (it) {
                         Follow.Off -> "Off"
