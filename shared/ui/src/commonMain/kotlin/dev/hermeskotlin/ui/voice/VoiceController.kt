@@ -583,3 +583,24 @@ internal fun liveFailure(result: ApiResult<*>): String {
 }
 
 private val VENDOR_MESSAGE = Regex(""""message"\s*:\s*"((?:[^"\\]|\\.)*)"""")
+
+/**
+ * A voice error as a banner shows it: its first line, without the provider's request URL or any address's
+ * query. A speech provider's failure can come through whole, `url='wss://…?TrustedClientToken=…'` and all,
+ * which fills the screen and puts tokens on it.
+ */
+internal fun briefError(message: String): String {
+    val line = message.lineSequence().firstOrNull { it.isNotBlank() }?.trim() ?: return message.trim()
+    val brief = line.replace(QUOTED_URL, "")
+        // The address says what couldn't be reached; its query is where keys and tokens ride.
+        .replace(QUERY_URL) { it.value.substringBefore('?') }
+        .replace(SPACES, " ").trim().trimEnd(',', ';', ':').trimEnd()
+    return if (brief.length <= BRIEF_MAX) brief else brief.take(BRIEF_MAX - 1).trimEnd() + "…"
+}
+
+/** Python's `url='…'`, as aiohttp and httpx put it in their errors. */
+private val QUOTED_URL = Regex("""[,;]?\s*\burl\s*=\s*(?:'[^']*'|"[^"]*"|\S+)""", RegexOption.IGNORE_CASE)
+/** An address with a query. */
+private val QUERY_URL = Regex("""\b(?:https?|wss?)://[^\s'"]*\?[^\s'"]*""")
+private val SPACES = Regex("""\s{2,}""")
+private const val BRIEF_MAX = 200
