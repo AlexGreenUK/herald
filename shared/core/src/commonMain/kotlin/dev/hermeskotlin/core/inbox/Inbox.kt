@@ -7,19 +7,27 @@ import dev.hermeskotlin.core.push.PushKeys
 import dev.hermeskotlin.core.push.PushMessage
 import dev.hermeskotlin.core.rpc.RpcException
 import dev.hermeskotlin.core.storage.KeyValueStore
+import io.ktor.util.date.getTimeMillis
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.SetSerializer
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
+import kotlin.coroutines.CoroutineContext
 
 /**
  * One finished run of a cron job in the Inbox, as the herald-push plugin reads it from the gateway's cron
@@ -266,8 +274,11 @@ class InboxApi(private val push: PushApi, private val keys: PushKeys) {
 /**
  * The Inbox kept on the phone, newest first: what the gateway listed last, plus runs that came by push while it
  * couldn't be reached, and which have been read. Kept per gateway, so it shows before (or without) a connection.
+ *
+ * Every change names the gateway it is for: one that comes in after the store moved to another gateway (a
+ * list read, or a push, that outlived the switch) is dropped rather than written into the other's Inbox.
  */
-class InboxStore(private val store: KeyValueStore) {
+class InboxStore(private val store: KeyValueStore, private val work: CoroutineContext = Dispatchers.Default) {
 
     @Serializable
     private data class Saved(
@@ -293,40 +304,59 @@ class InboxStore(private val store: KeyValueStore) {
     private val _state = MutableStateFlow(Snapshot())
     val state: StateFlow<Snapshot> = _state.asStateFlow()
 
+    /** The gateway whose Inbox this is now, or null before the first [bind]. */
+    val bound: String? get() = gateway
+
     /** Loads [gatewayUrl]'s Inbox, starting it now (everything before counts as read) the first time. */
-    suspend fun bind(gatewayUrl: String, now: Long) = lock.withLock {
+    suspend fun bind(gatewayUrl: String, now: Long = getTimeMillis() / 1000) = lock.withLock {
         if (gateway == gatewayUrl) return@withLock
         gateway = gatewayUrl
-        val saved = load(gatewayUrl) ?: Saved(since = now).also { save(gatewayUrl, it) }
+        val saved = when (val found = load(gatewayUrl)) {
+            null -> Saved(since = now).also { save(gatewayUrl, it) }
+            else -> found
+        }
         _state.value = Snapshot(saved.runs, saved.read, saved.since, saved.groups)
     }
 
-    /** What the gateway listed: replaces the kept runs, keeping pushed ones it didn't list (it may lag). */
-    suspend fun replace(runs: List<InboxRun>) = edit { s ->
-        val listed = runs.map { it.key }.toSet()
-        val newest = runs.maxOfOrNull { it.at } ?: 0
-        val pushed = s.runs.filter { it.key !in listed && it.at > newest }
-        s.copy(runs = merge(pushed + runs))
+    /**
+     * What the gateway listed, newest first: it replaces the kept runs, by [mergeListed]'s rules. [complete] is
+     * whether the list holds every run the gateway has for this phone (it came back shorter than asked for).
+     */
+    suspend fun replace(gatewayUrl: String, runs: List<InboxRun>, complete: Boolean) = edit(gatewayUrl) { s ->
+        s.copy(runs = mergeListed(s.runs, runs, complete).take(MAX_KEPT))
     }
 
     /** Drops the kept runs [keep] says no to: what a phone stopped following no longer shows. */
-    suspend fun prune(keep: (InboxRun) -> Boolean) = edit { s ->
-        val kept = s.runs.filter(keep)
-        s.copy(runs = kept, read = s.read.trimmed(kept))
+    suspend fun prune(gatewayUrl: String, keep: (InboxRun) -> Boolean) = edit(gatewayUrl) { s ->
+        s.copy(runs = s.runs.filter(keep))
     }
 
     /** A run that came by push, or was read in full: added, or put in place of its shorter copy. */
-    suspend fun add(run: InboxRun) = edit { s -> s.copy(runs = merge(listOf(run) + s.runs.filter { it.key != run.key })) }
+    suspend fun add(gatewayUrl: String, run: InboxRun) = edit(gatewayUrl) { s ->
+        s.copy(runs = merge(listOf(run) + s.runs.filter { it.key != run.key }))
+    }
 
-    suspend fun markRead(run: InboxRun) = edit { s -> s.copy(read = (s.read + run.key).trimmed(s.runs)) }
+    suspend fun markRead(gatewayUrl: String, run: InboxRun) = edit(gatewayUrl) { s -> s.copy(read = trimRead(s.read + run.key)) }
 
-    suspend fun markAllRead() = edit { s -> s.copy(read = s.runs.map { it.key }.toSet()) }
+    /** Every run kept, and [also] (runs paged in from further back), counts as read. */
+    suspend fun markAllRead(gatewayUrl: String, also: List<InboxRun> = emptyList()) = edit(gatewayUrl) { s ->
+        s.copy(read = trimRead(s.read + (s.runs + also).map { it.key }))
+    }
 
     /** Changes the user's groups (kept on this phone, per gateway). */
-    suspend fun editGroups(change: (InboxGroups) -> InboxGroups) = edit { s -> s.copy(groups = change(s.groups)) }
+    suspend fun editGroups(gatewayUrl: String, change: (InboxGroups) -> InboxGroups) = edit(gatewayUrl) { s -> s.copy(groups = change(s.groups)) }
 
-    private suspend fun edit(change: (Snapshot) -> Snapshot) = lock.withLock {
-        val url = gateway ?: return@withLock
+    /** Forgets [gatewayUrl]'s Inbox, when the gateway itself is forgotten. */
+    suspend fun forget(gatewayUrl: String) = lock.withLock {
+        store.remove(key(gatewayUrl))
+        if (gateway == gatewayUrl) {
+            gateway = null
+            _state.value = Snapshot()
+        }
+    }
+
+    private suspend fun edit(url: String, change: (Snapshot) -> Snapshot) = lock.withLock {
+        if (gateway != url) return@withLock
         val next = change(_state.value)
         _state.value = next
         save(url, Saved(next.runs, next.read, next.since, next.groups))
@@ -335,23 +365,82 @@ class InboxStore(private val store: KeyValueStore) {
     private fun merge(runs: List<InboxRun>): List<InboxRun> =
         runs.distinctBy { it.key }.sortedByDescending { it.at }.take(MAX_KEPT)
 
-    // A run that left the list can't be unread any more.
-    private fun Set<String>.trimmed(runs: List<InboxRun>): Set<String> = intersect(runs.map { it.key }.toSet())
-
-    private suspend fun load(url: String): Saved? =
-        store.get(key(url))?.let { runCatching { HermesJson.decodeFromString(Saved.serializer(), it) }.getOrNull() }
+    /**
+     * What was saved for [url], or null when nothing was. A part that no longer reads (an older or damaged
+     * copy) starts empty on its own, so a bad run list doesn't take the user's groups and names with it.
+     */
+    private suspend fun load(url: String): Saved? {
+        val raw = store.get(key(url)) ?: return null
+        return withContext(work) { decodeSaved(raw) }
+    }
 
     private suspend fun save(url: String, saved: Saved) {
         // A kept run holds the start of its text only: the whole of a long briefing is read from the gateway.
         val trimmed = saved.copy(runs = saved.runs.map { it.copy(text = it.text.take(MAX_KEPT_TEXT)) })
-        store.put(key(url), HermesJson.encodeToString(Saved.serializer(), trimmed))
+        val encoded = withContext(work) { HermesJson.encodeToString(Saved.serializer(), trimmed) }
+        store.put(key(url), encoded)
     }
 
-    private fun key(url: String) = "inbox.v1.$url"
+    private fun decodeSaved(raw: String): Saved {
+        runCatching { return HermesJson.decodeFromString(Saved.serializer(), raw) }
+        val obj = runCatching { HermesJson.parseToJsonElement(raw).jsonObject }.getOrNull() ?: return Saved()
+        fun <T> part(name: String, serializer: KSerializer<T>, empty: T): T =
+            obj[name]?.let { runCatching { HermesJson.decodeFromJsonElement(serializer, it) }.getOrNull() } ?: empty
+        return Saved(
+            runs = part("runs", ListSerializer(InboxRun.serializer()), emptyList()),
+            read = part("read", SetSerializer(String.serializer()), emptySet()),
+            since = part("since", Long.serializer(), 0L),
+            groups = part("groups", InboxGroups.serializer(), InboxGroups()),
+        )
+    }
+
+    private fun key(url: String) = keyFor(url)
 
     companion object {
         const val MAX_KEPT = 100
         const val MAX_KEPT_TEXT = 2_000
+
+        /** The most runs remembered as read: past it, the oldest go first. */
+        const val MAX_READ = 1_000
+
+        /** Where [gatewayUrl]'s Inbox is kept. */
+        fun keyFor(gatewayUrl: String) = "inbox.v1.$gatewayUrl"
+
+        /**
+         * The read runs to remember: all of them up to [MAX_READ], else the newest by their run's time. A run is
+         * not forgotten just because it left the kept list: it may come back in a later list, or a page further
+         * back, and must not show as unread again.
+         */
+        fun trimRead(read: Set<String>): Set<String> =
+            if (read.size <= MAX_READ) read else read.sortedByDescending { it.substringAfterLast('/') }.take(MAX_READ).toSet()
+
+        /**
+         * The kept runs once the gateway listed [listed] (newest first): every listed run, with the longer text of
+         * it where a push or a read in full brought more than the list's start; and the kept runs it didn't list
+         * that it may not have meant to drop: newer than its newest (the gateway can lag a push), or older than its
+         * oldest when the list stopped short ([complete] false: more runs were there than it was asked for). Any
+         * other kept run is one the gateway no longer has for this phone, so it goes, and a complete empty list
+         * leaves none.
+         */
+        fun mergeListed(kept: List<InboxRun>, listed: List<InboxRun>, complete: Boolean): List<InboxRun> {
+            val keptByKey = kept.associateBy { it.key }
+            val fresh = listed.distinctBy { it.key }.map { run ->
+                val old = keptByKey[run.key]
+                if (old != null && old.text.length > run.text.length) run.copy(text = old.text) else run
+            }
+            val listedKeys = fresh.map { it.key }.toSet()
+            val newest = fresh.maxOfOrNull { it.at }
+            val oldest = fresh.minOfOrNull { it.at }
+            val unlisted = kept.filter { run ->
+                run.key !in listedKeys && when {
+                    newest == null -> false
+                    run.at > newest -> true
+                    !complete && oldest != null && run.at < oldest -> true
+                    else -> false
+                }
+            }
+            return (fresh + unlisted).sortedByDescending { it.at }
+        }
     }
 }
 

@@ -311,13 +311,14 @@ class InboxViewModel(
     override fun renameJob(chip: JobChip, name: String) = editGroups { it.renameJob(chip.filter.bot, chip.filter.job, name, chip.own) }
 
     private fun editGroups(change: (InboxGroups) -> InboxGroups) {
-        viewModelScope.launch { store.editGroups(change) }
+        val url = gateway?.gatewayUrl?.value ?: return
+        viewModelScope.launch { store.editGroups(url, change) }
     }
 
     fun dismissMessage() = _state.update { it.copy(message = null) }
 
     private fun load(quiet: Boolean = false) {
-        if (gateway == null) return
+        val url = gateway?.gatewayUrl?.value ?: return
         loadJob?.cancel()
         if (!quiet) _state.update { it.copy(loading = it.runs.isEmpty(), error = null) }
         loadJob = viewModelScope.launch {
@@ -327,7 +328,7 @@ class InboxViewModel(
             }
             val result = runCatching { api.runs() }
             result.onSuccess { runs ->
-                store.replace(runs)
+                store.replace(url, runs, complete = runs.size < InboxApi.PAGE)
                 _state.update { it.copy(loading = false, error = null, block = null) }
             }.onFailure { e ->
                 val old = e is InboxPluginTooOld
@@ -354,11 +355,12 @@ class InboxViewModel(
     }
 
     override fun open(run: InboxRun) {
+        val url = gateway?.gatewayUrl?.value ?: return
         _state.update { it.copy(open = run, openLoading = true, openPartial = false) }
         viewModelScope.launch {
-            store.markRead(run)
+            store.markRead(url, run)
             val full = if (ready()) runCatching { api.read(run) }.getOrNull() else null
-            if (full != null) store.add(full)
+            if (full != null) store.add(url, full)
             _state.update { state ->
                 if (state.open?.key != run.key) return@update state
                 state.copy(open = full ?: run, openLoading = false, openPartial = full == null)
@@ -379,7 +381,8 @@ class InboxViewModel(
     override fun closeRun() = _state.update { it.copy(open = null, openLoading = false) }
 
     override fun markAllRead() {
-        viewModelScope.launch { store.markAllRead() }
+        val url = gateway?.gatewayUrl?.value ?: return
+        viewModelScope.launch { store.markAllRead(url) }
     }
 
     /** Opens the follow page: every job, and how each reaches the Inbox now. */
@@ -410,6 +413,7 @@ class InboxViewModel(
     override fun setAll(follow: Follow) = save(_state.value.following.all(follow))
 
     private fun save(next: Following) {
+        val url = gateway?.gatewayUrl?.value ?: return
         val before = _state.value.following
         _state.update { it.copy(following = next, saving = true) }
         viewModelScope.launch {
@@ -417,7 +421,7 @@ class InboxViewModel(
             saved.onSuccess { following ->
                 _state.update { it.copy(following = following, saving = false) }
                 // The gateway only lists what is followed now; the runs kept from before would stay on show.
-                store.prune(following::covers)
+                store.prune(url, following::covers)
                 load(quiet = true)
             }.onFailure { e ->
                 _state.update { it.copy(following = before, saving = false, message = saveErrorText(e)) }
