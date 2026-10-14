@@ -114,6 +114,7 @@ internal object InboxSamples {
             CronJob(SITE, name = "site-check", scheduleDisplay = "every 30m"),
         ),
         jobsLoading = false,
+        followingLoaded = true,
         following = Following(default = Follow.Quiet, failures = true)
             .with(BRIEFING, Follow.Notify)
             .with(BACKUP, Follow.Off),
@@ -148,4 +149,5 @@ internal object PreviewInboxActions : InboxActions {
     override fun removeGroup(name: String) {}
     override fun assignGroup(job: InboxFilter.Job, group: String?) {}
     override fun renameJob(chip: JobChip, name: String) {}
+    override fun loadMore() {}
 }
