@@ -49,6 +49,8 @@ import dev.hermeskotlin.core.capabilities.McpServer
 import dev.hermeskotlin.core.capabilities.Skill
 import dev.hermeskotlin.core.capabilities.Toolset
 import dev.hermeskotlin.ui.chat.CheckpointsSheetView
+import dev.hermeskotlin.ui.chat.FileDownload
+import dev.hermeskotlin.ui.chat.FileViewerPage
 import dev.hermeskotlin.ui.chat.ProcessesSheetView
 import dev.hermeskotlin.ui.chat.SessionControlSheetView
 import dev.hermeskotlin.ui.chat.UsageSheetView
@@ -164,6 +166,10 @@ enum class PreviewScene(val label: String) {
     Notices("Notices from the gateway"),
     Archived("Archived, with Undo"),
     Checkpoints("Checkpoints, one opened on its changes"),
+    FileMarkdown("A Markdown file a reply linked to, rendered full screen"),
+    FileCode("A code file opened at the line its link names"),
+    FileTable("A CSV file as a table"),
+    FileMissing("A linked file the gateway no longer has"),
     ProjectOptions("A project's options"),
     NewProject("A new project"),
     Threads("Threads above the pinned chats"),
@@ -488,6 +494,10 @@ fun HeraldPreview(scene: PreviewScene, dark: Boolean = true, accent: String = DE
                         onDismiss = {},
                         initiallyExpanded = "9f2c1ab47e0d55aa",
                     )
+                }
+                PreviewScene.FileMarkdown, PreviewScene.FileCode, PreviewScene.FileTable, PreviewScene.FileMissing -> {
+                    val (file, load) = FileSamples.of(scene)
+                    FileViewerPage(file, onDismiss = {}, load = { load }, download = { FileDownload.Failed("") }, preset = load)
                 }
                 PreviewScene.Models, PreviewScene.ModelsAll, PreviewScene.ModelSearch -> Box(Modifier.fillMaxSize()) {
                     SampleChat(ChatSamples.reply)
