@@ -623,7 +623,7 @@ private fun VoiceSwitch(label: String, detail: String, checked: Boolean, onChang
     )
 }
 
-/** One chat: its title and how long ago it was active; the one the watch talks in has a blue dot. */
+/** One chat: its title and how long ago it was active; the one the watch talks in has an accent dot. */
 @Composable
 private fun ChatRow(chat: WatchChat, picked: Boolean, onClick: () -> Unit) {
     Button(

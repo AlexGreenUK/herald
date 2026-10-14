@@ -21,7 +21,7 @@ object WearPaths {
     /** Watch → phone, empty: asks for the recent chats. Phone → watch: a [ChatList]. */
     const val CHATS = "/herald/chats"
 
-    /** Watch → phone, empty: asks how the phone stands. Phone → watch: a [PhoneStatus]. */
+    /** Watch → phone: a [PhoneStatusRequest] (empty on older watches). Phone → watch: a [PhoneStatus]. */
     const val STATUS = "/herald/status"
 
     /** Phone → watch: a [ReplyUpdate], again each time the turn moves on. */
