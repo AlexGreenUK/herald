@@ -34,6 +34,33 @@ class BriefErrorTest {
     }
 
     @Test
+    fun aLineThatIsOnlyTheUrlFallsToTheNextOne() {
+        assertEquals("403 Forbidden", briefError("url='wss://speech.example.com/v1?token=ABC'\n403 Forbidden"))
+        assertEquals("The voice service failed.", briefError("url='wss://speech.example.com/v1?token=ABC'"))
+    }
+
+    @Test
+    fun anAddressEndsWhereTheSentenceCloses() {
+        assertEquals(
+            "Timed out (https://tts.example.com/v1) after 30 s",
+            briefError("Timed out (https://tts.example.com/v1?key=secret) after 30 s"),
+        )
+    }
+
+    @Test
+    fun fragmentsAndSignInsAreLeftOut() {
+        assertEquals(
+            "Failed: https://tts.example.com/v1 and wss://host.example.com/s",
+            briefError("Failed: https://user:pass@tts.example.com/v1#access_token=XYZ and wss://host.example.com/s"),
+        )
+    }
+
+    @Test
+    fun urlInProseIsntAnArgument() {
+        assertEquals("Set the url = the gateway's address", briefError("Set the url = the gateway's address"))
+    }
+
+    @Test
     fun ordinaryMessagesAreUntouched() {
         assertEquals("Couldn't voice the reply.", briefError("Couldn't voice the reply."))
         assertEquals("Didn't catch anything.", briefError("Didn't catch anything."))

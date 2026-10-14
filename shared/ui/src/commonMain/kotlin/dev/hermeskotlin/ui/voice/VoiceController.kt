@@ -585,22 +585,31 @@ internal fun liveFailure(result: ApiResult<*>): String {
 private val VENDOR_MESSAGE = Regex(""""message"\s*:\s*"((?:[^"\\]|\\.)*)"""")
 
 /**
- * A voice error as a banner shows it: its first line, without the provider's request URL or any address's
- * query. A speech provider's failure can come through whole, `url='wss://…?TrustedClientToken=…'` and all,
- * which fills the screen and puts tokens on it.
+ * A voice error as a banner shows it: its first line that says something, without the provider's request URL
+ * or any address's query, fragment or sign-in. A speech provider's failure can come through whole,
+ * `url='wss://…?TrustedClientToken=…'` and all, which fills the screen and puts tokens on it.
  */
 internal fun briefError(message: String): String {
-    val line = message.lineSequence().firstOrNull { it.isNotBlank() }?.trim() ?: return message.trim()
-    val brief = line.replace(QUOTED_URL, "")
-        // The address says what couldn't be reached; its query is where keys and tokens ride.
-        .replace(QUERY_URL) { it.value.substringBefore('?') }
-        .replace(SPACES, " ").trim().trimEnd(',', ';', ':').trimEnd()
+    val brief = message.lineSequence().map(::briefLine).firstOrNull { it.isNotEmpty() } ?: return VOICE_FAILED
     return if (brief.length <= BRIEF_MAX) brief else brief.take(BRIEF_MAX - 1).trimEnd() + "…"
 }
 
-/** Python's `url='…'`, as aiohttp and httpx put it in their errors. */
-private val QUOTED_URL = Regex("""[,;]?\s*\burl\s*=\s*(?:'[^']*'|"[^"]*"|\S+)""", RegexOption.IGNORE_CASE)
-/** An address with a query. */
-private val QUERY_URL = Regex("""\b(?:https?|wss?)://[^\s'"]*\?[^\s'"]*""")
+private fun briefLine(line: String): String = line.replace(QUOTED_URL, "")
+    // The address says what couldn't be reached; its query, fragment and sign-in are where keys and tokens ride.
+    .replace(ADDRESS) { bareAddress(it.value) }
+    .replace(SPACES, " ").trim().trimEnd(',', ';', ':').trimEnd()
+
+private fun bareAddress(address: String): String {
+    val scheme = address.substringBefore("://") + "://"
+    val rest = address.substring(scheme.length).substringBefore('?').substringBefore('#')
+    val host = rest.substringBefore('/')
+    return scheme + host.substringAfterLast('@') + rest.substring(host.length)
+}
+
+/** Python's `url='…'` or `url=…`, as aiohttp and httpx put it in their errors; not "url = " in prose. */
+private val QUOTED_URL = Regex("""[,;]?\s*\burl\s*=\s*(?:'[^']*'|"[^"]*")|[,;]?\s*\burl=[^\s,;)]+""", RegexOption.IGNORE_CASE)
+/** A web or socket address, up to whatever closes it in a sentence. */
+private val ADDRESS = Regex("""\b(?:https?|wss?)://[^\s'"()<>,]+""", RegexOption.IGNORE_CASE)
 private val SPACES = Regex("""\s{2,}""")
 private const val BRIEF_MAX = 200
+private const val VOICE_FAILED = "The voice service failed."
