@@ -14,6 +14,7 @@ import dev.hermeskotlin.wearlink.CallStart
 import dev.hermeskotlin.wearlink.CallUpdate
 import dev.hermeskotlin.wearlink.ChatList
 import dev.hermeskotlin.wearlink.PhoneStatus
+import dev.hermeskotlin.wearlink.PhoneStatusRequest
 import dev.hermeskotlin.wearlink.RecordedAsk
 import dev.hermeskotlin.wearlink.ReplyPhase
 import dev.hermeskotlin.wearlink.ReplySpeech
@@ -373,7 +374,7 @@ class WatchLink(
     }
 
     fun refreshPhone() {
-        scope.launch { send(WearPaths.STATUS, ByteArray(0)) }
+        scope.launch { send(WearPaths.STATUS, WearJson.encode(PhoneStatusRequest(accentRevision = store.accent.value?.revision))) }
     }
 
     /** A message from the phone, from [WatchListenerService] or the fake phone. */
@@ -384,6 +385,7 @@ class WatchLink(
             WearPaths.CALL_UPDATE -> WearJson.decode<CallUpdate>(data)?.let { scope.launch(main) { onCallUpdate(it) } }
             WearPaths.CALL_SEND -> WearJson.decode<CallEvents>(data)?.let { scope.launch(main) { onCallSend(it) } }
             WearPaths.STATUS -> WearJson.decode<PhoneStatus>(data)?.let {
+                it.accent?.let(store::setAccent)
                 it.liveVoice?.let { live -> _liveVoice.value = live }
                 _phone.value = when {
                     !it.signedIn -> PhoneState.SignedOut

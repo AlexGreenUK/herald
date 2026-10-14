@@ -1,16 +1,21 @@
 package dev.hermeskotlin.android.wear
 
+import androidx.compose.ui.graphics.toArgb
 import com.google.android.gms.wearable.ChannelClient
 import com.google.android.gms.wearable.MessageEvent
 import com.google.android.gms.wearable.Wearable
 import com.google.android.gms.wearable.WearableListenerService
 import dev.hermeskotlin.android.notify.ChatNotifier
+import dev.hermeskotlin.core.settings.SettingsStore
 import dev.hermeskotlin.core.wear.WatchRelay
+import dev.hermeskotlin.designsystem.AccentPalette
 import dev.hermeskotlin.ui.voice.WatchCalls
 import dev.hermeskotlin.wearlink.CallEnd
 import dev.hermeskotlin.wearlink.CallEvents
 import dev.hermeskotlin.wearlink.CallStart
+import dev.hermeskotlin.wearlink.PhoneStatusRequest
 import dev.hermeskotlin.wearlink.RecordedAsk
+import dev.hermeskotlin.wearlink.WatchAccent
 import dev.hermeskotlin.wearlink.WatchAsk
 import dev.hermeskotlin.wearlink.WatchStop
 import dev.hermeskotlin.wearlink.WearJson
@@ -31,6 +36,7 @@ import java.io.ByteArrayOutputStream
  */
 class WearBridgeService : WearableListenerService() {
 
+    private val settings: SettingsStore by inject()
     private val relay: WatchRelay by inject()
     private val calls: WatchCalls by inject()
     private val scope: CoroutineScope by inject()
@@ -51,7 +57,17 @@ class WearBridgeService : WearableListenerService() {
             WearPaths.CALL_EVENTS -> WearJson.decode<CallEvents>(event.data)?.let { calls.events(node, it) }
             WearPaths.CALL_END -> WearJson.decode<CallEnd>(event.data)?.let(calls::end)
             WearPaths.CHATS -> relay.chats(node)
-            WearPaths.STATUS -> relay.status(node)
+            WearPaths.STATUS -> {
+                val accent = settings.settings.value?.let {
+                    val palette = AccentPalette.named(it.accent)
+                    val colors = palette.dark
+                    // Bump the revision if the transmitted dark palette definitions change.
+                    WatchAccent("dark:${palette.name}:1", colors.accent.toArgb(), colors.text.toArgb(),
+                        colors.onAccent.toArgb(), colors.soft.copy(alpha = 1f).toArgb())
+                }
+                val request = WearJson.decode<PhoneStatusRequest>(event.data)
+                relay.status(node, accent = accent?.updateFor(request?.accentRevision))
+            }
         }
     }
 

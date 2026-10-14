@@ -205,6 +205,16 @@ data class WatchChat(val id: String, val title: String, val activityAt: Double? 
 @Serializable
 data class ChatList(val chats: List<WatchChat> = emptyList(), val error: String? = null)
 
+/** The accent already cached on the watch; absent on older watches. */
+@Serializable
+data class PhoneStatusRequest(val accentRevision: String? = null)
+
+/** The phone's dark accent colors, stored with their revision so the watch can ask only for changes. */
+@Serializable
+data class WatchAccent(val revision: String, val fill: Int, val text: Int, val onFill: Int, val dim: Int) {
+    fun updateFor(cachedRevision: String?): WatchAccent? = takeUnless { revision == cachedRevision }
+}
+
 /**
  * Whether Herald on the phone is signed in to a gateway, and [connected]: connected to it, or ready to connect
  * when asked; false while it's (re)connecting or failing to. [failed]: it gave up, and won't connect on its own.
@@ -219,6 +229,7 @@ data class PhoneStatus(
      * when the phone hasn't asked the gateway yet (or is older): the watch keeps what it was last told.
      */
     val liveVoice: Boolean? = null,
+    val accent: WatchAccent? = null,
 )
 
 /*
