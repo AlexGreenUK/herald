@@ -169,11 +169,17 @@ class VoiceController(
         var failures = 0
         try {
             while (currentCoroutineContext().isActive) {
-                if (!converseOnce(session, gateway, profile, VoiceActivity(silenceMs = pauseMs))) break
-                failures = if (_chat.value.error == null) 0 else failures + 1
-                // A provider that keeps failing would loop forever; give up after a few in a row.
-                if (failures >= MAX_FAILURES) break
-                if (failures > 0) delay(RETRY_PAUSE_MS)
+                when (converseOnce(session, gateway, profile, VoiceActivity(silenceMs = pauseMs))) {
+                    Turn.End -> break
+                    Turn.Done -> failures = 0
+                    // Nobody spoke: nothing failed, nor came right. The last error stays on show meanwhile.
+                    Turn.Quiet -> Unit
+                    Turn.Failed -> {
+                        // A provider that keeps failing would loop forever; give up after a few in a row.
+                        if (++failures >= MAX_FAILURES) break
+                        delay(RETRY_PAUSE_MS)
+                    }
+                }
             }
         } finally {
             appScope.launch { audio.ttsLease(gateway, active = false, profile) }
@@ -238,10 +244,20 @@ class VoiceController(
         speechJob?.cancel()
     }
 
+    /**
+     * Sends what's been said so far without waiting for the pause, where noise keeps the recording from
+     * hearing one (a car, wind; #185). Only while the chained chat listens: a live call has no recording.
+     */
+    fun sendNow() {
+        // As the button shows: once it has heard you, so the recording is under way and has something to send.
+        if (!canSendNow(_chat.value) || chatJob?.isActive != true) return
+        recorder.finish()
+    }
+
     fun dismissChatError() = _chat.update { it.copy(error = null) }
 
-    /** One turn of the conversation; false when it should end. */
-    private suspend fun converseOnce(session: ChatSession, gateway: GatewayUrl, profile: String?, activity: VoiceActivity): Boolean {
+    /** One turn of the conversation, and how it went. */
+    private suspend fun converseOnce(session: ChatSession, gateway: GatewayUrl, profile: String?, activity: VoiceActivity): Turn {
         _chat.update { it.copy(phase = VoicePhase.Listening, level = 0f, hearing = false) }
         val recording = try {
             recorder.record(
@@ -253,20 +269,21 @@ class VoiceController(
             throw e
         } catch (e: Exception) {
             _chat.update { it.copy(error = e.message ?: "Couldn't use the microphone.") }
-            return false
+            return Turn.End
         }
-        if (!recording.heardSpeech) return true
+        if (!recording.heardSpeech) return Turn.Quiet
         _chat.update { it.copy(phase = VoicePhase.Transcribing, level = 0f, hearing = false) }
         val transcript = when (val result = audio.transcribe(gateway, recording.bytes, recording.mimeType, profile)) {
             is ApiResult.Success -> result.value
             else -> {
                 _chat.update { it.copy(error = result.errorMessage ?: "Couldn't transcribe that.") }
-                return true
+                return Turn.Failed
             }
         }
+        // From here, an error on show is this turn's own.
         _chat.update { it.copy(error = null) }
-        if (transcript.isBlank()) return true
-        if (isVoiceStopCommand(transcript)) return false
+        if (transcript.isBlank()) return Turn.Quiet
+        if (isVoiceStopCommand(transcript)) return Turn.End
 
         _chat.update { it.copy(phase = VoicePhase.Thinking, caption = transcript.trim(), captionIsVoice = false) }
         val sentAt = session.state.value.messages.size
@@ -292,18 +309,19 @@ class VoiceController(
                     runCatching { opening.await()?.close() }
                 }
             }
-        } ?: return true
+        } ?: return Turn.Failed
         // Skipped while the agent is still at work: listen again now rather than once it's done.
-        if (voiced == Voiced.Skipped) return true
+        if (voiced == Voiced.Skipped) return Turn.Done
         session.state.first { !it.running }
-        if (voiced == Voiced.Yes) return true
+        if (voiced == Voiced.Yes) return Turn.Done
         val reply = session.state.value.messages.drop(sentAt).lastOrNull { it is ChatMessage.Assistant } as? ChatMessage.Assistant
         val text = reply?.text?.let(::speakableText).orEmpty()
-        if (text.isEmpty()) return true
+        if (text.isEmpty()) return Turn.Done
 
         _chat.update { it.copy(phase = VoicePhase.Speaking, caption = text, captionIsVoice = true) }
         speak(text, gateway, profile)
-        return true
+        // The voice couldn't be made or played (a provider's 429, say).
+        return if (_chat.value.error == null) Turn.Done else Turn.Failed
     }
 
     /**
@@ -555,6 +573,21 @@ class VoiceController(
 private enum class Voiced { Yes, No, Skipped }
 
 /**
+ * How a turn of the chained voice chat went. Only [Failed] turns count towards giving up: a listen that heard
+ * nobody leaves the count as it was, so one error and then a quiet room doesn't end the chat (#184).
+ */
+private enum class Turn {
+    /** Said, sent and answered. */
+    Done,
+    /** Nobody spoke, or nothing that could be written down. */
+    Quiet,
+    /** Transcribing, sending or voicing the reply failed. */
+    Failed,
+    /** The chat ends: "stop" was said, or the microphone can't be used. */
+    End,
+}
+
+/**
  * Everything the agent has written since the prompt at [sentAt], its messages a paragraph apart. Empty ones
  * add nothing, so one that comes or goes (a turn with no words) doesn't shift what's after it.
  */
@@ -591,3 +624,89 @@ internal fun liveFailure(result: ApiResult<*>): String {
 }
 
 private val VENDOR_MESSAGE = Regex(""""message"\s*:\s*"((?:[^"\\]|\\.)*)"""")
+
+/**
+ * A voice error as a banner shows it: its first line that says something, without the provider's request URL
+ * or any address's query, fragment or sign-in. A speech provider's failure can come through whole,
+ * `url='wss://…?TrustedClientToken=…'` and all, which fills the screen and puts tokens on it.
+ */
+internal fun briefError(message: String): String {
+    val brief = message.lineSequence().map { briefLine(it.take(LINE_MAX)) }.firstOrNull { it.isNotEmpty() }
+        ?: return VOICE_FAILED
+    if (brief.length <= BRIEF_MAX) return brief
+    // Not between the halves of an emoji.
+    val cut = if (brief[BRIEF_MAX - 2].isHighSurrogate()) BRIEF_MAX - 2 else BRIEF_MAX - 1
+    return brief.take(cut).trimEnd() + "…"
+}
+
+private fun briefLine(line: String): String = line.replace(URL_ARGUMENT, "")
+    .replace(WORD) { bareAddress(it.value) }
+    .replace(SPACES, " ").trim().trimEnd(',', ';', ':').trimEnd()
+
+/**
+ * [word] with each address in it cut to the scheme, host and path: the query, fragment and sign-in are where
+ * keys and tokens ride, and a query takes the rest of the word with it. Without an address ahead of it, as in
+ * `GET /v1/speech?key=…`, a query goes when it sets something; a plain question mark stays. The punctuation that
+ * closes a sentence or a bracket stays too.
+ */
+private fun bareAddress(word: String): String {
+    val body = word.trimEnd { it in CLOSERS }
+    val tail = word.substring(body.length)
+    val schemes = SCHEME.findAll(body).toList()
+    val lead = body.take(schemes.firstOrNull()?.range?.first ?: body.length)
+    val leadQuery = lead.indexOfFirst(::opensQuery)
+    if (leadQuery >= 0) {
+        val after = body.substring(leadQuery)
+        return if ('=' in after || "://" in after) lead.take(leadQuery) + tail else word
+    }
+    val brief = StringBuilder(lead)
+    for ((i, scheme) in schemes.withIndex()) {
+        brief.append(scheme.value)
+        val address = signedOut(body.substring(scheme.range.last + 1, schemes.getOrNull(i + 1)?.range?.first ?: body.length))
+        val query = address.indexOfFirst(::opensQuery)
+        if (query >= 0) return brief.append(address, 0, query).append(tail).toString()
+        brief.append(address)
+    }
+    return brief.append(tail).toString()
+}
+
+/**
+ * [address] (what follows its scheme) without its sign-in. A password can hold `/`, `@`, `?` or `#`, so with a
+ * `user:` in front everything up to the last `@` goes; better a wrong host than a password. Digits after the
+ * `:` are a port instead when the only `@`s are in the query, as in `host:8080/x?email=a@b`.
+ */
+private fun signedOut(address: String): String {
+    val authority = address.substringBefore('/')
+    val query = address.indexOfFirst(::opensQuery).let { if (it < 0) address.length else it }
+    // A port follows a host (a name with a dot, an IP, localhost), not a user: `user:12/34?x@host` is a password.
+    val host = authority.substringBeforeLast(':')
+    val port = authority.substringAfterLast(':', "").let { it.isNotEmpty() && it.all(Char::isDigit) } &&
+        ('.' in host || host.startsWith('[') || host.equals("localhost", ignoreCase = true))
+    return when {
+        ':' in authority && '@' in address && !(port && address.indexOf('@') > query) -> address.substringAfterLast('@')
+        '@' in authority -> address.substring(authority.lastIndexOf('@') + 1)
+        else -> address
+    }
+}
+
+private fun opensQuery(c: Char) = c == '?' || c == '#'
+
+/**
+ * Python's `url='…'`, `url=URL('…')` or `url=…` (also `base_url=` and the like), as aiohttp, yarl and httpx put
+ * it in their errors; not "url = " in prose. A quoted one runs on past a quote inside it, to the last before a
+ * space; an unquoted one runs to the next space.
+ */
+private val URL_ARGUMENT = Regex(
+    """[,;]?\s*\b(?:\w+_)?url\s*=\s*(?:URL\()?(?:'[^']*'(?:[^\s']*')*|"[^"]*"(?:[^\s"]*")*)\)?""" +
+        """|[,;]?\s*\b(?:\w+_)?url=\S+""",
+    RegexOption.IGNORE_CASE,
+)
+private val WORD = Regex("""\S+""")
+/** No word boundary: a scheme glued on, as in `x_https://`, is still one. */
+private val SCHEME = Regex("""[a-z][a-z0-9+.-]*://""", RegexOption.IGNORE_CASE)
+private const val CLOSERS = ").,;:'\"]>}"
+private val SPACES = Regex("""\s{2,}""")
+/** Past this, a line is long enough to cut before it's searched. */
+private const val LINE_MAX = 2_000
+private const val BRIEF_MAX = 200
+private const val VOICE_FAILED = "The voice service failed."
