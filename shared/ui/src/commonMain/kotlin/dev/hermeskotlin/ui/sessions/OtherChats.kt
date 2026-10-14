@@ -251,18 +251,27 @@ fun previewOf(text: String?): String? {
         .replace(Regex("""`([^`]*)`"""), "$1")
         .replace(Regex("""\s+"""), " ")
         .trim()
-    if (plain.isEmpty()) return null
-    return if (plain.length <= PREVIEW_CHARS) plain else plain.take(PREVIEW_CHARS).trimEnd() + "…"
+    return cut(plain)
 }
+
+/** [text] cut to [PREVIEW_CHARS] with an ellipsis, never between the two halves of an emoji; empty: null. */
+private fun cut(text: String): String? {
+    if (text.isEmpty()) return null
+    if (text.length <= PREVIEW_CHARS) return text
+    val head = text.take(PREVIEW_CHARS).let { if (it.last().isHighSurrogate()) it.dropLast(1) else it }
+    return head.trimEnd() + "…"
+}
+
+/** A command as it will run, on one line: not Markdown, so `__init__.py` or `*.txt` keep their marks. */
+private fun commandPreview(command: String): String? = cut(command.replace(Regex("""\s+"""), " ").trim())
 
 /** What [request] asks, for the banner: the command to approve, the question, what a value is for. */
 fun previewOf(request: InputRequest?): String? = when (request) {
     null -> null
-    is InputRequest.Approval -> request.command.ifBlank { request.description }
+    is InputRequest.Approval -> if (request.command.isNotBlank()) commandPreview(request.command) else previewOf(request.description)
     is InputRequest.Clarify -> request.questions.firstOrNull()?.question?.let { first ->
-        if (request.questions.size > 1) "$first (+${request.questions.size - 1} more)" else first
+        previewOf(if (request.questions.size > 1) "$first (+${request.questions.size - 1} more)" else first)
     }
-    is InputRequest.Secret -> request.prompt.ifBlank { request.command ?: request.envVar ?: "" }
-    is InputRequest.VaultSaveLogin -> request.title
-    else -> null
-}?.let(::previewOf)
+    is InputRequest.Secret -> if (request.prompt.isNotBlank()) previewOf(request.prompt) else (request.command ?: request.envVar)?.let(::commandPreview)
+    is InputRequest.VaultSaveLogin -> previewOf(request.title)
+}
