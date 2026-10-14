@@ -115,7 +115,7 @@ val coreModule = module {
     single { BotsApi(get()) }
     single { ProjectsApi(get()) }
     single { ThreadsApi(get()) }
-    single { ThreadsRepository(get(), get(), get()) }
+    single { ThreadsRepository(get(), get(), get(), get()) }
     single { BotChats(get<BotsApi>()) }
     single { RoomsApi(get()) }
     single { RoomSeenStore(get()) }

@@ -96,21 +96,25 @@ fun List<ChatThread>.moved(id: String, index: Int): List<ChatThread> {
     return rest
 }
 
-/** The thread [id] one place up. */
-fun List<ChatThread>.movedUp(id: String): List<ChatThread> = moved(id, indexOfFirst { it.id == id } - 1)
-
-/** The thread [id] one place down. */
-fun List<ChatThread>.movedDown(id: String): List<ChatThread> {
-    val at = indexOfFirst { it.id == id }
-    return if (at < 0) this else moved(id, at + 1)
+/**
+ * The thread [id] moved just past the thread [other], above it when [other] was above, below it when below: one
+ * place up or down among the threads a narrowed list shows, whatever hidden ones sit between. An unknown id
+ * changes nothing.
+ */
+fun List<ChatThread>.movedPast(id: String, other: String): List<ChatThread> {
+    val at = indexOfFirst { it.id == other }
+    return if (at < 0) this else moved(id, at)
 }
 
 /**
- * The threads in the order of [ids]; threads [ids] leaves out keep their place after those it names, so an order
- * made on a list another device has since added to loses nothing.
+ * The threads [ids] names put in its order, in the places they had between them; threads it leaves out keep
+ * their own places. So an order dragged in a narrowed list leaves the hidden threads where they were, and one made
+ * on a list another device has since added to loses nothing.
  */
 fun List<ChatThread>.ordered(ids: List<String>): List<ChatThread> {
     val byId = associateBy { it.id }
     val named = ids.distinct().mapNotNull { byId[it] }
-    return named + filterNot { thread -> named.any { it.id == thread.id } }
+    val namedIds = named.mapTo(HashSet()) { it.id }
+    val next = named.iterator()
+    return map { if (it.id in namedIds) next.next() else it }
 }

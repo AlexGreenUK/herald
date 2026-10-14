@@ -363,6 +363,8 @@ fun SessionsSidebar(
     val sections = remember(threads, state.listed, state.sessions, state.project, projectIndex) {
         threadSections(threads, state.listed, state.sessions, state.project, projectIndex)
     }
+    // The thread rows as the section shows them; moving one goes past its neighbour here, not in the whole list.
+    val shownThreads = sections.threads.filter { attentionFilter.keeps(statuses[it.session.id]) }
     val open: (SessionSummary) -> Unit = {
         // Taken before the chat counts as read, so it can show where the new messages start.
         val readUpTo = viewModel.readUpTo(it)
@@ -544,7 +546,7 @@ fun SessionsSidebar(
                         selectedId = selectedId,
                         onOpen = open,
                         onActions = rowActions,
-                        threads = sections.threads.filter { attentionFilter.keeps(statuses[it.session.id]) },
+                        threads = shownThreads,
                         onOpenThread = { open(it.session) },
                         onThreadActions = { threadActions = it },
                         reorderingThreads = reorderingThreads && attentionFilter == AttentionFilter.All,
@@ -670,13 +672,11 @@ fun SessionsSidebar(
     )
     ThreadActionsSheet(
         row = threadActions,
-        first = threadActions?.thread?.id == threads.firstOrNull()?.id,
-        last = threadActions?.thread?.id == threads.lastOrNull()?.id,
+        shown = shownThreads.map { it.thread },
         onDismiss = { threadActions = null },
         onStartFresh = { freshThread = it.thread },
         onRename = { renameThread = it.thread },
-        onMoveUp = { viewModel.moveThread(it.thread, down = false) },
-        onMoveDown = { viewModel.moveThread(it.thread, down = true) },
+        onMove = viewModel::moveThread,
         onReorder = {
             viewModel.setAttentionFilter(AttentionFilter.All)
             reorderingThreads = true
@@ -1455,36 +1455,42 @@ private fun ThreadReorder(rows: List<ThreadRow>, projectLabel: (ThreadRow) -> St
     }
 }
 
-/** A thread's verbs, from its row's long press. Move up and Move down are left out at the ends of the list. */
+/**
+ * A thread's verbs, from its row's long press. Move up and Move down go past the next thread in [shown] (the
+ * section as it shows now) and are left out at its ends.
+ */
 @Composable
 internal fun ThreadActionsSheet(
     row: ThreadRow?,
-    first: Boolean,
-    last: Boolean,
+    shown: List<ChatThread>,
     onDismiss: () -> Unit,
     onStartFresh: (ThreadRow) -> Unit,
     onRename: (ThreadRow) -> Unit,
-    onMoveUp: (ThreadRow) -> Unit,
-    onMoveDown: (ThreadRow) -> Unit,
+    /** Moves the thread past the other one. */
+    onMove: (ChatThread, ChatThread) -> Unit,
     onReorder: () -> Unit,
     onRemove: (ThreadRow) -> Unit,
 ) {
-    var shown by remember { mutableStateOf(row) }
-    if (row != null) shown = row
+    // Keep the last row while the sheet animates out.
+    var kept by remember { mutableStateOf(row) }
+    if (row != null) kept = row
     BottomSheet(visible = row != null, onDismiss = onDismiss) {
-        val r = shown ?: return@BottomSheet
+        val r = kept ?: return@BottomSheet
+        val at = shown.indexOfFirst { it.id == r.thread.id }
+        val above = shown.getOrNull(at - 1)?.takeIf { at >= 0 }
+        val below = shown.getOrNull(at + 1)?.takeIf { at >= 0 }
         SheetHeader(r.thread.name, "Thread")
         fun act(block: (ThreadRow) -> Unit) = { onDismiss(); block(r) }
         SheetAction("Start fresh", Lucide.RotateCcw, act(onStartFresh))
         SheetAction("Rename thread", Lucide.Pencil, act(onRename))
-        if (!first) SheetAction("Move up", Lucide.ArrowUp, act(onMoveUp))
-        if (!last) SheetAction("Move down", Lucide.ArrowDown, act(onMoveDown))
-        if (!(first && last)) SheetAction("Reorder", Lucide.GripVertical, { onDismiss(); onReorder() })
+        above?.let { other -> SheetAction("Move up", Lucide.ArrowUp, act { onMove(it.thread, other) }) }
+        below?.let { other -> SheetAction("Move down", Lucide.ArrowDown, act { onMove(it.thread, other) }) }
+        if (above != null || below != null) SheetAction("Reorder", Lucide.GripVertical, { onDismiss(); onReorder() })
         SheetAction("Remove thread", Lucide.X, act(onRemove))
     }
 }
 
-/** Names a thread; its chat keeps its title until the thread is started fresh. */
+/** Names a thread, and its chat the same. A thread always has a name, so Save waits for one. */
 @Composable
 internal fun RenameThreadDialog(thread: ChatThread?, onDismiss: () -> Unit, onRename: (ChatThread, String) -> Unit) {
     var shown by remember { mutableStateOf(thread) }
@@ -1493,18 +1499,21 @@ internal fun RenameThreadDialog(thread: ChatThread?, onDismiss: () -> Unit, onRe
     val name = rememberTextFieldState(t.name)
     // On every open, so a cancelled edit doesn't come back.
     LaunchedEffect(thread != null, t.id) { if (thread != null) name.edit { replace(0, length, t.name) } }
+    val blank = name.text.isBlank()
     val submit = {
-        onDismiss()
-        onRename(t, name.text.toString())
+        if (!blank) {
+            onDismiss()
+            onRename(t, name.text.toString())
+        }
     }
     Dialog(
         visible = thread != null,
         onDismissRequest = onDismiss,
         title = "Rename thread",
-        message = "Its next fresh chat takes this name.",
+        message = "Its chat is renamed too, and each fresh chat takes this name.",
         actions = {
             Button("Cancel", onClick = onDismiss, variant = ButtonVariant.Ghost, size = ButtonSize.Small)
-            Button("Save", onClick = submit, size = ButtonSize.Small)
+            Button("Save", onClick = submit, size = ButtonSize.Small, enabled = !blank)
         },
     ) {
         TextField(

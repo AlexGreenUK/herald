@@ -32,8 +32,7 @@ import dev.hermeskotlin.core.sessions.SessionsApi
 import dev.hermeskotlin.core.threads.ChatThread
 import dev.hermeskotlin.core.threads.FreshChat
 import dev.hermeskotlin.core.threads.ThreadsRepository
-import dev.hermeskotlin.core.threads.movedDown
-import dev.hermeskotlin.core.threads.movedUp
+import dev.hermeskotlin.core.threads.movedPast
 import dev.hermeskotlin.core.threads.ordered
 import dev.hermeskotlin.core.threads.renamed
 import dev.hermeskotlin.core.threads.withoutThread
@@ -614,9 +613,9 @@ class SessionsViewModel(
         load(refresh = false)
     }
 
-    /** Moves [thread] one place up, or down with [down]. */
-    fun moveThread(thread: ChatThread, down: Boolean) = threadAction("Couldn't move the thread.") {
-        threadsRepo.change { if (down) it.movedDown(thread.id) else it.movedUp(thread.id) }
+    /** Moves [thread] one place up or down, past [neighbour]: the thread next to it in the section as shown. */
+    fun moveThread(thread: ChatThread, neighbour: ChatThread) = threadAction("Couldn't move the thread.") {
+        threadsRepo.change { it.movedPast(thread.id, neighbour.id) }
     }
 
     /** Saves the threads in the order of [ids], as a drag left them. */
@@ -710,7 +709,7 @@ class SessionsViewModel(
             val result = api.list(url, limit = limit, filter = filter, profile = profile)
             if (result is ApiResult.Success) cache?.saveList(url, profile, filter, result.value.sessions)
             if (result is ApiResult.Success && filter == SessionListFilter.Recent) {
-                threadsRepo.noteRows(result.value.sessions)
+                threadsRepo.noteRows(url, profile, result.value.sessions)
                 // Threads come over the socket; another device may have changed them.
                 if (connection.state.value is ConnectionState.Connected) viewModelScope.launch { threadsRepo.refresh(force = refresh) }
             }

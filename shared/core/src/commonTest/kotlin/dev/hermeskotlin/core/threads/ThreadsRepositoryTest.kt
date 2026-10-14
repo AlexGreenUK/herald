@@ -1,6 +1,9 @@
 package dev.hermeskotlin.core.threads
 
+import dev.hermeskotlin.core.chat.LastChat
+import dev.hermeskotlin.core.chat.LastChatStore
 import dev.hermeskotlin.core.gateway.GatewayUrl
+import dev.hermeskotlin.core.storage.InMemoryKeyValueStore
 import dev.hermeskotlin.core.profiles.ProfilesApi
 import dev.hermeskotlin.core.rpc.FakeGateway
 import dev.hermeskotlin.core.rpc.json
@@ -33,6 +36,8 @@ class ThreadsRepositoryTest {
     private var stored = """{"threads":[{"id":"t1","name":"Misc","sessionId":"old"},{"id":"t2","name":"Work","sessionId":"w","cwd":"/srv/work"}]}"""
     private var revision = 3
 
+    private val lastChats = LastChatStore(InMemoryKeyValueStore())
+
     private suspend fun repository(
         scope: CoroutineScope,
         /** Answers a PATCH by its body; null is a plain success. */
@@ -61,13 +66,17 @@ class ThreadsRepositoryTest {
                     val (status, reply) = patch(body) ?: (HttpStatusCode.OK to "{}")
                     json(reply, status)
                 }
+                request.method == HttpMethod.Delete -> {
+                    sent += "DELETE ${request.url.encodedPath.substringAfterLast('/')}"
+                    json("{}")
+                }
                 request.url.encodedPath == "/api/profiles/active" -> json("""{"current":"work"}""")
                 request.url.encodedPath == "/api/profiles" -> json("""{"profiles":[{"name":"default","is_default":true},{"name":"work"}]}""")
                 else -> error("unexpected ${request.url}")
             }
         }
         val connection = gateway.start()
-        return ThreadsRepository(ThreadsApi(connection), SessionsApi(gateway.client), ProfilesApi(gateway.client)) { seconds ->
+        return ThreadsRepository(ThreadsApi(connection), SessionsApi(gateway.client), ProfilesApi(gateway.client), lastChats) { seconds ->
             if (seconds) "2026-10-13 09:30:15" else "2026-10-13 09:30"
         }.also { it.bind(URL, "work") }
     }
@@ -88,7 +97,7 @@ class ThreadsRepositoryTest {
         repo.bind(URL, null)
         repo.refresh(force = true)
         assertEquals(listOf("Misc", "Work"), repo.threads.value.map { it.name })
-        repo.change { it.movedUp("t2") }
+        repo.change { it.movedPast("t2", "t1") }
         assertEquals("work", configured.single()["name"]?.jsonPrimitive?.contentOrNull)
     }
 
@@ -119,7 +128,7 @@ class ThreadsRepositoryTest {
         val repo = repository(backgroundScope, rpc = { call ->
             if (call.method == "profiles.configure") """{"ok":true,"applied":{"ui_meta_conflicts":{"herald-threads":{"expected":3,"actual":9}}}}""" else null
         })
-        assertFailsWith<Exception> { repo.change { it.movedDown("t1") } }
+        assertFailsWith<Exception> { repo.change { it.movedPast("t1", "t2") } }
         assertEquals(4, sent.count { it == "profiles.configure" })
     }
 
@@ -136,7 +145,7 @@ class ThreadsRepositoryTest {
     fun renamingAThreadRetitlesItsChatToo() = runTest {
         val repo = repository(backgroundScope)
         repo.refresh(force = true)
-        repo.noteRows(listOf(SessionSummary("tip", title = "Misc", pinned = true, lineageIds = listOf("old", "tip"))))
+        repo.noteRows(URL, "work", listOf(SessionSummary("tip", title = "Misc", pinned = true, lineageIds = listOf("old", "tip"))))
 
         repo.rename(repo.threads.value.first(), "Errands")
 
@@ -150,7 +159,7 @@ class ThreadsRepositoryTest {
             HttpStatusCode.BadRequest to """{"detail":"Title 'Errands' is already in use"}"""
         })
         repo.refresh(force = true)
-        repo.noteRows(listOf(SessionSummary("tip", title = "Misc", pinned = true, lineageIds = listOf("old", "tip"))))
+        repo.noteRows(URL, "work", listOf(SessionSummary("tip", title = "Misc", pinned = true, lineageIds = listOf("old", "tip"))))
 
         assertFailsWith<ThreadActionException> { repo.rename(repo.threads.value.first(), "Errands") }
 
@@ -163,7 +172,7 @@ class ThreadsRepositoryTest {
         val repo = repository(backgroundScope)
         repo.refresh(force = true)
         // The thread's chat was compressed: the list shows it under its newest id.
-        repo.noteRows(listOf(SessionSummary("tip", title = "Misc", pinned = true, lineageIds = listOf("old", "tip"))))
+        repo.noteRows(URL, "work", listOf(SessionSummary("tip", title = "Misc", pinned = true, lineageIds = listOf("old", "tip"))))
 
         val fresh = repo.startFresh(repo.threads.value.first())
 
@@ -228,7 +237,7 @@ class ThreadsRepositoryTest {
     fun aNewChatThatCantBeMadePutsTheOldOneBack() = runTest {
         val repo = repository(backgroundScope, rpc = { call -> if (call.method == "session.create") "error:5000" else null })
         repo.refresh(force = true)
-        repo.noteRows(listOf(SessionSummary("old", title = "Misc", pinned = true)))
+        repo.noteRows(URL, "work", listOf(SessionSummary("old", title = "Misc", pinned = true)))
 
         assertFailsWith<ThreadActionException> { repo.startFresh(repo.threads.value.first()) }
 
@@ -241,6 +250,97 @@ class ThreadsRepositoryTest {
             patches,
         )
         assertTrue(configured.isEmpty())
+    }
+
+    @Test
+    fun theNextLaunchReopensTheNewChatNotTheFiledAwayOne() = runTest {
+        val repo = repository(backgroundScope)
+        repo.refresh(force = true)
+        lastChats.set(URL, LastChat("old", "Misc"), "work")
+
+        repo.startFresh(repo.threads.value.first())
+
+        assertEquals(LastChat("fresh", "Misc"), lastChats.get(URL, "work"))
+    }
+
+    @Test
+    fun aLaunchChatElsewhereIsLeftAlone() = runTest {
+        val repo = repository(backgroundScope)
+        repo.refresh(force = true)
+        lastChats.set(URL, LastChat("other", "Groceries"), "work")
+
+        repo.startFresh(repo.threads.value.first())
+
+        assertEquals("other", lastChats.get(URL, "work")?.sessionId)
+    }
+
+    @Test
+    fun aBlankNameChangesNeitherTheThreadNorItsChat() = runTest {
+        val repo = repository(backgroundScope)
+        repo.refresh(force = true)
+        repo.noteRows(URL, "work", listOf(SessionSummary("old", title = "Misc", pinned = true)))
+
+        repo.rename(repo.threads.value.first(), "  ")
+
+        assertTrue(sent.none { it.startsWith("PATCH") })
+        assertTrue(configured.isEmpty())
+    }
+
+    @Test
+    fun aNewChatThatCantBePinnedIsDeletedAndTheOldOneComesBack() = runTest {
+        val repo = repository(backgroundScope, patch = { body ->
+            if (body == """{"pinned":true,"profile":"work"}""") HttpStatusCode.InternalServerError to """{"detail":"Store is busy"}""" else null
+        })
+        repo.refresh(force = true)
+        repo.noteRows(URL, "work", listOf(SessionSummary("old", title = "Misc", pinned = true)))
+
+        assertFailsWith<ThreadActionException> { repo.startFresh(repo.threads.value.first()) }
+
+        // Deleted before the old chat takes its title back, which the new one held.
+        assertEquals(
+            listOf("DELETE fresh", """PATCH old {"title":"Misc","archived":false,"pinned":true,"profile":"work"}"""),
+            sent.filter { it.startsWith("DELETE") || "\"archived\":false" in it },
+        )
+        assertTrue(configured.isEmpty())
+    }
+
+    @Test
+    fun aThreadThatCantBePointedAtItsNewChatKeepsItsOldOne() = runTest {
+        val repo = repository(backgroundScope, rpc = { call ->
+            if (call.method == "profiles.configure") """{"ok":true,"applied":{"ui_meta_conflicts":{"herald-threads":{"expected":3,"actual":9}}}}""" else null
+        })
+        repo.refresh(force = true)
+        repo.noteRows(URL, "work", listOf(SessionSummary("old", title = "Misc", pinned = true)))
+
+        assertFailsWith<ThreadActionException> { repo.startFresh(repo.threads.value.first()) }
+
+        assertTrue("DELETE fresh" in sent)
+        assertEquals("""PATCH old {"title":"Misc","archived":false,"pinned":true,"profile":"work"}""", sent.last { it.startsWith("PATCH") })
+        assertEquals("old", repo.threads.value.first().sessionId)
+    }
+
+    @Test
+    fun anOldChatThatCantBePutBackIsNamedInTheMessage() = runTest {
+        val repo = repository(
+            backgroundScope,
+            patch = { body -> if ("\"archived\":false" in body) HttpStatusCode.InternalServerError to """{"detail":"Store is busy"}""" else null },
+            rpc = { call -> if (call.method == "session.create") "error:5000" else null },
+        )
+        repo.refresh(force = true)
+
+        val error = assertFailsWith<ThreadActionException> { repo.startFresh(repo.threads.value.first()) }
+
+        assertTrue("Misc · 2026-10-13 09:30" in error.message.orEmpty(), error.message)
+    }
+
+    @Test
+    fun rowsListedForAnotherProfileAreIgnored() = runTest {
+        val repo = repository(backgroundScope)
+        val rows = listOf(SessionSummary("old", title = "Misc"))
+        repo.noteRows(URL, "default", rows)
+        assertEquals(emptyList(), repo.rows.value)
+        repo.noteRows(URL, "work", rows)
+        assertEquals(rows, repo.rows.value)
     }
 
     @Test

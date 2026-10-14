@@ -47,10 +47,13 @@ class ThreadsTest {
 
     @Test
     fun threadsMoveUpDownAndToAPlace() {
-        assertEquals(listOf(b, a, c), list.movedUp("b"))
-        assertEquals(list, list.movedUp("a"))
-        assertEquals(listOf(a, c, b), list.movedDown("b"))
-        assertEquals(list, list.movedDown("c"))
+        assertEquals(listOf(b, a, c), list.movedPast("b", "a"))
+        assertEquals(listOf(a, c, b), list.movedPast("b", "c"))
+        // Past the next shown thread when a hidden one sits between them.
+        assertEquals(listOf(c, a, b), list.movedPast("c", "a"))
+        assertEquals(listOf(b, c, a), list.movedPast("a", "c"))
+        assertEquals(list, list.movedPast("a", "gone"))
+        assertEquals(list, list.movedPast("gone", "a"))
         assertEquals(listOf(b, c, a), list.moved("a", 99))
         assertEquals(listOf(c, a, b), list.moved("c", -3))
         assertEquals(list, list.moved("nope", 0))
@@ -60,6 +63,12 @@ class ThreadsTest {
     fun anOrderKeepsThreadsItDoesntName() {
         val d = ChatThread("d", "Added elsewhere", "s-d")
         assertEquals(listOf(c, a, b, d), (list + d).ordered(listOf("c", "a", "gone", "b")))
+    }
+
+    @Test
+    fun anOrderDraggedInANarrowedListLeavesTheHiddenThreadsInPlace() {
+        // b is hidden: a and c swap the places they had, b stays second.
+        assertEquals(listOf(c, b, a), list.ordered(listOf("c", "a")))
     }
 
     @Test

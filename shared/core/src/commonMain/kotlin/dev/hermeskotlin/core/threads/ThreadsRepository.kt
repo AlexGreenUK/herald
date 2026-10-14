@@ -1,5 +1,7 @@
 package dev.hermeskotlin.core.threads
 
+import dev.hermeskotlin.core.chat.LastChat
+import dev.hermeskotlin.core.chat.LastChatStore
 import dev.hermeskotlin.core.gateway.GatewayUrl
 import dev.hermeskotlin.core.network.ApiResult
 import dev.hermeskotlin.core.network.errorMessage
@@ -29,6 +31,8 @@ class ThreadsRepository(
     private val api: ThreadsApi,
     private val sessions: SessionsApi,
     private val profiles: ProfilesApi,
+    /** Where the next launch reopens; a thread started fresh moves it from the filed-away chat to the new one. */
+    private val lastChats: LastChatStore? = null,
     /** The local date and time an archived thread chat is named with: `yyyy-MM-dd HH:mm`, or with seconds. */
     private val stamp: (withSeconds: Boolean) -> String = { localStamp(Clock.System.now().toEpochMilliseconds(), it) },
 ) {
@@ -65,25 +69,33 @@ class ThreadsRepository(
         _rows.value = emptyList()
     }
 
-    /** The chat rows as the list now has them. */
-    fun noteRows(sessions: List<SessionSummary>) {
-        _rows.value = sessions
+    /**
+     * The chat rows as the list of [profile] on [url] now has them. A list read for another scope, finishing after
+     * a switch, is ignored.
+     */
+    fun noteRows(url: GatewayUrl, profile: String?, sessions: List<SessionSummary>) {
+        if (_scope.value == Scope(url, profile)) _rows.value = sessions
     }
 
-    /** Reads the threads again; at most every [READ_EVERY_MS] unless [force]. A failed read keeps what shows. */
+    /**
+     * Reads the threads again; at most every [READ_EVERY_MS] unless [force]. A failed read keeps what shows. Read
+     * under the write lock, so a read that began before a save can't put the list from before it back.
+     */
     suspend fun refresh(force: Boolean = false) {
         val scope = _scope.value ?: return
         val now = Clock.System.now().toEpochMilliseconds()
         if (!force && now - readAt < READ_EVERY_MS) return
         readAt = now
-        val read = try {
-            api.threads(name(scope))
-        } catch (e: CancellationException) {
-            throw e
-        } catch (_: Exception) {
-            return
+        writes.withLock {
+            val read = try {
+                api.threads(name(scope))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                return
+            }
+            if (_scope.value == scope) _threads.value = read
         }
-        if (_scope.value == scope) _threads.value = read
     }
 
     /** [thread]'s chat as last listed: the row it names, or the newest row of that chat's lineage. */
@@ -109,9 +121,10 @@ class ThreadsRepository(
     /**
      * Names [thread] [name], and its chat the same. The chat is titled first, since titles are unique and that is
      * the step that can be refused; a refusal leaves the thread as it was. If saving the thread then fails, the
-     * chat gets its old title back.
+     * chat gets its old title back. A blank [name] changes nothing: it would clear the chat's title.
      */
     suspend fun rename(thread: ChatThread, name: String) {
+        if (name.isBlank()) return
         val scope = requireScope()
         val current = chatOf(thread)
         val liveId = current?.id ?: thread.sessionId
@@ -134,8 +147,9 @@ class ThreadsRepository(
     /**
      * Starts [thread] fresh, in an order that never loses the thread's chat: the chat it has now is renamed
      * "<name> · <date time>" (titles are unique, and an archived chat keeps its title), archived and unpinned in one
-     * call; a new chat takes the thread's name and is pinned; then the thread is pointed at it. If the new chat
-     * can't be made, the old one is put back as it was.
+     * call; a new chat takes the thread's name and is pinned; then the thread is pointed at it. If any later step
+     * fails, the new chat is deleted and the old one put back as it was, so the thread never points at a chat in
+     * the archive; when even that fails, the message says where the old chat is.
      */
     suspend fun startFresh(thread: ChatThread): FreshChat {
         val scope = requireScope()
@@ -144,36 +158,42 @@ class ThreadsRepository(
         val oldTitle = current?.title?.takeIf { it.isNotBlank() } ?: thread.name
         // An earlier id of a compressed chat may hold the pin; it lets go of it too.
         val earlier = thread.sessionId.takeIf { it != liveId }
-        fileAway(scope, liveId, thread.name)
+        val archivedAs = fileAway(scope, liveId, thread.name)
         earlier?.let { sessions.update(scope.url, it, archived = true, pinned = false, profile = scope.profile) }
-        val fresh = try {
-            newChat(scope, thread)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            sessions.update(scope.url, liveId, title = oldTitle, archived = false, pinned = true, profile = scope.profile)
-            earlier?.let { sessions.update(scope.url, it, archived = false, pinned = true, profile = scope.profile) }
-            throw ThreadActionException("Couldn't start ${thread.name} fresh. ${e.message.orEmpty()}".trim())
-        }
-        // Pinned, the gateway never prunes it.
-        sessions.update(scope.url, fresh.sessionId, pinned = true, profile = scope.profile)
+        var made: FreshChat? = null
         try {
+            val fresh = newChat(scope, thread).also { made = it }
+            // Pinned, the gateway never prunes it.
+            sessions.update(scope.url, fresh.sessionId, pinned = true, profile = scope.profile).orThrow("Couldn't pin the new chat.")
             change { it.pointedAt(thread.id, fresh.sessionId) }
+            // An empty chat isn't remembered until it has a message, so the launch would reopen the archived one.
+            lastChats?.let { store ->
+                val last = store.get(scope.url, scope.profile)?.sessionId
+                if (last == liveId || last == thread.sessionId) store.set(scope.url, LastChat(fresh.sessionId, fresh.title), scope.profile)
+            }
+            return fresh
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            throw ThreadActionException("Started a new chat, but couldn't point ${thread.name} at it. ${e.message.orEmpty()}".trim())
+            // The new chat goes first: it may hold the title the old one gets back.
+            made?.let { sessions.delete(scope.url, it.sessionId, scope.profile) }
+            val restored = sessions.update(scope.url, liveId, title = oldTitle, archived = false, pinned = true, profile = scope.profile) is ApiResult.Success
+            earlier?.let { sessions.update(scope.url, it, archived = false, pinned = true, profile = scope.profile) }
+            val where = if (restored) "" else " Its chat is in the archive as \"$archivedAs\"."
+            throw ThreadActionException("Couldn't start ${thread.name} fresh. ${e.message.orEmpty()}".trim() + where)
         }
-        return fresh
     }
 
-    /** Renames, archives and unpins the chat [id] in one call, its new title stamped with the time. */
-    private suspend fun fileAway(scope: Scope, id: String, name: String) {
-        var result = sessions.update(scope.url, id, title = "$name · ${stamp(false)}", archived = true, pinned = false, profile = scope.profile)
+    /** Renames, archives and unpins the chat [id] in one call, its new title stamped with the time. Answers that title. */
+    private suspend fun fileAway(scope: Scope, id: String, name: String): String {
+        var title = "$name · ${stamp(false)}"
+        var result = sessions.update(scope.url, id, title = title, archived = true, pinned = false, profile = scope.profile)
         if (result.isTitleTaken()) {
-            result = sessions.update(scope.url, id, title = "$name · ${stamp(true)}", archived = true, pinned = false, profile = scope.profile)
+            title = "$name · ${stamp(true)}"
+            result = sessions.update(scope.url, id, title = title, archived = true, pinned = false, profile = scope.profile)
         }
         result.orThrow("Couldn't file away ${name}'s chat.")
+        return title
     }
 
     /** A new chat named after [thread], or "<name> (2)" and on while another chat has the name. */
