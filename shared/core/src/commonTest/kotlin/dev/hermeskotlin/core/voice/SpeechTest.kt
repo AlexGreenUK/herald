@@ -75,9 +75,10 @@ class SpeechTest {
     }
 
     @Test
-    fun gustsUpToSpeechDontHoldItOpenEither() {
-        val gusts = List(15) { frames(0.1f, 300) + frames(0.6f, 100) }.flatten()
-        val end = endsAt(frames(0.1f, 1_000) + frames(0.6f, 1_500) + gusts)
+    fun knocksUpToSpeechDontHoldItOpenEither() {
+        // A bump or a click as loud as speech, 40 ms, every 340 ms: shorter than any syllable.
+        val knocks = List(15) { frames(0.1f, 300) + frames(0.6f, 40) }.flatten()
+        val end = endsAt(frames(0.1f, 1_000) + frames(0.6f, 1_500) + knocks)
         assertTrue(end != null && end in 3_700L..4_000L, "ended at $end")
     }
 
@@ -90,12 +91,12 @@ class SpeechTest {
     }
 
     @Test
-    fun clippedWordsWithGapsStillHoldIt() {
-        // Short words (140 ms) with gaps (250 ms) for 3.5 s: talking, not gusts.
-        val words = List(9) { frames(0.6f, 140) + frames(0.1f, 250) }.flatten()
-        val end = endsAt(frames(0.1f, 1_000) + words + frames(0.1f, 3_000))
-        // The last word ends at 4.17 s; the recording runs until the pause after it.
-        assertTrue(end != null && end >= 5_400L, "ended at $end")
+    fun clippedSyllablesWithGapsStillHoldIt() {
+        // "It's a, uh, to the…": 100 ms syllables, each followed by 100 ms back at the noise, for 2.4 s.
+        val syllables = List(12) { frames(0.6f, 100) + frames(0.1f, 100) }.flatten()
+        val end = endsAt(frames(0.1f, 1_000) + syllables + frames(0.1f, 3_000))
+        // The last syllable ends at 3.3 s; the recording runs until the whole pause after it.
+        assertTrue(end != null && end in 4_500L..4_700L, "ended at $end")
     }
 
     @Test

@@ -242,8 +242,8 @@ class VoiceController(
      * hearing one (a car, wind; #185). Only while the chained chat listens: a live call has no recording.
      */
     fun sendNow() {
-        val state = _chat.value
-        if (state.live || state.phase != VoicePhase.Listening || chatJob?.isActive != true) return
+        // As the button shows: once it has heard you, so the recording is under way and has something to send.
+        if (!canSendNow(_chat.value) || chatJob?.isActive != true) return
         recorder.finish()
     }
 

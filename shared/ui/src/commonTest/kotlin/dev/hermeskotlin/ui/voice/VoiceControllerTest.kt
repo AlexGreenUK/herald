@@ -298,4 +298,14 @@ class VoiceControllerTest {
         assertEquals(1, recorder.finishes)
         assertTrue(requests.any { it.url.encodedPath == "/api/audio/transcribe" })
     }
+
+    @Test
+    fun sendNowShowsOnlyOnceTheChainedChatHearsYou() {
+        assertTrue(canSendNow(VoiceChatState(VoicePhase.Listening, hearing = true)))
+        // Nothing heard yet, a live call, or no longer listening: nothing to send.
+        assertTrue(!canSendNow(VoiceChatState(VoicePhase.Listening)))
+        assertTrue(!canSendNow(VoiceChatState(VoicePhase.Listening, hearing = true, live = true)))
+        assertTrue(!canSendNow(VoiceChatState(VoicePhase.Transcribing, hearing = true)))
+        assertEquals("Pause when you're done, or tap send", hint(VoiceChatState(VoicePhase.Listening, hearing = true)))
+    }
 }

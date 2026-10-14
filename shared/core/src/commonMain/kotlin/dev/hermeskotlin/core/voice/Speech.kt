@@ -36,9 +36,13 @@ class EndOfSpeech(private val activity: VoiceActivity) {
     private var silenceSince = -1L
     /** Since when the level has stood above quiet, in a pause after speech; -1 when it hasn't. */
     private var loudSince = -1L
+    /** Where the last frame ended, which is where this one starts. */
+    private var lastFrameEnd = 0L
 
     /** Feeds one frame's [level] at [elapsedMs] into the recording; true once the recording should end. */
     fun onFrame(level: Float, elapsedMs: Long): Boolean {
+        val frameStart = lastFrameEnd
+        lastFrameEnd = elapsedMs
         // The opening moment only measures the room; nobody starts talking that fast.
         if (elapsedMs <= CALIBRATION_MS) {
             noise = if (noise < 0) level else noise + (level - noise) * 0.2f
@@ -64,10 +68,11 @@ class EndOfSpeech(private val activity: VoiceActivity) {
             if (silenceSince < 0) silenceSince = elapsedMs
             if (elapsedMs - silenceSince >= activity.silenceMs) return true
         } else if (heardSpeech) {
-            // Road noise, wind or a fan poke above the quiet bar for a moment, even up to speech; only a run of
-            // it is someone talking again, so a blip doesn't start the pause over (#185). Soft words, short of
-            // the speech bar, need a longer run than speech does.
-            if (loudSince < 0) loudSince = elapsedMs
+            // Road noise, wind or a fan poke above the quiet bar for a moment; only a run of it is someone
+            // talking again, so a blip doesn't start the pause over (#185). A run counts from its first frame's
+            // start. Speech needs only a syllable's worth, so clipped words still hold; a level short of speech,
+            // which noise reaches far more often, needs longer.
+            if (loudSince < 0) loudSince = frameStart
             if (elapsedMs - loudSince >= if (speech) SPEECH_RUN_MS else MURMUR_RUN_MS) silenceSince = -1
         }
         if (!heardSpeech && activity.idleMs > 0 && elapsedMs >= activity.idleMs) return true
@@ -79,8 +84,8 @@ class EndOfSpeech(private val activity: VoiceActivity) {
         const val SPEECH_OVER_NOISE = 2.5f
         const val QUIET_OVER_NOISE = 1.6f
         const val QUIET_FRACTION = 0.8f
-        /** How long the level has to stay at speech, in a pause, to count as talking again: a short word's worth. */
-        const val SPEECH_RUN_MS = 120L
+        /** How long the level has to stay at speech, in a pause, to count as talking again: a syllable's worth. */
+        const val SPEECH_RUN_MS = 60L
         /** The same for a level between quiet and speech, which noise reaches more often. */
         const val MURMUR_RUN_MS = 200L
     }
