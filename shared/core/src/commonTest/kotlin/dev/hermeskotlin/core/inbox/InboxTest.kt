@@ -156,6 +156,36 @@ class InboxTest {
     }
 
     @Test
+    fun aPushForAnotherGatewayGoesToItsInboxWithoutMovingTheStore() = runTest {
+        val disk = InMemoryKeyValueStore()
+        val store = InboxStore(disk)
+        store.bind("https://one", now = 0)
+        store.add("https://one", run(job = "mine", at = 10))
+        val two = InboxStore(disk)
+        two.bind("https://two", now = 0)
+        two.editGroups("https://two") { it.renameJob("default", "theirs", "Their name", own = "morning-briefing") }
+
+        // The app switched to one while a push signed by two was being opened.
+        val groups = store.receive("https://two", run(job = "theirs", at = 20))
+        assertEquals("https://one", store.bound)
+        assertEquals(listOf("mine"), store.state.value.runs.map { it.job })
+        // Two's own name for the job, for the notification.
+        assertEquals("Their name", groups.nameOf(run(job = "theirs", at = 20)))
+        // It is there when the app goes back to two.
+        store.bind("https://two")
+        assertEquals(listOf("theirs"), store.state.value.runs.map { it.job })
+    }
+
+    @Test
+    fun aPushStartsAnInboxJustBeforeItsRunSoTheRunIsUnread() = runTest {
+        val disk = InMemoryKeyValueStore()
+        InboxStore(disk).receive(GW, run(at = 5_000))
+        val store = InboxStore(disk)
+        store.bind(GW, now = 9_999)
+        assertEquals(1, store.state.value.unread)
+    }
+
+    @Test
     fun linksAreConsumedOnceUnlessANewerOneCame() {
         val links = InboxLinks()
         links.open("a")

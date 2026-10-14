@@ -310,13 +310,33 @@ class InboxStore(private val store: KeyValueStore, private val work: CoroutineCo
     /** Loads [gatewayUrl]'s Inbox, starting it now (everything before counts as read) the first time. */
     suspend fun bind(gatewayUrl: String, now: Long = getTimeMillis() / 1000) = lock.withLock {
         if (gateway == gatewayUrl) return@withLock
+        val saved = loadOrStart(gatewayUrl, now)
+        // [bound] moves with [state], not before it: until the new Inbox is read, the last one is still shown.
         gateway = gatewayUrl
-        val saved = when (val found = load(gatewayUrl)) {
-            null -> Saved(since = now).also { save(gatewayUrl, it) }
-            else -> found
-        }
         _state.value = Snapshot(saved.runs, saved.read, saved.since, saved.groups)
     }
+
+    /**
+     * A run that came by push for [gatewayUrl]: into its Inbox, without moving the store there. The app may have
+     * switched to another gateway since the push was signed, and that one's Inbox stays the one shown. An Inbox
+     * started by this run starts just before it, so the run counts as new. Gives back that Inbox's groups, for the
+     * name the user gave the job.
+     */
+    suspend fun receive(gatewayUrl: String, run: InboxRun): InboxGroups = lock.withLock {
+        if (gateway == gatewayUrl) {
+            val next = _state.value.let { s -> s.copy(runs = merge(listOf(run) + s.runs.filter { it.key != run.key })) }
+            _state.value = next
+            save(gatewayUrl, Saved(next.runs, next.read, next.since, next.groups))
+            next.groups
+        } else {
+            val saved = loadOrStart(gatewayUrl, run.at - 1)
+            save(gatewayUrl, saved.copy(runs = merge(listOf(run) + saved.runs.filter { it.key != run.key })))
+            saved.groups
+        }
+    }
+
+    private suspend fun loadOrStart(gatewayUrl: String, now: Long): Saved =
+        load(gatewayUrl) ?: Saved(since = now).also { save(gatewayUrl, it) }
 
     /**
      * What the gateway listed, newest first: it replaces the kept runs, by [mergeListed]'s rules. [complete] is

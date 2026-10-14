@@ -109,15 +109,13 @@ class PushListener(
      */
     private suspend fun showCronRun(message: PushMessage, url: String) {
         val run = InboxRun.from(message) ?: return
-        // An Inbox started by this run counts it as new: its time is the gateway's, so the phone's clock won't do.
-        inbox.bind(url, now = run.at - 1)
-        inbox.add(url, run)
+        // Into that gateway's Inbox, without moving the shared store there: the app may have switched meanwhile.
+        val groups = inbox.receive(url, run)
         if (!message.notify) return
         // In sight and connected, the Inbox shows it already. A failed run too: it is in the Inbox, and the app open.
         if (visibility.visible.value && connection.state.value is ConnectionState.Connected) return
-        // The name the user gave the job on this phone, when they did (and the Inbox is this gateway's).
-        val name = if (inbox.bound == url) inbox.state.value.groups.nameOf(run) else run.title
-        notifications.postCronRun(run.key, run.bot, run.job, name, run.text, run.failed)
+        // The name the user gave the job on this phone, when they did.
+        notifications.postCronRun(run.key, run.bot, run.job, groups.nameOf(run), run.text, run.failed)
     }
 
     /** The message inside [event], or null for anything that isn't a valid envelope signed by [gateway]. */
