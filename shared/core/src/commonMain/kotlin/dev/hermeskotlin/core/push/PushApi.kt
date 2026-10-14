@@ -223,7 +223,9 @@ class PushApi(private val connection: GatewayConnection) {
                 failures += "The gateway's herald-push plugin was not updated to $PLUGIN_VERSION."
             }
         }
-        val copies = if (info?.ok == true && (update || info.versionAtLeast(minimum))) botCopies(failures) else emptyList()
+        // An update always looks afresh: the copies may have changed since (Desktop's Plugins hub, another phone).
+        if (update) scannedBots = null
+        val copies = if (info?.ok == true && (update || info.versionAtLeast(minimum))) botCopies(rpc, failures) else emptyList()
         val pending = copies.toMutableList()
         if (update) {
             for (copy in copies) {
@@ -246,6 +248,8 @@ class PushApi(private val connection: GatewayConnection) {
         if (update) updateFailure = failures.takeIf {
             it.isNotEmpty() && info?.ok == true && info.versionAtLeast(PLUGIN_VERSION)
         }?.let { rpc to it.toList() }
+        // What's still old after the update, verified copy by copy: the refreshes it sets off needn't look again.
+        if (update && copies.isNotEmpty()) scannedBots = ScannedBots(rpc, pending.toList(), emptyList())
         if (changed) _updates.update { it + 1 }
         val detail = (failures + updateFailure?.second.orEmpty()).distinct().takeIf { it.isNotEmpty() }?.joinToString("\n")
         if (detail != null && (info == null || !info.ok || !info.versionAtLeast(minimum))) {
@@ -265,18 +269,34 @@ class PushApi(private val connection: GatewayConnection) {
 
     private data class BotCopy(val profile: String, val version: String, val enabled: Boolean)
 
+    /** One look at the bots' copies on connection [rpc]: the old ones, and what couldn't be looked at. */
+    private data class ScannedBots(val rpc: JsonRpcClient, val copies: List<BotCopy>, val failures: List<String>)
+
+    /**
+     * Kept for the connection: push and phone tools both prepare on every connect, and each look is a call per
+     * profile, each a fraction of a second on the gateway, while every other prepare waits on the lock.
+     */
+    private var scannedBots: ScannedBots? = null
+
+    private suspend fun botCopies(rpc: JsonRpcClient, failures: MutableList<String>): List<BotCopy> {
+        val scan = scannedBots?.takeIf { it.rpc === rpc } ?: scanBots(rpc).also { scannedBots = it }
+        failures += scan.failures
+        return scan.copies
+    }
+
     /** Only existing downloaded copies need replacing; no plugin is installed on an unrelated profile. */
-    private suspend fun botCopies(failures: MutableList<String>): List<BotCopy> {
+    private suspend fun scanBots(rpc: JsonRpcClient): ScannedBots {
+        val failures = mutableListOf<String>()
         val bots = try {
             BotsApi(connection).roster().bots
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            if (e is RpcException && e.code == -32601) return emptyList() // Older gateways have no profiles API.
-            failures += "bot profiles: ${e.message}"
-            return emptyList()
+            // Older gateways have no profiles API.
+            if (!(e is RpcException && e.code == -32601)) failures += "bot profiles: ${e.message}"
+            return ScannedBots(rpc, emptyList(), failures)
         }
-        return bots.mapNotNull { bot ->
+        val copies = bots.mapNotNull { bot ->
             try {
                 // A version that doesn't read as one may be newer (a dev copy): never replaced.
                 botCopy(bot.name)?.takeIf { it.version.isVersion() && !PushPluginReply(version = it.version).versionAtLeast(PLUGIN_VERSION) }
@@ -287,6 +307,7 @@ class PushApi(private val connection: GatewayConnection) {
                 null
             }
         }
+        return ScannedBots(rpc, copies, failures)
     }
 
     private fun String.isVersion(): Boolean = isNotEmpty() && split('.').all { it.toIntOrNull() != null }

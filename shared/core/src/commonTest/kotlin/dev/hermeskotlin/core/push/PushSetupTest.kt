@@ -354,6 +354,24 @@ class PushSetupTest {
     }
 
     @Test
+    fun theBotsAreLookedAtOncePerConnection() = runTest {
+        val s = setup(FakeKeys())
+        val gateway = FakeGateway(installed = true).apply { profiles["assistant"] = Copy("0.1.1") }
+        connect(s, gateway)
+        s.setup.enable()
+        s.setup.enable()
+        s.setup.enable()
+
+        // Each look is one call per profile, under the lock every push and phone tools check waits on.
+        assertEquals(1, gateway.calls.count { (it["method"] as JsonPrimitive).content == "profiles.list" })
+        assertEquals("0.1.1", s.setup.status.value.update?.installed)
+        // An update always looks afresh.
+        s.setup.updatePlugin()
+        assertEquals(PushApi.PLUGIN_VERSION, gateway.profiles["assistant"]?.version)
+        assertNull(s.setup.status.value.update)
+    }
+
+    @Test
     fun aBotUpdateFailureNamesTheProfileAndDoesNotPreventOtherUpdates() = runTest {
         val s = setup(FakeKeys())
         val gateway = FakeGateway(installed = true).apply {
