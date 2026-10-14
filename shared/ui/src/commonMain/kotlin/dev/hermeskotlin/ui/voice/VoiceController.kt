@@ -603,35 +603,46 @@ private fun briefLine(line: String): String = line.replace(URL_ARGUMENT, "")
     .replace(SPACES, " ").trim().trimEnd(',', ';', ':').trimEnd()
 
 /**
- * [word] with its address cut to the scheme, host and path: the query, fragment and sign-in are where keys and
- * tokens ride. Without an address, as in `GET /v1/speech?key=…`, a query goes when it sets something; a plain
- * question mark stays. The punctuation that closes a sentence or a bracket stays too.
+ * [word] with each address in it cut to the scheme, host and path: the query, fragment and sign-in are where
+ * keys and tokens ride, and a query takes the rest of the word with it. Without an address ahead of it, as in
+ * `GET /v1/speech?key=…`, a query goes when it sets something; a plain question mark stays. The punctuation that
+ * closes a sentence or a bracket stays too.
  */
 private fun bareAddress(word: String): String {
     val body = word.trimEnd { it in CLOSERS }
     val tail = word.substring(body.length)
-    val query = body.indexOfFirst(::opensQuery)
-    // An address only counts ahead of the query: one inside it goes with it.
-    val scheme = SCHEME.find(body)?.takeIf { query < 0 || it.range.first < query }
-    if (scheme == null) {
-        val after = if (query < 0) "" else body.substring(query)
-        return if ('=' in after || "://" in after) body.take(query) + tail else word
+    val schemes = SCHEME.findAll(body).toList()
+    val lead = body.take(schemes.firstOrNull()?.range?.first ?: body.length)
+    val leadQuery = lead.indexOfFirst(::opensQuery)
+    if (leadQuery >= 0) {
+        val after = body.substring(leadQuery)
+        return if ('=' in after || "://" in after) lead.take(leadQuery) + tail else word
     }
-    val start = scheme.range.last + 1
-    val rest = body.substring(start)
-    // The sign-in first: a password can hold a `?` or `#` that isn't a query. Better a wrong host than a password.
-    val slash = rest.indexOf('/').let { if (it < 0) rest.length else it }
-    val authority = rest.take(slash)
-    val restQuery = rest.indexOfFirst(::opensQuery).let { if (it < 0) rest.length else it }
-    val laterAt = rest.indexOf('@', slash).takeIf { it in 0 until restQuery }
-    val address = when {
-        '@' in authority -> rest.substring(authority.lastIndexOf('@') + 1)
-        // A `/` in the password, as in `user:p/ss@host`: anything up to the `@` could be it. A path with an `@`
-        // behind a port loses its host instead, which shows nothing it shouldn't.
-        ':' in authority && laterAt != null -> rest.substring(laterAt + 1)
-        else -> rest
+    val brief = StringBuilder(lead)
+    for ((i, scheme) in schemes.withIndex()) {
+        brief.append(scheme.value)
+        val address = signedOut(body.substring(scheme.range.last + 1, schemes.getOrNull(i + 1)?.range?.first ?: body.length))
+        val query = address.indexOfFirst(::opensQuery)
+        if (query >= 0) return brief.append(address, 0, query).append(tail).toString()
+        brief.append(address)
     }
-    return body.take(start) + address.take(address.indexOfFirst(::opensQuery).let { if (it < 0) address.length else it }) + tail
+    return brief.append(tail).toString()
+}
+
+/**
+ * [address] (what follows its scheme) without its sign-in. A password can hold `/`, `@`, `?` or `#`, so with a
+ * `user:` in front everything up to the last `@` goes; better a wrong host than a password. Digits after the
+ * `:` are a port instead when the only `@`s are in the query, as in `host:8080/x?email=a@b`.
+ */
+private fun signedOut(address: String): String {
+    val authority = address.substringBefore('/')
+    val query = address.indexOfFirst(::opensQuery).let { if (it < 0) address.length else it }
+    val port = authority.substringAfterLast(':', "").let { it.isNotEmpty() && it.all(Char::isDigit) }
+    return when {
+        ':' in authority && '@' in address && !(port && address.indexOf('@') > query) -> address.substringAfterLast('@')
+        '@' in authority -> address.substring(authority.lastIndexOf('@') + 1)
+        else -> address
+    }
 }
 
 private fun opensQuery(c: Char) = c == '?' || c == '#'

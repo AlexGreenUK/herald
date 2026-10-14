@@ -101,6 +101,23 @@ class BriefErrorTest {
     }
 
     @Test
+    fun aSecondAddressInTheSameWordLosesItsSignInToo() {
+        assertEquals(
+            """{"url":"https://a.example.com/x","proxy":"http://b.example.com"}""",
+            briefError("""{"url":"https://a.example.com/x","proxy":"http://u:SECRET@b.example.com"}"""),
+        )
+        assertEquals("proxy https://a.example.com/x,https://b.example.com/y failed", briefError("proxy https://a.example.com/x,https://u:SECRET@b.example.com/y failed"))
+    }
+
+    @Test
+    fun aPasswordWithAnyPunctuationGoes() {
+        assertEquals("https://host.example.com/x failed", briefError("https://user:pa#s/s@host.example.com/x failed"))
+        assertEquals("https://host.example.com/ failed", briefError("https://user:pa/ss?x@host.example.com/ failed"))
+        assertEquals("https://host.example.com/x", briefError("https://user:p@ss/word@host.example.com/x"))
+        assertEquals("http://host.example.com:8080/x", briefError("http://host.example.com:8080/x?email=a@b.example.com"))
+    }
+
+    @Test
     fun aQueryHoldingAnAddressGoesWhole() {
         assertEquals("GET /authorize failed", briefError("GET /authorize?client_secret=SECRET&redirect_uri=https://app.example.com/cb failed"))
         assertEquals("Error: https://host.example.com/", briefError("Error: https://host.example.com/?email=a@b.com/x?k=S"))
