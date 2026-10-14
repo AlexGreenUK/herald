@@ -25,6 +25,7 @@ import dev.hermeskotlin.wearlink.PhoneStatus
 import dev.hermeskotlin.wearlink.ReplyPhase
 import dev.hermeskotlin.wearlink.ReplySpeech
 import dev.hermeskotlin.wearlink.ReplyUpdate
+import dev.hermeskotlin.wearlink.WatchAccent
 import dev.hermeskotlin.wearlink.WatchAsk
 import dev.hermeskotlin.wearlink.WatchChat
 import dev.hermeskotlin.wearlink.WearJson
@@ -186,7 +187,7 @@ class WatchRelay(
         }
     }
 
-    fun status(node: String) {
+    fun status(node: String, accent: WatchAccent? = null) {
         scope.launch {
             val (status, gateway) = currentStatus()
             // Due or not is decided with what's sent: decided after, another ask's check could land during the
@@ -194,7 +195,7 @@ class WatchRelay(
             val due = gateway != null && !liveVoiceFresh(gateway)
             // Told at once with what's known: a gateway that's slow or out of reach (off the tailnet) would hold
             // the answer up to the request's timeout. A fresh check, when due, follows if it changed anything.
-            outbox.sendSafely(node, WearPaths.STATUS, WearJson.encode(status))
+            outbox.sendSafely(node, WearPaths.STATUS, WearJson.encode(status.copy(accent = accent)))
             if (due && gateway != null) {
                 val known = status.liveVoice
                 val on = checkLiveVoice(gateway, known)
@@ -206,6 +207,14 @@ class WatchRelay(
                 }
             }
         }
+    }
+
+    /**
+     * Tells the watch [node] a new [accent] unasked, with how the phone stands. The live voice isn't checked:
+     * the watch's own status asks do that, and an accent change shouldn't reach the gateway.
+     */
+    fun accent(node: String, accent: WatchAccent) {
+        scope.launch { outbox.sendSafely(node, WearPaths.STATUS, WearJson.encode(currentStatus().first.copy(accent = accent))) }
     }
 
     /** How the phone stands, and the gateway it's signed in to; its live voice null when not asked yet. */
