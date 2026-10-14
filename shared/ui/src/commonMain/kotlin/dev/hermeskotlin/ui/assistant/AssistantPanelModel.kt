@@ -4,12 +4,16 @@ import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.text.input.clearText
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import dev.hermeskotlin.core.auth.AuthApi
+import dev.hermeskotlin.core.bots.BotsApi
 import dev.hermeskotlin.core.chat.ChatSession
 import dev.hermeskotlin.core.chat.InputRequest
+import dev.hermeskotlin.core.connection.ConnectionState
 import dev.hermeskotlin.core.connection.GatewayConnection
 import dev.hermeskotlin.core.gateway.GatewayRepository
 import dev.hermeskotlin.core.gateway.SavedGateway
+import dev.hermeskotlin.core.network.ApiResult
 import dev.hermeskotlin.core.profiles.ProfileStore
+import dev.hermeskotlin.core.profiles.ProfilesApi
 import dev.hermeskotlin.core.sessions.SessionsApi
 import dev.hermeskotlin.core.settings.AppSettings
 import dev.hermeskotlin.core.settings.DictationEngine
@@ -19,6 +23,9 @@ import dev.hermeskotlin.core.voice.AudioApi
 import dev.hermeskotlin.core.voice.DeviceDictation
 import dev.hermeskotlin.core.voice.SpeechPlayer
 import dev.hermeskotlin.core.voice.VoiceRecorder
+import dev.hermeskotlin.ui.bots.BotFaces
+import dev.hermeskotlin.ui.chat.ReplySpeaker
+import dev.hermeskotlin.ui.chat.replySpeaker
 import dev.hermeskotlin.ui.voice.VoiceController
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -105,6 +112,9 @@ class AssistantPanelModel(
     /** Where the dictation engine is picked; without it the gateway transcribes. */
     private val settings: SettingsStore? = null,
     deviceDictation: DeviceDictation? = null,
+    /** The gateway's bots, to name the one answering above its replies; without them the panel says "Hermes". */
+    private val bots: BotsApi? = null,
+    private val profileRoster: ProfilesApi? = null,
     private val cropper: ScreenCropper = ScreenCropper { null },
 ) {
     private val scope = CoroutineScope(appScope.coroutineContext + SupervisorJob(appScope.coroutineContext[Job]))
@@ -137,6 +147,11 @@ class AssistantPanelModel(
     private val _shows = MutableStateFlow(0)
     val shows: StateFlow<Int> = _shows.asStateFlow()
 
+    private val _speaker = MutableStateFlow<ReplySpeaker?>(null)
+
+    /** The bot answering in the panel's chat (its profile's), named above its replies; null keeps "Hermes". */
+    internal val speaker: StateFlow<ReplySpeaker?> = _speaker.asStateFlow()
+
     val composer = TextFieldState()
     val voice = VoiceController(audio, recorder, player, scope, appScope, deviceDictation = deviceDictation)
 
@@ -164,6 +179,42 @@ class AssistantPanelModel(
         connection.start(saved.gatewayUrl)
         newChat()
         _phase.value = AssistantPhase.Ready
+        _speaker.value = null
+        readSpeaker(saved, profile)
+    }
+
+    private var speakerJob: Job? = null
+
+    /**
+     * Which bot answers on [saved] as [profile] (null: the gateway's launch profile), once the socket is up. Left
+     * to "Hermes" when it can't be had (offline, an older gateway); the next call-up asks again.
+     */
+    private fun readSpeaker(saved: SavedGateway, profile: String?) {
+        val bots = bots ?: return
+        speakerJob?.cancel()
+        speakerJob = scope.launch {
+            withTimeoutOrNull(SPEAKER_WAIT_MS) { connection.state.first { it is ConnectionState.Connected } } ?: return@launch
+            val roster = try {
+                bots.roster()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                return@launch
+            }
+            // Only a launch profile the gateway named: a guessed `default` could name the wrong bot.
+            val launch = (profileRoster?.roster(saved.gatewayUrl) as? ApiResult.Success)?.value?.takeIf { it.launchKnown }?.launch
+            val bot = replySpeaker(BotFaces(roster.bots), null, profile, launch)?.face ?: return@launch
+            val picture = if (!bot.hasAvatar) null else try {
+                bots.avatar(bot.name)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                null
+            }
+            // Another gateway taken up meanwhile has its own bots.
+            if (gateway?.url != saved.url) return@launch
+            _speaker.value = replySpeaker(BotFaces(roster.bots, picture?.let { mapOf(bot.name to it) }.orEmpty()), null, profile, launch)
+        }
     }
 
     /**
@@ -190,8 +241,12 @@ class AssistantPanelModel(
         // the chat must move along with it.
         val current = gateways.list.value.current
         if (_phase.value != AssistantPhase.Loading && current?.url != gateway?.url) scope.launch { bind() }
-        // The last call-up's chat goes on in the sessions list; an unused one is simply kept.
-        else if (_session.value?.state?.value?.hasConversation == true) newChat()
+        else {
+            // The last call-up's chat goes on in the sessions list; an unused one is simply kept.
+            if (_session.value?.state?.value?.hasConversation == true) newChat()
+            // Couldn't tell last time which bot answers (offline, say): ask again now.
+            gateway?.takeIf { _speaker.value == null && speakerJob?.isActive != true }?.let { readSpeaker(it, profile) }
+        }
         _shows.update { it + 1 }
     }
 
@@ -379,5 +434,8 @@ class AssistantPanelModel(
 
         /** Long past a slow app's text and screenshot, which take well under a second. */
         private const val SCREEN_GIVE_UP_MS = 4_000L
+
+        /** How long the panel waits for the socket before it leaves the replies to "Hermes". */
+        private const val SPEAKER_WAIT_MS = 15_000L
     }
 }
