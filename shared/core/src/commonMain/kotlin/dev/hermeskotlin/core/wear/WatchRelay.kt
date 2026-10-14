@@ -209,6 +209,14 @@ class WatchRelay(
         }
     }
 
+    /**
+     * Tells the watch [node] a new [accent] unasked, with how the phone stands. The live voice isn't checked:
+     * the watch's own status asks do that, and an accent change shouldn't reach the gateway.
+     */
+    fun accent(node: String, accent: WatchAccent) {
+        scope.launch { outbox.sendSafely(node, WearPaths.STATUS, WearJson.encode(currentStatus().first.copy(accent = accent))) }
+    }
+
     /** How the phone stands, and the gateway it's signed in to; its live voice null when not asked yet. */
     private suspend fun currentStatus(): Pair<PhoneStatus, GatewayUrl?> {
         val saved = gateways.current()
