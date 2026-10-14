@@ -109,7 +109,7 @@ uses. The protocol itself is described in [hermes-protocol-research.md](hermes-p
 - [x] Syntax highlighting in code blocks (Highlights, cached by content; light and dark palettes); long lines scroll sideways or wrap ("Wrap code lines" setting)
 - [x] TeX math: inline `$…$` / `\(…\)` and display `$$…$$` / `\[…\]` typeset with JLaTeXMath (display formulas centered and scrollable); prices like "$5 and $10" stay text, code is left alone, and a formula that won't parse shows its source
 - [x] A small time under each prompt and finished reply ("Message timestamps" setting): the stored row's time, or when this device sent or saw it finish
-- [x] Reasoning/thinking blocks, collapsible (`reasoning.delta`, `thinking.delta`, `reasoning.available`)
+- [x] Reasoning/thinking blocks, collapsible, with compact Markdown rendering (`reasoning.delta`, `thinking.delta`, `reasoning.available`)
 - [x] Stop a running turn (`session.interrupt`): the Send button turns into Stop while a turn runs
 - [x] Prompts sent from another client (Desktop, CLI, messaging) show up live: a turn this client didn't start refetches the transcript at its start and end, since the gateway streams only the reply
 - [x] Send while a reply runs, three ways: Steer (`session.steer`, the agent reads it after its current step; rejected → queued as the next prompt, a gateway without steering → plain `prompt.submit`), Queue (`prompt.submit {queued}`) and Stop & send (`session.interrupt`, wait for the turn to end, then `prompt.submit`). A Send button appears beside Stop; long-press it for a dropdown to pick the way for one message. `/steer <note>` uses `session.steer` too. A steer the turn ended before reading is requeued by the gateway and shows up as the next turn
