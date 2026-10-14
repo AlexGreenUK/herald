@@ -3,13 +3,14 @@ package dev.hermeskotlin.core.threads
 import dev.hermeskotlin.core.bots.parseBotRoster
 import dev.hermeskotlin.core.connection.ConnectionState
 import dev.hermeskotlin.core.connection.GatewayConnection
+import dev.hermeskotlin.core.profiles.UI_META_ATTEMPTS
+import dev.hermeskotlin.core.profiles.writeUiMeta
 import dev.hermeskotlin.core.rpc.JsonRpcClient
 import dev.hermeskotlin.core.rpc.RpcException
+import dev.hermeskotlin.core.sessions.createTitledChat
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 
 /** A thread's chat couldn't take the title asked for: another chat in the profile has it. */
@@ -30,63 +31,25 @@ class ThreadsApi(private val connection: GatewayConnection) {
      * reads again and applies [edit] to that. Answers the list as saved.
      */
     suspend fun change(name: String, edit: (List<ChatThread>) -> List<ChatThread>): List<ChatThread> {
-        repeat(META_ATTEMPTS) {
+        repeat(UI_META_ATTEMPTS) {
             val stored = stored(name)
             val before = ThreadMeta.parse(stored.block)
             val after = edit(before)
             if (after == before) return before
-            val reply = client().request(
-                "profiles.configure",
-                buildJsonObject {
-                    put("name", name)
-                    put("ui_meta", buildJsonObject { put(ThreadMeta.KEY, ThreadMeta.write(after, stored.block)) })
-                    stored.revision?.let { revision -> put("ui_meta_expected_revisions", buildJsonObject { put(ThreadMeta.KEY, revision) }) }
-                },
-            ) as? JsonObject
-            val applied = reply?.get("applied") as? JsonObject
-            if (applied?.get("ui_meta_conflicts") == null) {
-                if ((applied?.get("ui_meta") as? JsonPrimitive)?.booleanOrNull == false) throw RpcException(0, "The gateway didn't save the threads.")
-                return after
-            }
+            val block = ThreadMeta.write(after, stored.block)
+            if (client().writeUiMeta(name, ThreadMeta.KEY, block, stored.revision, refused = "The gateway didn't save the threads.")) return after
         }
         throw RpcException(0, "The threads changed elsewhere at the same time. Try again.")
     }
 
     /**
-     * A new chat titled [title] in [profile] (null: the gateway's launch profile), running in [cwd] when given,
-     * made the way Desktop makes one and titled at once so its row exists before the first prompt. Answers its
-     * stored id. A title another chat has is a [ThreadTitleTakenException], with nothing left behind.
+     * A new chat titled [title] in [profile] (null: the gateway's launch profile), running in [cwd] when given.
+     * Answers its stored id. A title another chat has is a [ThreadTitleTakenException], with nothing left behind.
      */
-    suspend fun startChat(profile: String?, title: String, cwd: String?): String {
-        val client = client()
-        val created = client.request(
-            "session.create",
-            buildJsonObject {
-                profile?.let { put("profile", it) }
-                put("title", title)
-                put("source", CLIENT_SOURCE)
-                put("cols", TERMINAL_COLUMNS)
-                cwd?.let { put("cwd", it) }
-            },
-        ) as? JsonObject ?: throw RpcException(0, "Empty session.create reply")
-        val runtime = (created["session_id"] as? JsonPrimitive)?.contentOrNull
-        val stored = (created["stored_session_id"] as? JsonPrimitive)?.contentOrNull
-        if (runtime == null || stored == null) throw RpcException(0, "session.create returned no session")
-        try {
-            client.request(
-                "session.title",
-                buildJsonObject {
-                    put("session_id", runtime)
-                    put("title", title)
-                },
-            )
-        } catch (e: RpcException) {
-            discard(client, profile, runtime, stored)
-            if (TITLE_TAKEN.containsMatchIn(e.message)) throw ThreadTitleTakenException(title)
-            throw e
-        }
-        return stored
-    }
+    suspend fun startChat(profile: String?, title: String, cwd: String?): String =
+        client().createTitledChat(profile, title, taken = { ThreadTitleTakenException(title) }) {
+            cwd?.let { put("cwd", it) }
+        }.second
 
     /** The `ui_meta` block and its revision as `profiles.list` has them for the profile [name]. */
     private suspend fun stored(name: String): Stored {
@@ -100,27 +63,6 @@ class ThreadsApi(private val connection: GatewayConnection) {
 
     private class Stored(val block: JsonObject?, val revision: Int?)
 
-    private suspend fun discard(client: JsonRpcClient, profile: String?, runtime: String, stored: String) {
-        runCatching { client.request("session.close", buildJsonObject { put("session_id", runtime) }) }
-        runCatching {
-            client.request(
-                "session.delete",
-                buildJsonObject {
-                    put("session_id", stored)
-                    profile?.let { put("profile", it) }
-                },
-            )
-        }
-    }
-
     private fun client(): JsonRpcClient = (connection.state.value as? ConnectionState.Connected)?.client
         ?: throw RpcException(0, "Not connected to the gateway.")
-
-    private companion object {
-        /** Same surface hint as [dev.hermeskotlin.core.chat.ChatSession]: Markdown and pictures show here. */
-        const val CLIENT_SOURCE = "desktop"
-        const val TERMINAL_COLUMNS = 80
-        val TITLE_TAKEN = Regex("already in use", RegexOption.IGNORE_CASE)
-        const val META_ATTEMPTS = 4
-    }
 }
