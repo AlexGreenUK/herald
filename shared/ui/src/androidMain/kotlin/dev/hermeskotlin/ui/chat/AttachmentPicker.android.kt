@@ -14,6 +14,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
@@ -125,6 +126,15 @@ actual fun rememberImageBitmap(bytes: ByteArray, maxEdge: Int): ImageBitmap? = r
     decodeUpright(bytes, maxEdge)?.asImageBitmap()
 }
 
+@Composable
+actual fun rememberDecodedImage(bytes: ByteArray, maxEdge: Int): DecodedImage {
+    if (!isTiff(bytes)) return DecodedImage(rememberImageBitmap(bytes, maxEdge), decoding = false)
+    // Herald's own TIFF decoder is plain Kotlin: a big picture would hold up the UI thread.
+    return produceState(DecodedImage(null, decoding = true), bytes, maxEdge) {
+        value = DecodedImage(withContext(Dispatchers.Default) { decodeUpright(bytes, maxEdge)?.asImageBitmap() }, decoding = false)
+    }.value
+}
+
 /**
  * Reads one picked item: photos are upright, at most [MAX_EDGE] px and JPEG; anything else is sent as is.
  * [budget] is what's left of the pick's [MAX_PICK_BYTES] for what this adds.
@@ -186,15 +196,15 @@ internal fun decodeUpright(bytes: ByteArray, maxEdge: Int): Bitmap? {
 /** A TIFF, which Android doesn't decode: read by [decodeTiff], already within [maxEdge]. Null for anything else. */
 private fun decodeTiffUpright(bytes: ByteArray, maxEdge: Int): Bitmap? {
     if (!isTiff(bytes)) return null
-    val tiff = try {
-        decodeTiff(bytes, maxEdge)
+    return try {
+        val tiff = decodeTiff(bytes, maxEdge) ?: return null
+        Bitmap.createBitmap(tiff.argb, tiff.width, tiff.height, Bitmap.Config.ARGB_8888).oriented(tiff.orientation)
     } catch (e: CancellationException) {
         throw e
     } catch (e: Throwable) {
-        // A file from an agent's reply: whatever goes wrong in the decode, the viewer says it can't show it.
+        // A file from an agent's reply: whatever goes wrong, out of memory included, the viewer says it can't show it.
         null
-    } ?: return null
-    return Bitmap.createBitmap(tiff.argb, tiff.width, tiff.height, Bitmap.Config.ARGB_8888).oriented(tiff.orientation)
+    }
 }
 
 /** This bitmap turned upright by an EXIF (or TIFF) orientation; the transposing ones are left as they are. */
