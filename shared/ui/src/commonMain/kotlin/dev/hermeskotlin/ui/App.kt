@@ -330,7 +330,9 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
     val sessions: SessionsViewModel = koinViewModel()
     val settings = LocalAppSettings.current
     val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
-    val chatShown = lifecycleState.isAtLeast(Lifecycle.State.STARTED) && openRoom == null && desktopRoom == null
+    // A page drawn over the chat (Settings, a plugin, the bot editor) hides it too: a banner there would time out unseen.
+    val chatShown = lifecycleState.isAtLeast(Lifecycle.State.STARTED) && openRoom == null && desktopRoom == null &&
+        !settingsOpen && pluginUrl == null && editing == null
     LaunchedEffect(chatShown) { sessions.setChatShown(chatShown) }
     DisposableEffect(sessions) { onDispose { sessions.setChatShown(false) } }
     // Every id the open chat goes by (a bot's chat moves on after /compress), so it never counts as another.
