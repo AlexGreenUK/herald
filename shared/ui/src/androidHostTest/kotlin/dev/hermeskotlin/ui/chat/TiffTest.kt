@@ -16,8 +16,8 @@ class TiffTest {
     fun everyCompressionGivesTheSamePixels() {
         val expected = IntArray(W * H) { rgb(it % W, it / W) }
         listOf(
-            "rgb-none", "rgb-packbits", "rgb-lzw", "rgb-lzw-strips", "rgb-deflate", "rgb-lzw-predictor",
-            "rgb-deflate-predictor", "rgb-bigendian",
+            "rgb-none", "rgb-packbits", "rgb-packbits-strips", "rgb-lzw", "rgb-lzw-strips", "rgb-deflate",
+            "rgb-deflate-strips", "rgb-lzw-predictor", "rgb-deflate-predictor", "rgb-bigendian",
         ).forEach { name ->
             val image = assertNotNull(decodeTiff(fixture(name), maxEdge = 100), name)
             assertEquals(W, image.width, name)
@@ -45,6 +45,20 @@ class TiffTest {
     }
 
     @Test
+    fun longLzwStripsWidenTheirCodesAndClearTheTable() {
+        // libtiff's LZW of 48 KB: codes reach 12 bits, the table fills and is cleared.
+        val image = assertNotNull(decodeTiff(fixture("gray-lzw-large"), maxEdge = 256))
+        assertEquals(256, image.width)
+        assertEquals(192, image.height)
+        val expected = IntArray(256 * 192) { i ->
+            val x = i % 256
+            val y = i / 256
+            gray(if ((x / 32 + y / 32) % 2 == 0) (x + y) and 255 else (((x * 73856093L) xor (y * 19349663L)) and 0xFFFF).toInt() shr 4 and 255)
+        }
+        assertContentEquals(expected, image.argb)
+    }
+
+    @Test
     fun aLargePictureIsAveragedDownToTheEdge() {
         // 5 × 4 into an edge of 2: blocks of 3 × 3, the last ones narrower and shorter.
         val image = assertNotNull(decodeTiff(fixture("rgb-lzw"), maxEdge = 2))
@@ -53,6 +67,23 @@ class TiffTest {
         assertEquals(argb(60, 80, 215), image.argb[0])
         // x 3–4, y 3: r (180 + 240) / 2, g 240, b (135 + 95) / 2.
         assertEquals(argb(210, 240, 115), image.argb[3])
+    }
+
+    @Test
+    fun averagingWeighsColorsByAlpha() {
+        // All 20 pixels in one: the half-clear one counts for half as much color.
+        val image = assertNotNull(decodeTiff(fixture("rgba-lzw"), maxEdge = 1))
+        val pixels = (0 until W * H).map { if (it == 0) intArrayOf(128, 10, 20, 30) else rgb(it % W, it / W).let { p -> intArrayOf(255, p shr 16 and 255, p shr 8 and 255, p and 255) } }
+        val alpha = pixels.sumOf { it[0] }
+        fun channel(c: Int) = pixels.sumOf { it[c] * it[0] } / alpha
+        assertEquals(((alpha / (W * H)) shl 24) or (channel(1) shl 16) or (channel(2) shl 8) or channel(3), image.argb.single())
+    }
+
+    @Test
+    fun aColorMapOnAPictureThatIsNotPaletteIsIgnored() {
+        val strip = ByteArray(16) { (it * 16).toByte() }
+        val image = assertNotNull(decodeTiff(grayTiff(4, 4, strip, compression = 1, extra = listOf(Tag(320, 3, 7, 0))), 100))
+        assertEquals(gray(0x10), image.argb[1])
     }
 
     @Test
@@ -69,10 +100,31 @@ class TiffTest {
     fun aPictureOverTheCapIsRefusedFromItsHeader() {
         assertNull(decodeTiff(fixture("rgb-none"), 100, maxPixels = W * H - 1L))
         assertNotNull(decodeTiff(fixture("rgb-none"), 100, maxPixels = W * H.toLong()))
+        // A whole, valid 100 × 100 strip, refused by the cap alone.
+        val strip = deflate(ByteArray(10_000), times = 1)
+        assertNull(decodeTiff(grayTiff(100, 100, strip, compression = 8), 100, maxPixels = 9_999))
+        assertNotNull(decodeTiff(grayTiff(100, 100, strip, compression = 8), 100, maxPixels = 10_000))
         // Two sides whose product passes a Long.
         assertNull(decodeTiff(grayTiff(0xFFFFFFFFL, 0xFFFFFFFFL, ByteArray(16), compression = 1), 100))
-        // 256 MP from a small Deflate strip: refused by its size before anything is inflated.
-        assertNull(decodeTiff(grayTiff(16_000, 16_000, deflate(ByteArray(1 shl 20), times = 1), compression = 8), 100))
+    }
+
+    @Test
+    fun aMillionTinyStripsAreQuickAndMoreAreRefused() {
+        val start = System.nanoTime()
+        val image = assertNotNull(decodeTiff(manyStrips(MAX_STRIPS_IN_TEST), 100))
+        assertEquals(gray(0), image.argb[0])
+        assertTrue(System.nanoTime() - start < 5_000_000_000L, "took ${(System.nanoTime() - start) / 1_000_000} ms")
+        assertNull(decodeTiff(manyStrips(MAX_STRIPS_IN_TEST + 1), 100))
+    }
+
+    /**
+     * A 1 × [rows] LZW picture with a strip per row. Every StripOffsets and StripByteCounts value is the byte 200
+     * from one shared array, and 200 bytes of zeros at 200 are a strip whose first 9-bit code is a literal 0.
+     */
+    private fun manyStrips(rows: Int): ByteArray {
+        val array = 400L
+        val file = grayTiff(1, rows.toLong(), ByteArray(0), compression = 5, stripTags = listOf(Tag(273, 1, rows.toLong(), array), Tag(279, 1, rows.toLong(), array)))
+        return file.copyOf(array.toInt() + rows).also { it.fill(200.toByte(), array.toInt(), it.size) }
     }
 
     @Test
@@ -130,23 +182,37 @@ class TiffTest {
         return out.toByteArray()
     }
 
-    /** A little-endian 8-bit gray TIFF with one strip of [strip]. */
-    private fun grayTiff(width: Long, height: Long, strip: ByteArray, compression: Int): ByteArray {
+    /** One directory entry; [value] is the value itself when it fits in 4 bytes, else where it is. */
+    private data class Tag(val tag: Int, val type: Int, val count: Long, val value: Long)
+
+    /**
+     * A little-endian 8-bit gray TIFF whose one strip, [strip], follows the directory, with [extra] entries.
+     * [stripTags] replace the StripOffsets and StripByteCounts that point at [strip], and RowsPerStrip is then 1.
+     */
+    private fun grayTiff(
+        width: Long,
+        height: Long,
+        strip: ByteArray,
+        compression: Int,
+        extra: List<Tag> = emptyList(),
+        stripTags: List<Tag>? = null,
+    ): ByteArray {
+        val count = 7 + 2 + extra.size
+        val dataAt = 8L + 2 + 12 * count + 4
         val entries = listOf(
-            Triple(256, 4, width), Triple(257, 4, height), Triple(258, 3, 8L), Triple(259, 3, compression.toLong()),
-            Triple(262, 3, 1L), Triple(273, 4, (8 + 2 + 9 * 12 + 4).toLong()), Triple(277, 3, 1L), Triple(278, 4, height),
-            Triple(279, 4, strip.size.toLong()),
-        )
+            Tag(256, 4, 1, width), Tag(257, 4, 1, height), Tag(258, 3, 1, 8), Tag(259, 3, 1, compression.toLong()),
+            Tag(262, 3, 1, 1), Tag(277, 3, 1, 1), Tag(278, 4, 1, if (stripTags == null) height else 1),
+        ) + (stripTags ?: listOf(Tag(273, 4, 1, dataAt), Tag(279, 4, 1, strip.size.toLong()))) + extra
         val out = ByteArrayOutputStream()
         fun le(value: Long, bytes: Int) = repeat(bytes) { out.write((value ushr (8 * it)).toInt() and 0xFF) }
         out.write("II".encodeToByteArray())
         le(42, 2)
         le(8, 4)
         le(entries.size.toLong(), 2)
-        entries.forEach { (tag, type, value) ->
+        entries.forEach { (tag, type, n, value) ->
             le(tag.toLong(), 2)
             le(type.toLong(), 2)
-            le(1, 4)
+            le(n, 4)
             le(value, 4)
         }
         le(0, 4)
@@ -157,5 +223,8 @@ class TiffTest {
     private companion object {
         const val W = 5
         const val H = 4
+
+        /** The decoder's own strip limit. */
+        const val MAX_STRIPS_IN_TEST = 1 shl 20
     }
 }

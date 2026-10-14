@@ -71,7 +71,8 @@ private class TiffReader(private val data: ByteArray) {
         val predictor = number(PREDICTOR) ?: 1
         if (predictor != 1L && !(predictor == 2L && depth == 8)) bad()
 
-        val pixels = Pixels.of(number(PHOTOMETRIC) ?: bad(), samples, depth, extraAlpha(), palette(depth))
+        val photometric = number(PHOTOMETRIC) ?: bad()
+        val pixels = Pixels.of(photometric, samples, depth, extraAlpha(), if (photometric == PALETTE) palette(depth) else null)
         val rowBytes = (w.toLong() * samples * depth + 7) / 8
         if (rowBytes > MAX_ROW_BYTES) bad()
         val compression = (number(COMPRESSION) ?: 1).toInt()
@@ -80,6 +81,8 @@ private class TiffReader(private val data: ByteArray) {
         val rowsPerStrip = (number(ROWS_PER_STRIP) ?: height).coerceAtMost(height)
         if (rowsPerStrip <= 0) bad()
         val strips = ((height + rowsPerStrip - 1) / rowsPerStrip).toInt()
+        // Each strip costs a little on its own; millions of one-byte strips would take minutes.
+        if (strips > MAX_STRIPS) bad()
         val offsets = entries[STRIP_OFFSETS] ?: bad()
         val counts = entries[STRIP_BYTE_COUNTS]
         if (offsets.count < strips || counts != null && counts.count < strips) bad()
@@ -87,31 +90,31 @@ private class TiffReader(private val data: ByteArray) {
 
         val out = Downscaler(w, h, maxEdge)
         val row = ByteArray(rowBytes.toInt())
-        for (s in 0 until strips) {
-            val rows = minOf(rowsPerStrip, height - s * rowsPerStrip).toInt()
-            val start = value(offsets, s)
-            val length = counts?.let { value(it, s) } ?: (rowBytes * rows)
-            if (start < 0 || length < 0 || start + length > data.size) bad()
-            val strip = stripReader(compression, start.toInt(), length.toInt())
-            try {
+        // One reader for the whole picture, started again at each strip.
+        val strip = when (compression) {
+            NONE -> RawStrip(data)
+            PACKBITS -> PackBitsStrip(data)
+            LZW -> LzwStrip(data)
+            else -> DeflateStrip(data)
+        }
+        try {
+            for (s in 0 until strips) {
+                val rows = minOf(rowsPerStrip, height - s * rowsPerStrip).toInt()
+                val start = value(offsets, s)
+                val length = counts?.let { value(it, s) } ?: (rowBytes * rows)
+                if (start < 0 || length < 0 || start + length > data.size) bad()
+                strip.start(start.toInt(), length.toInt())
                 repeat(rows) {
                     if (!strip.fill(row)) bad()
                     if (predictor == 2L) for (i in samples until row.size) row[i] = (row[i] + row[i - samples]).toByte()
                     out.addRow { x -> pixels.argb(row, x) }
                 }
-            } finally {
-                strip.close()
             }
+        } finally {
+            strip.close()
         }
         val orientation = (number(ORIENTATION) ?: 1).toInt().takeIf { it in 1..8 } ?: 1
         return TiffImage(out.width, out.height, out.pixels, orientation)
-    }
-
-    private fun stripReader(compression: Int, start: Int, length: Int): StripReader = when (compression) {
-        NONE -> RawStrip(data, start, length)
-        PACKBITS -> PackBitsStrip(data, start, length)
-        LZW -> LzwStrip(data, start, length)
-        else -> DeflateStrip(data, start, length)
     }
 
     /** Whether the extra sample after the colors is alpha, and if it's premultiplied. */
@@ -263,13 +266,15 @@ private class Downscaler(private val sourceWidth: Int, private val sourceHeight:
             val base = y * width
             for (x in 0 until width) pixels[base + x] = pixel(x)
         } else {
+            // Colors are weighted by their alpha, so a clear pixel's color doesn't tint the edge of what's around it.
             for (x in 0 until sourceWidth) {
                 val p = pixel(x)
+                val a = (p ushr 24).toLong()
                 val i = (x / step) * 4
-                sums[i] += (p ushr 24).toLong()
-                sums[i + 1] += (p ushr 16 and 0xFF).toLong()
-                sums[i + 2] += (p ushr 8 and 0xFF).toLong()
-                sums[i + 3] += (p and 0xFF).toLong()
+                sums[i] += a
+                sums[i + 1] += (p ushr 16 and 0xFF) * a
+                sums[i + 2] += (p ushr 8 and 0xFF) * a
+                sums[i + 3] += (p and 0xFF) * a
             }
             val rows = y % step + 1
             if (rows == step || y == sourceHeight - 1) flush(rows)
@@ -282,22 +287,33 @@ private class Downscaler(private val sourceWidth: Int, private val sourceHeight:
         for (x in 0 until width) {
             val n = minOf(step, sourceWidth - x * step).toLong() * rows
             val i = x * 4
-            pixels[base + x] = ((sums[i] / n).toInt() shl 24) or ((sums[i + 1] / n).toInt() shl 16) or
-                ((sums[i + 2] / n).toInt() shl 8) or (sums[i + 3] / n).toInt()
+            val alpha = sums[i]
+            pixels[base + x] = if (alpha == 0L) {
+                0
+            } else {
+                ((alpha / n).toInt() shl 24) or ((sums[i + 1] / alpha).toInt() shl 16) or
+                    ((sums[i + 2] / alpha).toInt() shl 8) or (sums[i + 3] / alpha).toInt()
+            }
         }
         sums.fill(0)
     }
 }
 
-/** Fills one row at a time from a strip; false once the strip runs out first. */
-private abstract class StripReader {
+/** Fills one row at a time from the strip it was last [start]ed on; false once the strip runs out first. */
+private abstract class StripReader(protected val data: ByteArray) {
+    protected var at = 0
+    protected var end = 0
+
+    open fun start(offset: Int, length: Int) {
+        at = offset
+        end = offset + length
+    }
+
     abstract fun fill(row: ByteArray): Boolean
     open fun close() {}
 }
 
-private class RawStrip(private val data: ByteArray, private var at: Int, length: Int) : StripReader() {
-    private val end = at + length
-
+private class RawStrip(data: ByteArray) : StripReader(data) {
     override fun fill(row: ByteArray): Boolean {
         if (end - at < row.size) return false
         System.arraycopy(data, at, row, 0, row.size)
@@ -307,11 +323,16 @@ private class RawStrip(private val data: ByteArray, private var at: Int, length:
 }
 
 /** PackBits (compression 32773): a run may carry on into the next row. */
-private class PackBitsStrip(private val data: ByteArray, private var at: Int, length: Int) : StripReader() {
-    private val end = at + length
+private class PackBitsStrip(data: ByteArray) : StripReader(data) {
     private var literal = 0
     private var repeat = 0
     private var repeated: Byte = 0
+
+    override fun start(offset: Int, length: Int) {
+        super.start(offset, length)
+        literal = 0
+        repeat = 0
+    }
 
     override fun fill(row: ByteArray): Boolean {
         var n = 0
@@ -349,9 +370,9 @@ private class PackBitsStrip(private val data: ByteArray, private var at: Int, le
 }
 
 /** TIFF's LZW (compression 5): codes of 9–12 bits, high bit first, widening one code early. */
-private class LzwStrip(private val data: ByteArray, start: Int, length: Int) : StripReader() {
-    private val bitEnd = (start + length).toLong() * 8
-    private var bit = start.toLong() * 8
+private class LzwStrip(data: ByteArray) : StripReader(data) {
+    private var bit = 0L
+    private var bitEnd = 0L
     private val prefix = IntArray(TABLE)
     private val suffix = ByteArray(TABLE)
     private val first = ByteArray(TABLE)
@@ -367,11 +388,23 @@ private class LzwStrip(private val data: ByteArray, start: Int, length: Int) : S
     private var stringStart = 0
 
     init {
+        // The first 256 codes never change; only codes from FIRST_CODE on are written.
         for (i in 0 until 256) {
             suffix[i] = i.toByte()
             first[i] = i.toByte()
             lengths[i] = 1
         }
+    }
+
+    override fun start(offset: Int, length: Int) {
+        super.start(offset, length)
+        bit = offset.toLong() * 8
+        bitEnd = end.toLong() * 8
+        next = FIRST_CODE
+        width = 9
+        previous = -1
+        ended = false
+        pending = 0
     }
 
     override fun fill(row: ByteArray): Boolean {
@@ -417,14 +450,15 @@ private class LzwStrip(private val data: ByteArray, start: Int, length: Int) : S
 
     private fun readCode(): Int {
         if (bit + width > bitEnd) return -1
-        var code = 0
-        repeat(width) {
-            val byte = data[(bit ushr 3).toInt()].toInt()
-            code = (code shl 1) or ((byte ushr (7 - (bit and 7).toInt())) and 1)
-            bit++
-        }
+        // A code of at most 12 bits, starting anywhere in a byte, lies within 3 bytes; past the strip reads as 0.
+        val i = (bit ushr 3).toInt()
+        val window = (byteAt(i) shl 16) or (byteAt(i + 1) shl 8) or byteAt(i + 2)
+        val code = (window ushr (24 - (bit and 7).toInt() - width)) and ((1 shl width) - 1)
+        bit += width
         return code
     }
+
+    private fun byteAt(i: Int): Int = if (i < end) data[i].toInt() and 0xFF else 0
 
     private fun add(prefixCode: Int, last: Byte) {
         // A full table without a Clear keeps its codes, as libtiff does.
@@ -457,8 +491,13 @@ private class LzwStrip(private val data: ByteArray, start: Int, length: Int) : S
 }
 
 /** Deflate (compression 8, or 32946 from older writers), inflated a row at a time. */
-private class DeflateStrip(data: ByteArray, start: Int, length: Int) : StripReader() {
-    private val inflater = Inflater().apply { setInput(data, start, length) }
+private class DeflateStrip(data: ByteArray) : StripReader(data) {
+    private val inflater = Inflater()
+
+    override fun start(offset: Int, length: Int) {
+        inflater.reset()
+        inflater.setInput(data, offset, length)
+    }
 
     override fun fill(row: ByteArray): Boolean {
         var n = 0
@@ -521,6 +560,9 @@ private const val RGB = 2L
 private const val PALETTE = 3L
 private val GRAY_DEPTHS = setOf(1, 2, 4, 8)
 private const val MAX_SAMPLES = 8
+
+/** A strip per row of a picture a million rows tall; more is only ever a file built to be slow. */
+private const val MAX_STRIPS = 1 shl 20
 
 /** One row's samples, the only part of a strip held at once: a picture 2 million pixels wide at 8 samples. */
 private const val MAX_ROW_BYTES = 16L * 1024 * 1024
