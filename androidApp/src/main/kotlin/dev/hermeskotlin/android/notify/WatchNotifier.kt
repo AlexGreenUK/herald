@@ -60,18 +60,23 @@ class WatchNotifier(
         scope.launch {
             // Only what was actually posted counts, as in ChatNotifier.
             val notified = mutableSetOf<String>()
+            // Posted, then taken down as Herald came into sight: the user is here and has seen them, so they aren't
+            // posted again while Herald stays in sight, even with notifications for other chats on.
+            val takenDown = mutableSetOf<String>()
             var wasVisible = visibility.visible.value
             combine(watcher.chats, visibility.visible, settings.settings) { chats, visible, prefs -> Triple(chats, visible, prefs ?: AppSettings()) }
                 .collect { (chats, visible, prefs) ->
                     // Coming into sight, ChatNotifier takes every notification down. What this kept as posted is gone
-                    // from the shade, so it's forgotten too: requests still waiting are posted again on the next change
-                    // (leaving Herald at the latest). Not now: ChatNotifier's clearing may run after, and take them down.
+                    // from the shade, so it's forgotten too: requests still waiting are posted again on leaving Herald.
+                    // Not now: ChatNotifier's clearing may run after, and take them down.
                     val cameIntoSight = visible && !wasVisible
                     wasVisible = visible
                     if (cameIntoSight) {
+                        takenDown += notified
                         notified.clear()
                         return@collect
                     }
+                    if (!visible) takenDown.clear()
                     val open = openChat()
                     val side = host.sideChats.value
                     val waiting = chats.values.filter { it.storedId != open && it.storedId !in side && bots.botWithChat(it.storedId) == null }
@@ -83,12 +88,15 @@ class WatchNotifier(
                     } else if (prefs.notifyRequests) {
                         for (chat in waiting) {
                             for (request in chat.requests) {
+                                if (request.id in takenDown) continue
                                 if (request.id !in notified && notifications.postRequest(chat.storedId, chat.title.ifBlank { null }, request)) notified.add(request.id)
                             }
                         }
                     }
                     // Answered (here or elsewhere), withdrawn, or the turn is over: its notification goes.
                     val stillOpen = waiting.flatMapTo(HashSet()) { chat -> chat.requests.map { it.id } }
+                    // Every chat's, the open one's too: opening that chat and leaving it again doesn't make one new.
+                    takenDown.retainAll(chats.values.flatMapTo(HashSet()) { chat -> chat.requests.map { it.id } })
                     notified.filter { it !in stillOpen }.forEach {
                         notified.remove(it)
                         notifications.cancelRequest(it)
