@@ -20,7 +20,6 @@ import androidx.compose.ui.semantics.CollectionInfo
 import androidx.compose.ui.semantics.CollectionItemInfo
 import androidx.compose.ui.semantics.collectionInfo
 import androidx.compose.ui.semantics.collectionItemInfo
-import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -87,10 +86,9 @@ private fun TableGrid(
                     Column(
                         Modifier
                             .padding(horizontal = CELL_PADDING_X, vertical = CELL_PADDING_Y)
-                            .semantics {
-                                if (header) heading()
-                                collectionItemInfo = CollectionItemInfo(rowIndex, 1, columnIndex, 1)
-                            },
+                            // The row and column are enough for TalkBack; a heading per header cell would crowd
+                            // out the reply's real headings when moving by heading.
+                            .semantics { collectionItemInfo = CollectionItemInfo(rowIndex, 1, columnIndex, 1) },
                     ) {
                         MarkdownTableBasicText(
                             content = content,
@@ -139,31 +137,18 @@ private fun TableGrid(
         val rowLines = (0 until rows.size - 1).map { measurables[next++].measure(Constraints.fixed(width, line)) }
         val columnLines = (0 until columnCount - 1).map { measurables[next++].measure(Constraints.fixed(line, height)) }
         val stripes = stripedRows.map { measurables[next++].measure(Constraints.fixed(width, rowHeights[it])) }
-        val rowTops = tableRowOffsets(rowHeights)
+        val rowTops = tableOffsets(rowHeights)
+        val columnLefts = tableOffsets(widths)
 
         layout(width, height) {
             // Placed first, so the cells and lines are drawn over the tint.
             stripes.forEachIndexed { i, placeable -> placeable.placeRelative(0, rowTops[stripedRows[i]]) }
             var index = 0
-            var y = 0
             rows.forEachIndexed { rowIndex, cells ->
-                var x = 0
-                for (column in cells.indices) {
-                    placeables[index++].placeRelative(x, y)
-                    x += widths[column]
-                }
-                y += rowHeights[rowIndex]
+                for (column in cells.indices) placeables[index++].placeRelative(columnLefts[column], rowTops[rowIndex])
             }
-            var bottom = 0
-            rowLines.forEachIndexed { row, placeable ->
-                bottom += rowHeights[row]
-                placeable.placeRelative(0, bottom - line)
-            }
-            var right = 0
-            columnLines.forEachIndexed { column, placeable ->
-                right += widths[column]
-                placeable.placeRelative(right - line, 0)
-            }
+            rowLines.forEachIndexed { row, placeable -> placeable.placeRelative(0, rowTops[row + 1] - line) }
+            columnLines.forEachIndexed { column, placeable -> placeable.placeRelative(columnLefts[column + 1] - line, 0) }
         }
     }
 }

@@ -59,8 +59,30 @@ class TableColumnsTest {
 
     @Test
     fun eachRowStartsWhereTheRowsAboveItEnd() {
-        assertContentEquals(intArrayOf(0, 30, 50, 95), tableRowOffsets(intArrayOf(30, 20, 45, 10)))
-        assertContentEquals(intArrayOf(0), tableRowOffsets(intArrayOf(12)))
-        assertContentEquals(intArrayOf(), tableRowOffsets(intArrayOf()))
+        assertContentEquals(intArrayOf(0, 30, 50, 95), tableOffsets(intArrayOf(30, 20, 45, 10)))
+        assertContentEquals(intArrayOf(0), tableOffsets(intArrayOf(12)))
+        assertContentEquals(intArrayOf(), tableOffsets(intArrayOf()))
+    }
+
+    @Test
+    fun aVeryLongWordIsCutToTheRoomInsteadOfWideningTheTable() {
+        // One cell holding a 20,000-character hash: its longest word alone is ~480,000 px.
+        val widths = tableColumnWidths(min = intArrayOf(40, 480_000), max = intArrayOf(40, 480_000), available = 1300)
+        assertContentEquals(intArrayOf(40, 1300), widths, "the table scrolls by the key column only")
+    }
+
+    @Test
+    fun anUnboundedTableStillKeepsEachColumnRepresentable() {
+        val widths = tableColumnWidths(min = intArrayOf(480_000), max = intArrayOf(480_000), available = Int.MAX_VALUE)
+        assertContentEquals(intArrayOf(MAX_COLUMN_WIDTH), widths)
+    }
+
+    @Test
+    fun leftoverPixelsGoOnlyToColumnsThatWantedMore() {
+        // 101 px to share between two wordy columns; the emoji column (min == max) gets none of it.
+        val widths = tableColumnWidths(min = intArrayOf(40, 30, 30), max = intArrayOf(40, 300, 300), available = 201)
+        assertEquals(40, widths[0])
+        assertEquals(201, widths.sum())
+        assertContentEquals(intArrayOf(40, 80, 81), widths)
     }
 }
