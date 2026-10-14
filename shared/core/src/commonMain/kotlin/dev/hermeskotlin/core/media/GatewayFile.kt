@@ -175,6 +175,9 @@ enum class GatewayFileKind(val label: String) {
     Code("Code"),
     Text("Text"),
     Image("Picture"),
+
+    /** Pages drawn from the whole file, not the gateway's text preview. */
+    Pdf("PDF"),
     Other("File"),
     ;
 
@@ -190,6 +193,7 @@ enum class GatewayFileKind(val label: String) {
                 ext in JSON -> Json
                 ext in TABLE -> Table
                 ext in IMAGE -> Image
+                ext == "pdf" -> Pdf
                 ext in CODE || lower in CODE_NAMES -> Code
                 ext in TEXT || ext.isEmpty() || lower.startsWith(".") -> Text
                 ext in BINARY -> Other
@@ -214,7 +218,7 @@ enum class GatewayFileKind(val label: String) {
         )
         internal val CODE_NAMES = setOf("dockerfile", "makefile", "justfile", "procfile", "gemfile", "rakefile")
         private val BINARY = setOf(
-            "pdf", "zip", "gz", "tgz", "bz2", "xz", "7z", "rar", "tar", "apk", "aab", "jar", "exe", "dll", "so", "dylib", "bin",
+            "zip", "gz", "tgz", "bz2", "xz", "7z", "rar", "tar", "apk", "aab", "jar", "exe", "dll", "so", "dylib", "bin",
             "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp", "epub", "mp3", "wav", "ogg", "opus", "flac", "m4a",
             "aac", "mp4", "mov", "mkv", "webm", "avi", "psd", "ttf", "otf", "woff", "woff2", "sqlite", "db",
         )

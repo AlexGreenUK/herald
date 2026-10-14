@@ -119,7 +119,7 @@ class GatewayFileTest {
         assertEquals(GatewayFileKind.Text, GatewayFileKind.of("README"))
         assertEquals(GatewayFileKind.Text, GatewayFileKind.of("notes.weird"))
         assertEquals(GatewayFileKind.Image, GatewayFileKind.of("cat.PNG"))
-        assertEquals(GatewayFileKind.Other, GatewayFileKind.of("report.pdf"))
+        assertEquals(GatewayFileKind.Other, GatewayFileKind.of("backup.zip"))
         listOf("photo.HEIC", "photo.heif", "photo.avif", "favicon.ico", "old.bmp", "scan.tiff", "scan.TIF").forEach {
             assertEquals(GatewayFileKind.Image, GatewayFileKind.of(it), it)
         }
@@ -128,5 +128,17 @@ class GatewayFileTest {
         assertTrue(GatewayFileKind.Code.previewable)
         assertFalse(GatewayFileKind.Other.previewable)
         assertFalse(GatewayFileKind.Image.previewable)
+    }
+
+    @Test
+    fun pdfsArePreviewedAsPages() {
+        assertEquals(GatewayFileKind.Pdf, GatewayFileKind.of("report.pdf"))
+        assertEquals(GatewayFileKind.Pdf, GatewayFileKind.of("Q3 Summary.PDF"))
+        assertEquals(GatewayFileKind.Pdf, GatewayFile.fromLink("/opt/data/out/report.pdf")?.kind)
+        assertEquals(GatewayFileKind.Pdf, GatewayFile.fromLink("file:///opt/data/out/My%20Report.pdf#page=2")?.kind)
+        // Only the extension counts: a name that merely mentions pdf is not one.
+        assertEquals(GatewayFileKind.Text, GatewayFileKind.of("pdf-notes.txt"))
+        assertEquals(GatewayFileKind.Other, GatewayFileKind.of("report.pdf.zip"))
+        assertTrue(GatewayFileKind.Pdf.previewable)
     }
 }
