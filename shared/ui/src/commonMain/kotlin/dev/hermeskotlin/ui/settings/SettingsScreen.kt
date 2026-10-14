@@ -73,6 +73,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.composables.icons.lucide.Activity
 import com.composables.icons.lucide.BellRing
+import com.composables.icons.lucide.PanelLeft
 import com.composables.icons.lucide.PanelTop
 import com.composables.icons.lucide.Vibrate
 import com.composables.icons.lucide.ArrowLeftRight
@@ -523,20 +524,32 @@ internal fun SettingsView(
                     )
                     Divider()
                     SwitchRow(
-                        title = "Banner for other chats",
-                        detail = "A strip over the chat when another chat replies or waits on you, with Open and Next.",
-                        checked = settings.otherChatsBanner,
-                        onCheckedChange = { on -> onUpdate { it.copy(otherChatsBanner = on) } },
-                        icon = Lucide.PanelTop,
+                        title = "Alerts for other chats",
+                        detail = "While you're in a chat, a dot on Sessions when another chat replies or waits on you. " +
+                            "Long-press Sessions for the next one.",
+                        checked = settings.otherChatsAlerts,
+                        onCheckedChange = { on -> onUpdate { it.copy(otherChatsAlerts = on) } },
+                        icon = Lucide.PanelLeft,
                     )
-                    Divider()
-                    SwitchRow(
-                        title = "Vibrate when another chat waits",
-                        detail = "A short buzz when another chat starts waiting on your approval or answer.",
-                        checked = settings.otherChatsVibrate,
-                        onCheckedChange = { on -> onUpdate { it.copy(otherChatsVibrate = on) } },
-                        icon = Lucide.Vibrate,
-                    )
+                    // What the alerts do, only while they're on.
+                    if (settings.otherChatsAlerts) {
+                        Divider()
+                        SwitchRow(
+                            title = "Banner for other chats",
+                            detail = "A strip over the chat when another chat replies or waits on you, with Open and Next.",
+                            checked = settings.otherChatsBanner,
+                            onCheckedChange = { on -> onUpdate { it.copy(otherChatsBanner = on) } },
+                            icon = Lucide.PanelTop,
+                        )
+                        Divider()
+                        SwitchRow(
+                            title = "Vibrate when another chat waits",
+                            detail = "A short buzz when another chat starts waiting on your approval or answer.",
+                            checked = settings.otherChatsVibrate,
+                            onCheckedChange = { on -> onUpdate { it.copy(otherChatsVibrate = on) } },
+                            icon = Lucide.Vibrate,
+                        )
+                    }
                     Divider()
                     SwitchRow(
                         title = "Notifications anywhere",

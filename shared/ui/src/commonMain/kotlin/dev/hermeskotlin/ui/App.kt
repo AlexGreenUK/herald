@@ -82,9 +82,11 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.currentStateAsState
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.derivedStateOf
 import dev.hermeskotlin.ui.sessions.OtherChat
 import dev.hermeskotlin.ui.sessions.OtherChatEvent
 import dev.hermeskotlin.ui.sessions.OtherChatRow
+import dev.hermeskotlin.ui.sessions.SessionsBadge
 import dev.hermeskotlin.ui.sessions.SessionsViewModel
 import org.koin.compose.viewmodel.koinViewModel
 
@@ -324,16 +326,21 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
             pluginLabel = null
         }
     }
-    // Other chats that need the user: the Sessions badge, the banner over the chat, Next and the buzz. Watched only
-    // while the chat itself is on screen with Herald in the foreground; that keeps the gateway's live list polled
-    // then (every 10 s, as while the sidebar shows), and never in the background.
+    // Other chats that need the user: the Sessions badge, the banner over the chat, Next and the buzz, with
+    // "Alerts for other chats" on (off by default). Watched only while the chat itself is on screen with Herald in
+    // the foreground; that keeps the gateway's live list polled then (every 10 s, as while the sidebar shows), and
+    // never in the background.
     val sessions: SessionsViewModel = koinViewModel()
     val settings = LocalAppSettings.current
+    val alerts = settings.otherChatsAlerts
+    LaunchedEffect(alerts, settings.otherChatsBanner) { sessions.setOtherChats(alerts, banner = settings.otherChatsBanner) }
     val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
     // A page drawn over the chat (Settings, a plugin, the bot editor) hides it too: a banner there would time out unseen.
     val chatShown = lifecycleState.isAtLeast(Lifecycle.State.STARTED) && openRoom == null && desktopRoom == null &&
         !settingsOpen && pluginUrl == null && editing == null
     LaunchedEffect(chatShown) { sessions.setChatShown(chatShown) }
+    // The phone's drawer over the chat: the sidebar says it all there, so the banner waits until it closes.
+    val drawerOver by remember { derivedStateOf { sidebar.fraction > 0f && !sidebar.docked } }
     DisposableEffect(sessions) { onDispose { sessions.setChatShown(false) } }
     // Every id the open chat goes by (a bot's chat moves on after /compress), so it never counts as another.
     val openIds = setOfNotNull(openSessionId, route.target.storedSessionId, openBot?.canonicalSession?.id, openBot?.canonicalSession?.openId)
@@ -354,7 +361,7 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
     val sessionsBadge by sessions.badge.collectAsStateWithLifecycle()
     val banner by sessions.banner.collectAsStateWithLifecycle()
     val haptics = LocalHapticFeedback.current
-    val vibrate = settings.otherChatsVibrate
+    val vibrate = alerts && settings.otherChatsVibrate
     LaunchedEffect(sessions, vibrate) {
         if (!vibrate) return@LaunchedEffect
         sessions.otherChatEvents.collect { if (it.waiting) haptics.performHapticFeedback(HapticFeedbackType.LongPress) }
@@ -455,20 +462,20 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
                     onOpenChat = { id, title -> app.openSession(id, title ?: "Untitled session") },
                     onSwitchProfile = app::switchProfile,
                     viewModel = chat,
-                    sessionsBadge = sessionsBadge,
-                    otherChatBanner = banner.takeIf { settings.otherChatsBanner },
+                    sessionsBadge = if (alerts) sessionsBadge else SessionsBadge(),
+                    otherChatBanner = banner.takeIf { alerts && settings.otherChatsBanner && !drawerOver },
                     onOpenOtherChat = { event: OtherChatEvent ->
                         sessions.dismissBanner(event)
                         openOther(event.chatId, event.title, event.bot)
                     },
                     onDismissOtherChat = sessions::dismissBanner,
-                    onNextChat = {
+                    onNextChat = if (!alerts) null else fun(): Boolean {
                         val next = sessions.nextChat()
                         if (next != null) {
                             banner?.let(sessions::dismissBanner)
                             openOther(next.id, next.title, next.bot)
                         }
-                        next != null
+                        return next != null
                     },
                 )
             }

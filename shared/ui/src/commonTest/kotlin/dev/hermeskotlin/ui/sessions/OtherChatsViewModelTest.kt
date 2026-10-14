@@ -71,11 +71,17 @@ class OtherChatsViewModelTest {
     /** Each preview read: the chat and the profile it was asked in. */
     private val previewReads = mutableListOf<Pair<String, String?>>()
 
+    /** How often the chat list was read. */
+    private var listReads = 0
+
     /** A preview read waits on this, when set. */
     private var previewGate: CompletableDeferred<Unit>? = null
 
     /** A gateway socket that says it's ready and answers `session.active_list` from [live] (stored id to status). */
     private class FakeSocket(val live: MutableMap<String, String> = mutableMapOf()) : RpcTransport {
+        /** How often the live list was asked for. */
+        var polls = 0
+
         private val inbound = Channel<String>(Channel.UNLIMITED).apply {
             trySend("""{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{}}}""")
         }
@@ -86,6 +92,7 @@ class OtherChatsViewModelTest {
             val message = Json.parseToJsonElement(text).jsonObject
             val id = message["id"] ?: return
             val result = if (message["method"]?.jsonPrimitive?.content == "session.active_list") {
+                polls++
                 live.entries.joinToString(",", """{"sessions":[""", "]}") { (key, status) -> """{"id":"rt-$key","session_key":"$key","status":"$status"}""" }
             } else {
                 "{}"
@@ -104,12 +111,15 @@ class OtherChatsViewModelTest {
         config.addHandler { request ->
             val path = request.url.encodedPath
             when {
-                path == "/api/sessions" -> respond(
-                    activity.entries.joinToString(",", """{"sessions":[""", """],"total":${activity.size}}""") { (id, at) ->
-                        """{"id":"$id","title":"${id.uppercase()}","last_active":$at}"""
-                    },
-                    HttpStatusCode.OK, json,
-                )
+                path == "/api/sessions" -> {
+                    listReads++
+                    respond(
+                        activity.entries.joinToString(",", """{"sessions":[""", """],"total":${activity.size}}""") { (id, at) ->
+                            """{"id":"$id","title":"${id.uppercase()}","last_active":$at}"""
+                        },
+                        HttpStatusCode.OK, json,
+                    )
+                }
                 path.endsWith("/messages") -> {
                     val id = path.removePrefix("/api/sessions/").removeSuffix("/messages")
                     previewReads += id to request.url.parameters["profile"]
@@ -142,11 +152,15 @@ class OtherChatsViewModelTest {
         return vm
     }
 
-    /** Bound, with the chat "a" on screen, past the settling: what's there now is taken stock of. */
-    private fun TestScope.watching(socket: FakeSocket = FakeSocket()): SessionsViewModel {
+    /**
+     * Bound, with "Alerts for other chats" on ([banner] too, unless said) and the chat "a" on screen, past the
+     * settling: what's there now is taken stock of.
+     */
+    private fun TestScope.watching(socket: FakeSocket = FakeSocket(), banner: Boolean = true): SessionsViewModel {
         val vm = viewModel(socket)
         vm.bind(gateway)
         vm.setOpenChat(setOf("a"))
+        vm.setOtherChats(enabled = true, banner = banner)
         vm.setChatShown(true)
         advanceTimeBy(SETTLED)
         return vm
@@ -369,6 +383,95 @@ class OtherChatsViewModelTest {
             advanceTimeBy(SETTLED)
             assertNull(vm.banner.value)
             assertEquals(SessionsBadge(replies = 1), vm.badge.value)
+        }
+    }
+
+    @Test
+    fun withAlertsOffNothingIsWatchedPolledOrRead() {
+        runTest(dispatcher) {
+            val socket = FakeSocket()
+            val vm = viewModel(socket)
+            vm.bind(gateway)
+            vm.setOpenChat(setOf("a"))
+            // The switch is off by default: the chat on screen alone watches nothing.
+            vm.setChatShown(true)
+            advanceTimeBy(SETTLED)
+            replyIn(vm, "b")
+            advanceTimeBy(30_000)
+            assertNull(vm.banner.value)
+            assertEquals(SessionsBadge(), vm.badge.value)
+            assertEquals(0, socket.polls)
+            assertTrue(previewReads.isEmpty())
+        }
+    }
+
+    @Test
+    fun turningAlertsOffForgetsWhatWasNews() {
+        runTest(dispatcher) {
+            val vm = watching()
+            replyIn(vm, "b")
+            assertNotNull(vm.banner.value)
+            vm.setOtherChats(enabled = false, banner = true)
+            assertNull(vm.banner.value)
+            assertEquals(SessionsBadge(), vm.badge.value)
+            // On again: what was there is only taken stock of.
+            vm.setOtherChats(enabled = true, banner = true)
+            advanceTimeBy(SETTLED)
+            assertNull(vm.banner.value)
+            assertEquals(SessionsBadge(), vm.badge.value)
+        }
+    }
+
+    @Test
+    fun withTheBannerOffAReplyOnlyCountsOnTheBadge() {
+        runTest(dispatcher) {
+            val vm = watching(banner = false)
+            replyIn(vm, "b")
+            assertNull(vm.banner.value)
+            assertEquals(SessionsBadge(replies = 1), vm.badge.value)
+            assertTrue(previewReads.isEmpty())
+        }
+    }
+
+    @Test
+    fun comingBackSoonAfterDoesNotReadTheListAgain() {
+        runTest(dispatcher) {
+            val vm = watching()
+            val reads = listReads
+            // Settings opened and closed a few seconds later.
+            vm.setChatShown(false)
+            advanceTimeBy(5_000)
+            vm.setChatShown(true)
+            advanceTimeBy(SETTLED)
+            assertEquals(reads, listReads)
+            // Still watched: a reply after it shows.
+            replyIn(vm, "b")
+            assertNotNull(vm.banner.value)
+            // Away for longer, the list is read again.
+            vm.setChatShown(false)
+            advanceTimeBy(60_000)
+            vm.setChatShown(true)
+            advanceTimeBy(SETTLED)
+            assertTrue(listReads > reads + 1)
+        }
+    }
+
+    @Test
+    fun anArchiveReadWhileAwayDoesNotStandForTheRecentChats() {
+        runTest(dispatcher) {
+            val vm = watching()
+            vm.setFilter(SessionListFilter.Archived)
+            advanceTimeBy(QUIET)
+            vm.setChatShown(false)
+            // "b" replies while Settings shows; the change read is the archive's, which says nothing of "b".
+            replyIn(vm, "b")
+            val reads = listReads
+            vm.setChatShown(true)
+            advanceTimeBy(SETTLED)
+            // Read again on the way back, so the reply is on the badge at once, not a banner later.
+            assertTrue(listReads > reads)
+            assertEquals(SessionsBadge(replies = 1), vm.badge.value)
+            assertNull(vm.banner.value)
         }
     }
 
