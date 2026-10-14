@@ -27,6 +27,9 @@ expect fun rememberAttachmentPicker(
 @Composable
 expect fun rememberImageBitmap(bytes: ByteArray, maxEdge: Int = 320): ImageBitmap?
 
+/** [rememberImageBitmap] outside composition, for decoding off the main thread. */
+expect fun decodeImageBitmap(bytes: ByteArray, maxEdge: Int): ImageBitmap?
+
 /** A picture being decoded: [bitmap] once it's read, null while [decoding] or when it can't be read. */
 class DecodedImage(val bitmap: ImageBitmap?, val decoding: Boolean)
 
