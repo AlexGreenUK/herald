@@ -77,6 +77,9 @@ object BotShortcuts {
 
     private fun info(context: Context, bot: Bot, picture: ByteArray?, rank: Int): ShortcutInfoCompat =
         ShortcutInfoCompat.Builder(context, ID_PREFIX + bot.name)
+            // Under the app icon's launcher entry by name. Left to Android, a shortcut published just after the
+            // user picks another icon goes under the old entry, and is dropped when Android notices it's off.
+            .apply { context.packageManager.getLaunchIntentForPackage(context.packageName)?.component?.let(::setActivity) }
             // The conversation's name and face in the shade come from here, so both are just the bot's.
             .setShortLabel(bot.label)
             .setLongLabel(bot.label)

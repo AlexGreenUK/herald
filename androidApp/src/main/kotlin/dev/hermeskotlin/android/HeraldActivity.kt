@@ -22,9 +22,11 @@ import androidx.core.content.edit
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.lifecycleScope
 import androidx.core.content.pm.ShortcutManagerCompat
+import dev.hermeskotlin.android.notify.BotNotifier
 import dev.hermeskotlin.android.notify.BotShortcuts
 import dev.hermeskotlin.android.notify.ChatNotifications
 import dev.hermeskotlin.android.phone.PhoneConfirmations
+import dev.hermeskotlin.ui.settings.AppIconRestart
 import dev.hermeskotlin.ui.settings.PhoneQuestion
 import dev.hermeskotlin.core.chat.AppLink
 import dev.hermeskotlin.core.chat.ChatHost
@@ -68,6 +70,7 @@ class HeraldActivity : FragmentActivity() {
     private val inboxLinks: InboxLinks by inject()
     private val settings: SettingsStore by inject()
     private val appScope: CoroutineScope by inject()
+    private val bots: BotNotifier by inject()
     private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
 
     private val app get() = application as HermesApplication
@@ -86,7 +89,8 @@ class HeraldActivity : FragmentActivity() {
         if (windowPrefs.contains(KEY_DARK)) applyWindowTheme(windowPrefs.getBoolean(KEY_DARK, false))
         // The stored setting is read asynchronously; this copy decides the very first frame.
         val lockOn = windowPrefs.getBoolean(KEY_APP_LOCK, false)
-        appLock.onLaunch(lockOn, fresh = savedInstanceState == null)
+        // Switching the app icon restarts Herald in a new task: that's no fresh open, so it stays unlocked.
+        appLock.onLaunch(lockOn, fresh = savedInstanceState == null && !AppIconRestart.take())
         lockGate.hideFromRecents(lockOn)
         promptOnResume = appLock.locked.value
         followAppLockSetting()
@@ -94,6 +98,7 @@ class HeraldActivity : FragmentActivity() {
         if (savedInstanceState == null) handleIntent(intent)
         val browser = InAppBrowser(this) { windowPrefs.getBoolean(KEY_DARK, false) }
         askPhoneQuestionsInApp()
+        bots.republishIfIconChanged()
         setContent {
             val locked by appLock.locked.collectAsState()
             val asked by PhoneConfirmations.asking.collectAsState()

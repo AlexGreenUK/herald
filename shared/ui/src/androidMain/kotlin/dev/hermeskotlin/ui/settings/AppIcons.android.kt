@@ -43,7 +43,9 @@ private class AndroidAppIcons(
 ) : AppIcons {
     private val packages = context.packageManager
 
-    override val current: AppIcon = AppIcon.entries.firstOrNull { it != AppIcon.Blue && isEnabled(it) } ?: AppIcon.Blue
+    // The launcher entry Android opens Herald from is the enabled alias: one lookup instead of one per icon.
+    override val current: AppIcon = packages.getLaunchIntentForPackage(context.packageName)?.component?.className
+        .let { entry -> AppIcon.entries.firstOrNull { it.aliasClass == entry } } ?: AppIcon.Blue
 
     override suspend fun picture(icon: AppIcon, sizePx: Int): ImageBitmap? = withContext(Dispatchers.Default) {
         runCatching {
@@ -70,6 +72,7 @@ private class AndroidAppIcons(
         // Android closes the task the old icon opened once that alias is off, and Herald's activity is singleTask,
         // so it would reopen in that same task. Close it first, then open Herald in a new task from the new icon,
         // which Android leaves alone: a restart, not the app disappearing.
+        AppIconRestart.pending = true
         activity?.finishAndRemoveTask()
         runCatching {
             context.startActivity(
@@ -82,14 +85,19 @@ private class AndroidAppIcons(
         onChange()
     }
 
-    /** Off unless switched on, except Blue, which the manifest enables. */
-    private fun isEnabled(icon: AppIcon): Boolean = when (packages.getComponentEnabledSetting(component(icon))) {
-        PackageManager.COMPONENT_ENABLED_STATE_ENABLED -> true
-        PackageManager.COMPONENT_ENABLED_STATE_DEFAULT -> icon == AppIcon.Blue
-        else -> false
-    }
-
     private fun component(icon: AppIcon) = ComponentName(context.packageName, icon.aliasClass)
+}
+
+/**
+ * Set while Herald restarts itself from a new app icon, so the new activity doesn't count as a fresh open (App
+ * lock asks again on those). Kept in the process, not on the intent: another app could put an extra there.
+ */
+object AppIconRestart {
+    @Volatile
+    var pending = false
+
+    /** Whether this open is that restart; reading it clears it. */
+    fun take(): Boolean = pending.also { pending = false }
 }
 
 /**
