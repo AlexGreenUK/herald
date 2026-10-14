@@ -234,6 +234,12 @@ class SessionsViewModel(
 
     private val watch = OtherChatsWatch()
 
+    /**
+     * The recent list as last read, for the other chats. It stands while the archive shows or a list is being
+     * read again: neither means the chats went away, and taking them out would drop what was news about them.
+     */
+    private val recentRows = MutableStateFlow<List<SessionSummary>>(emptyList())
+
     private val _others = MutableStateFlow(OtherChats())
 
     /** The chats other than the one on screen, as last worked out while the chat showed. */
@@ -298,7 +304,8 @@ class SessionsViewModel(
      */
     fun openListed(id: String): Double? {
         val state = _state.value
-        val session = (state.sessions + state.projectSessions.orEmpty()).firstOrNull { it.id == id } ?: return null
+        // The recent rows too: the sidebar may show the archive, and the chat is in the recent list.
+        val session = (state.sessions + state.projectSessions.orEmpty() + recentRows.value).firstOrNull { it.id == id } ?: return null
         val readUpTo = readUpTo(session)
         markSeen(session)
         return readUpTo
@@ -320,11 +327,18 @@ class SessionsViewModel(
     @OptIn(FlowPreview::class)
     private fun watchOtherChats() {
         viewModelScope.launch {
+            // Only the recent list, once read: the archive showing, or the list emptied while it is read again
+            // (a filter changed back), shouldn't make every chat leave and come back.
+            _state.collect { state ->
+                if (state.filter == SessionListFilter.Recent && !state.loading) {
+                    recentRows.value = (state.sessions + state.projectSessions.orEmpty()).distinctBy { it.id }
+                }
+            }
+        }
+        viewModelScope.launch {
             chatShown.flatMapLatest { shown ->
                 if (!shown) return@flatMapLatest emptyFlow()
-                val listed = combine(_state, seen, waiting, running) { state, seen, waiting, running ->
-                    // Only the recent list: the archive showing shouldn't make every chat leave and come back.
-                    val sessions = if (state.filter == SessionListFilter.Recent) (state.sessions + state.projectSessions.orEmpty()).distinctBy { it.id } else emptyList()
+                val listed = combine(recentRows, seen, waiting, running) { sessions, seen, waiting, running ->
                     Listed(
                         sessions.map { s ->
                             OtherChatRow(OtherChat(s.id, s.displayTitle, waiting[s.id], seen?.isUnread(s) == true, running[s.id] == true, s.activityAt))
@@ -440,6 +454,7 @@ class SessionsViewModel(
         _badge.value = SessionsBadge()
         _banner.value = null
         previewJob?.cancel()
+        recentRows.value = emptyList()
         botChats.value = emptyList()
         load(refresh = false)
         if (newGateway) {

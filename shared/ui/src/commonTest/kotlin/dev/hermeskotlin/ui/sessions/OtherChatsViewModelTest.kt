@@ -249,6 +249,35 @@ class OtherChatsViewModelTest {
     }
 
     @Test
+    fun theArchiveShowingKeepsWhatIsNews() {
+        runTest(dispatcher) {
+            val vm = watching()
+            replyIn(vm, "b")
+            assertEquals(SessionsBadge(replies = 1), vm.badge.value)
+            // The sidebar beside the chat goes to Archived and back: the recent chats didn't go anywhere.
+            vm.setFilter(SessionListFilter.Archived)
+            advanceTimeBy(QUIET)
+            assertEquals(SessionsBadge(replies = 1), vm.badge.value)
+            assertNotNull(vm.banner.value)
+            vm.setFilter(SessionListFilter.Recent)
+            advanceTimeBy(QUIET)
+            assertEquals(SessionsBadge(replies = 1), vm.badge.value)
+            assertEquals("b", vm.nextChat()?.id)
+        }
+    }
+
+    @Test
+    fun aChatOpenedFromTheBannerWhileTheArchiveShowsStartsAtItsNewMessages() {
+        runTest(dispatcher) {
+            val vm = watching()
+            replyIn(vm, "b")
+            vm.setFilter(SessionListFilter.Archived)
+            advanceTimeBy(QUIET)
+            assertEquals(LOOKED, vm.openListed("b"))
+        }
+    }
+
+    @Test
     fun aRequestShowsAtOnceAndOutranksAReply() {
         runTest(dispatcher) {
             val socket = FakeSocket()
