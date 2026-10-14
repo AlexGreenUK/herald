@@ -72,6 +72,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.composables.icons.lucide.Activity
+import com.composables.icons.lucide.BellRing
+import com.composables.icons.lucide.PanelTop
+import com.composables.icons.lucide.Vibrate
 import com.composables.icons.lucide.ArrowLeftRight
 import com.composables.icons.lucide.Brain
 import com.composables.icons.lucide.Cat
@@ -509,6 +512,30 @@ internal fun SettingsView(
                         checked = settings.notifyReplies,
                         onCheckedChange = { on -> onUpdate { it.copy(notifyReplies = on) } },
                         icon = Lucide.MessageCircle,
+                    )
+                    Divider()
+                    SwitchRow(
+                        title = "Notify for other chats while Herald is open",
+                        detail = "Replies and requests in chats other than the one on screen notify even while you're in Herald.",
+                        checked = settings.notifyOtherChatsInApp,
+                        onCheckedChange = { on -> onUpdate { it.copy(notifyOtherChatsInApp = on) } },
+                        icon = Lucide.BellRing,
+                    )
+                    Divider()
+                    SwitchRow(
+                        title = "Banner for other chats",
+                        detail = "A strip over the chat when another chat replies or waits on you, with Open and Next.",
+                        checked = settings.otherChatsBanner,
+                        onCheckedChange = { on -> onUpdate { it.copy(otherChatsBanner = on) } },
+                        icon = Lucide.PanelTop,
+                    )
+                    Divider()
+                    SwitchRow(
+                        title = "Vibrate when another chat waits",
+                        detail = "A short buzz when another chat starts waiting on your approval or answer.",
+                        checked = settings.otherChatsVibrate,
+                        onCheckedChange = { on -> onUpdate { it.copy(otherChatsVibrate = on) } },
+                        icon = Lucide.Vibrate,
                     )
                     Divider()
                     SwitchRow(

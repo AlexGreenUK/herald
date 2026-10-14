@@ -18,8 +18,8 @@ import kotlinx.coroutines.launch
 /**
  * Notifies for the chats [SessionWatcher] follows: those running on the gateway that aren't open here,
  * turns started on Desktop or the CLI included. Same rules as [ChatNotifier] for the open chat: a heads-up
- * for each approval or question, the reply when a turn ends, posted only while the app is out of sight and
- * only as the settings allow. The open chat and bot chats are left to their own notifiers.
+ * for each approval or question, the reply when a turn ends, posted only while the app is out of sight (or,
+ * with "Notify for other chats while Herald is open", in sight too) and only as the settings allow. The open chat and bot chats are left to their own notifiers.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class WatchNotifier(
@@ -43,11 +43,13 @@ class WatchNotifier(
             // would notify for it, and only once Herald has stayed out of sight a while: a quick switch to another
             // app attaches nothing. A request asked meanwhile still comes with the attach. Read again on each
             // change, so permission granted in system settings counts on the way back.
+            // In sight with notifications for other chats on, they're attached at once: the user is there to see them.
             combine(visibility.visible, settings.settings) { visible, prefs ->
                 val wants = prefs ?: AppSettings()
-                !visible && (wants.notifyRequests || wants.notifyReplies) && notifications.canPost
-            }.transformLatest { on ->
-                if (on) delay(FOLLOW_AFTER_MS)
+                val on = (!visible || wants.notifyOtherChatsInApp) && (wants.notifyRequests || wants.notifyReplies) && notifications.canPost
+                on to visible
+            }.transformLatest { (on, visible) ->
+                if (on && !visible) delay(FOLLOW_AFTER_MS)
                 emit(on)
             }.collect(watcher::follow)
         }
@@ -63,7 +65,7 @@ class WatchNotifier(
                     val open = openChat()
                     val side = host.sideChats.value
                     val waiting = chats.values.filter { it.storedId != open && it.storedId !in side && bots.botWithChat(it.storedId) == null }
-                    if (visible) {
+                    if (visible && !prefs.notifyOtherChatsInApp) {
                         notified.clear()
                     } else if (prefs.notifyRequests) {
                         for (chat in waiting) {
@@ -83,7 +85,7 @@ class WatchNotifier(
         scope.launch {
             watcher.turnEnds.collect { end ->
                 val prefs = settings.settings.value ?: AppSettings()
-                if (visibility.visible.value || !prefs.notifyReplies) return@collect
+                if (visibility.visible.value && !prefs.notifyOtherChatsInApp || !prefs.notifyReplies) return@collect
                 if (end.outcome == TurnOutcome.Interrupted || end.storedId == openChat() || end.storedId in host.sideChats.value) return@collect
                 if (bots.botWithChat(end.storedId) != null) return@collect
                 // A room member's turn: its reply is the room's line, which RoomNotifier tells.
