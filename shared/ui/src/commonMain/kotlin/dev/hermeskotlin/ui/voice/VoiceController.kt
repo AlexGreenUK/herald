@@ -590,8 +590,8 @@ private val VENDOR_MESSAGE = Regex(""""message"\s*:\s*"((?:[^"\\]|\\.)*)"""")
  * `url='wss://…?TrustedClientToken=…'` and all, which fills the screen and puts tokens on it.
  */
 internal fun briefError(message: String): String {
-    if (message.isBlank()) return message.trim()
-    val brief = message.lineSequence().map(::briefLine).firstOrNull { it.isNotEmpty() } ?: return VOICE_FAILED
+    val brief = message.lineSequence().map { briefLine(it.take(LINE_MAX)) }.firstOrNull { it.isNotEmpty() }
+        ?: return VOICE_FAILED
     if (brief.length <= BRIEF_MAX) return brief
     // Not between the halves of an emoji.
     val cut = if (brief[BRIEF_MAX - 2].isHighSurrogate()) BRIEF_MAX - 2 else BRIEF_MAX - 1
@@ -599,30 +599,54 @@ internal fun briefError(message: String): String {
 }
 
 private fun briefLine(line: String): String = line.replace(URL_ARGUMENT, "")
-    // The address says what couldn't be reached; its query, fragment and sign-in are where keys and tokens ride.
-    .replace(ADDRESS, "$1$2")
-    .replace(PATH_QUERY, "$1")
+    .replace(WORD) { bareAddress(it.value) }
     .replace(SPACES, " ").trim().trimEnd(',', ';', ':').trimEnd()
 
 /**
+ * [word] with its address cut to the scheme, host and path: the query, fragment and sign-in are where keys and
+ * tokens ride. A bare path, as in `GET /v1/speech?key=…`, loses a query that sets something. The punctuation
+ * that closes a sentence or a bracket stays.
+ */
+private fun bareAddress(word: String): String {
+    val body = word.trimEnd { it in CLOSERS }
+    val tail = word.substring(body.length)
+    val scheme = SCHEME.find(body)
+    if (scheme == null) {
+        val query = body.indexOfFirst { it == '?' || it == '#' }
+        val setsSomething = query >= 0 && PATH_START.containsMatchIn(body) && '=' in body.substring(query)
+        return if (setsSomething) body.take(query) + tail else word
+    }
+    var rest = body.substring(scheme.range.last + 1)
+    val slash = rest.indexOf('/').let { if (it < 0) rest.length else it }
+    val authority = rest.take(slash)
+    val password = authority.substringAfter(':', "")
+    rest = when {
+        '@' in authority -> rest.substring(authority.lastIndexOf('@') + 1)
+        // A `/` in the password, as in `user:p/ss@host`: anything up to the `@` could be it. A port is digits.
+        password.isNotEmpty() && !password.all(Char::isDigit) && rest.indexOf('@', slash) >= 0 ->
+            rest.substring(rest.indexOf('@', slash) + 1)
+        else -> rest
+    }
+    val query = rest.indexOfFirst { it == '?' || it == '#' }
+    return body.take(scheme.range.last + 1) + (if (query < 0) rest else rest.take(query)) + tail
+}
+
+/**
  * Python's `url='…'`, `url=URL('…')` or `url=…` (also `base_url=` and the like), as aiohttp, yarl and httpx put
- * it in their errors; not "url = " in prose. An unquoted one runs to the next space, short of what closes it.
+ * it in their errors; not "url = " in prose. A quoted one runs on past a quote inside it, to the last before a
+ * space; an unquoted one runs to the next space.
  */
 private val URL_ARGUMENT = Regex(
-    """[,;]?\s*\b(?:\w+_)?url\s*=\s*(?:URL\((?:'[^']*'|"[^"]*")\)|'[^']*'|"[^"]*")""" +
-        """|[,;]?\s*\b(?:\w+_)?url=\S+?(?=[,;)]*(?:\s|$))""",
+    """[,;]?\s*\b(?:\w+_)?url\s*=\s*(?:URL\()?(?:'[^']*'(?:[^\s']*')*|"[^"]*"(?:[^\s"]*")*)\)?""" +
+        """|[,;]?\s*\b(?:\w+_)?url=\S+""",
     RegexOption.IGNORE_CASE,
 )
-/**
- * An address: its scheme ($1), sign-in, host and path ($2), then its query or fragment. The path ends where a
- * sentence closes it; a query runs on to the next space or quote, short of the punctuation that ends a sentence.
- */
-private val ADDRESS = Regex(
-    """\b([a-z][a-z0-9+.-]*://)(?:[^\s'"/@]*@)?([^\s'"()<>,?#]*)(?:[?#][^\s'"]*?(?=[).,;:]*(?:[\s'"]|$)))?""",
-    RegexOption.IGNORE_CASE,
-)
-/** A bare path's query, as in `GET /v1/speech?key=…`. */
-private val PATH_QUERY = Regex("""(?<![\w/:.])(/[^\s'"?#]*)[?#][^\s'"]*?(?=[).,;:]*(?:[\s'"]|$))""")
+private val WORD = Regex("""\S+""")
+private val SCHEME = Regex("""\b[a-z][a-z0-9+.-]*://""", RegexOption.IGNORE_CASE)
+private val PATH_START = Regex("""^[('"\[<]*/""")
+private const val CLOSERS = ").,;:'\"]>"
 private val SPACES = Regex("""\s{2,}""")
+/** Past this, a line is long enough to cut before it's searched. */
+private const val LINE_MAX = 2_000
 private const val BRIEF_MAX = 200
 private const val VOICE_FAILED = "The voice service failed."

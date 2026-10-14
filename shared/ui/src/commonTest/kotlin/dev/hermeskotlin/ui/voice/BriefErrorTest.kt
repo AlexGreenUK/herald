@@ -81,6 +81,44 @@ class BriefErrorTest {
     }
 
     @Test
+    fun aPathWithCommasOrBracketsStillLosesItsQuery() {
+        assertEquals("Look: http://x.example.com/a,b", briefError("Look: http://x.example.com/a,b?token=SECRET"))
+        assertEquals("Look: http://x.example.com/a(b)", briefError("Look: http://x.example.com/a(b)?token=SECRET"))
+    }
+
+    @Test
+    fun aPasswordWithAnAtOrASlashGoesWhole() {
+        assertEquals("Failed: https://host.example.com/v1", briefError("Failed: https://user:p@ss@host.example.com/v1"))
+        assertEquals("Failed: https://host.example.com/v1", briefError("Failed: https://user:p/ss@host.example.com/v1"))
+        assertEquals("Failed: http://host.example.com:8080/v1", briefError("Failed: http://host.example.com:8080/v1?k=S"))
+        assertEquals("Failed: http://[::1]:8080/p", briefError("Failed: http://[::1]:8080/p?token=S"))
+    }
+
+    @Test
+    fun aQuoteInsideAQueryDoesntEndIt() {
+        assertEquals("Failed: https://host.example.com/v1 more", briefError("Failed: https://host.example.com/v1?key=SEC'RET more"))
+        assertEquals("403", briefError("403, url='wss://h.example.com/s?t=SEC'RET'"))
+    }
+
+    @Test
+    fun aQuestionAfterAPathIsntAQuery() {
+        assertEquals("Is it in /tmp/x? Yes", briefError("Is it in /tmp/x? Yes"))
+        assertEquals("Path /a/b#3 failed", briefError("Path /a/b#3 failed"))
+    }
+
+    @Test
+    fun aBlankErrorStillSaysSomething() {
+        assertEquals("The voice service failed.", briefError("  \n "))
+    }
+
+    @Test
+    fun aLongRunOfPunctuationIsQuick() {
+        val brief = briefError("https://h.example.com/?" + ")".repeat(50_000) + "x " + "url=" + "a".repeat(50_000))
+
+        assertTrue(brief.startsWith("https://h.example.com/)") && '?' !in brief, brief)
+    }
+
+    @Test
     fun otherSchemesAndBarePathsLoseTheirQueryToo() {
         assertEquals("Failed: rtsp://cam.example.com/live", briefError("Failed: rtsp://cam.example.com/live?token=X"))
         assertEquals("404 on GET /v1/speech", briefError("404 on GET /v1/speech?TrustedClientToken=X"))
