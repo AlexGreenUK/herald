@@ -24,6 +24,7 @@ import dev.hermeskotlin.core.chat.LastChatStore
 import dev.hermeskotlin.core.connection.ConnectionState
 import dev.hermeskotlin.core.connection.GatewayConnection
 import dev.hermeskotlin.core.gateway.SavedGateway
+import dev.hermeskotlin.core.media.GatewayFile
 import dev.hermeskotlin.core.media.MediaApi
 import dev.hermeskotlin.core.network.ApiResult
 import dev.hermeskotlin.core.models.ModelCatalog
@@ -664,6 +665,29 @@ class ChatViewModel(
         return result
     }
 
+    /**
+     * The start of a gateway file a reply linked to, for its preview drawer; the reason in plain words
+     * when the gateway won't hand it over.
+     */
+    suspend fun previewFile(file: GatewayFile): FileLoad {
+        val gateway = target?.gateway?.gatewayUrl ?: return FileLoad.Failed("Not connected to a gateway.")
+        return when (val result = media.readText(gateway, file.path, target?.profile)) {
+            is ApiResult.Success -> FileLoad.Ready(result.value)
+            else -> FileLoad.Failed(fileError(result))
+        }
+    }
+
+    /** A whole gateway file a reply linked to, for Save and Share; cached like the chat's other media. */
+    suspend fun downloadFile(file: GatewayFile): ByteArray? {
+        val key = "fs:${target?.profile.orEmpty()}:${file.path}"
+        mediaCache[key]?.let { return it }
+        val gateway = target?.gateway?.gatewayUrl ?: return null
+        val bytes = (media.download(gateway, file.path, target?.profile) as? ApiResult.Success)?.value ?: return null
+        if (mediaCache.size >= MAX_CACHED_MEDIA) mediaCache.remove(mediaCache.keys.first())
+        mediaCache[key] = bytes
+        return bytes
+    }
+
     /** Adds picked files to the composer tray, up to [OutgoingAttachment.MAX_COUNT]. */
     fun addAttachments(picked: List<OutgoingAttachment>) {
         val room = OutgoingAttachment.MAX_COUNT - _attachments.value.size
@@ -1195,4 +1219,22 @@ class ChatViewModel(
         /** How long the Call Hermes shortcut waits for the gateway (a cold start connects in a few seconds). */
         const val VOICE_CONNECT_WAIT_MS = 30_000L
     }
+}
+
+/** Why a gateway file couldn't be read, in the words the preview drawer shows. */
+internal fun fileError(result: ApiResult<*>): String = when (result) {
+    is ApiResult.Failed -> when (result.status) {
+        404 -> "It isn't on the gateway, or it has moved since the reply was written."
+        403 -> if (result.message.contains("sensitive", ignoreCase = true)) {
+            "The gateway keeps files like this one private."
+        } else {
+            "The gateway won't share it: ${result.message.trimEnd('.')}."
+        }
+        413 -> "It's too large for the gateway to preview. Save still gets it."
+        else -> result.message.trimEnd('.') + "."
+    }
+    ApiResult.SessionExpired -> "Sign in again to open files."
+    ApiResult.RateLimited -> "The gateway is busy. Try again in a moment."
+    is ApiResult.Unavailable -> "Couldn't reach the gateway."
+    else -> "Couldn't open it."
 }

@@ -1,0 +1,476 @@
+package dev.hermeskotlin.ui.chat
+
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalClipboard
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.min
+import com.composables.icons.lucide.Braces
+import com.composables.icons.lucide.Check
+import com.composables.icons.lucide.Copy
+import com.composables.icons.lucide.Download
+import com.composables.icons.lucide.File
+import com.composables.icons.lucide.FileCode
+import com.composables.icons.lucide.FileImage
+import com.composables.icons.lucide.FileSpreadsheet
+import com.composables.icons.lucide.FileText
+import com.composables.icons.lucide.FileWarning
+import com.composables.icons.lucide.Lucide
+import com.composables.icons.lucide.Share2
+import com.composables.icons.lucide.WrapText
+import com.composeunstyled.Text
+import com.composeunstyled.UnstyledIcon
+import com.composeunstyled.theme.Theme
+import dev.hermeskotlin.core.media.DelimitedTable
+import dev.hermeskotlin.core.media.FileText
+import dev.hermeskotlin.core.media.GatewayFile
+import dev.hermeskotlin.core.media.GatewayFileKind
+import dev.hermeskotlin.core.media.parseDelimited
+import dev.hermeskotlin.core.media.prettyJson
+import dev.hermeskotlin.designsystem.accent
+import dev.hermeskotlin.designsystem.accentSoft
+import dev.hermeskotlin.designsystem.accentText
+import dev.hermeskotlin.designsystem.bodySmall
+import dev.hermeskotlin.designsystem.caption
+import dev.hermeskotlin.designsystem.code
+import dev.hermeskotlin.designsystem.colors
+import dev.hermeskotlin.designsystem.components.BottomSheet
+import dev.hermeskotlin.designsystem.components.Button
+import dev.hermeskotlin.designsystem.components.ButtonSize
+import dev.hermeskotlin.designsystem.components.ButtonVariant
+import dev.hermeskotlin.designsystem.components.CodeView
+import dev.hermeskotlin.designsystem.components.IconButton
+import dev.hermeskotlin.designsystem.components.MarkdownText
+import dev.hermeskotlin.designsystem.components.SegmentedControl
+import dev.hermeskotlin.designsystem.components.Spinner
+import dev.hermeskotlin.designsystem.components.plainTextClipEntry
+import dev.hermeskotlin.designsystem.danger
+import dev.hermeskotlin.designsystem.dangerSoft
+import dev.hermeskotlin.designsystem.label
+import dev.hermeskotlin.designsystem.radii
+import dev.hermeskotlin.designsystem.radiusMedium
+import dev.hermeskotlin.designsystem.stroke
+import dev.hermeskotlin.designsystem.success
+import dev.hermeskotlin.designsystem.successSoft
+import dev.hermeskotlin.designsystem.surface
+import dev.hermeskotlin.designsystem.surface2
+import dev.hermeskotlin.designsystem.text as textColor
+import dev.hermeskotlin.designsystem.textSecondary
+import dev.hermeskotlin.designsystem.textTertiary
+import dev.hermeskotlin.designsystem.title
+import dev.hermeskotlin.designsystem.typography
+import dev.hermeskotlin.designsystem.warning
+import dev.hermeskotlin.designsystem.warningSoft
+import dev.hermeskotlin.designsystem.well
+import kotlinx.coroutines.launch
+
+/** Where a file preview stands: loading, its text, or why it can't be shown. */
+sealed interface FileLoad {
+    data object Loading : FileLoad
+
+    data class Ready(val text: FileText) : FileLoad
+
+    data class Failed(val message: String) : FileLoad
+}
+
+/**
+ * A file on the gateway that a reply linked to, opened in a drawer: Markdown rendered, JSON indented,
+ * CSV and TSV as a table, code and text with line numbers, scrolled both ways. Save and Share fetch the
+ * whole file; the preview only reads the start the gateway hands out. A file with nothing to show
+ * (a PDF, an archive, a file the gateway calls binary) gets a card with Save and Share.
+ */
+@Composable
+internal fun FilePreviewSheet(
+    file: GatewayFile?,
+    onDismiss: () -> Unit,
+    load: suspend (GatewayFile) -> FileLoad,
+    download: suspend (GatewayFile) -> ByteArray?,
+    /** A preview set up beforehand, for screenshots; the sheet loads nothing then. */
+    preset: FileLoad? = null,
+) {
+    // The last file stays while the sheet slides away.
+    var shown by remember { mutableStateOf(file) }
+    if (file != null) shown = file
+    BottomSheet(visible = file != null, onDismiss = onDismiss) {
+        val current = shown ?: return@BottomSheet
+        FilePreviewContent(current, load, download, preset)
+    }
+}
+
+@Composable
+private fun FilePreviewContent(
+    file: GatewayFile,
+    load: suspend (GatewayFile) -> FileLoad,
+    download: suspend (GatewayFile) -> ByteArray?,
+    preset: FileLoad?,
+) {
+    val kind = file.kind
+    val result by produceState(preset ?: if (kind.previewable) FileLoad.Loading else null, file, preset) {
+        if (preset == null && kind.previewable) value = load(file)
+    }
+    val ready = (result as? FileLoad.Ready)?.text?.takeUnless { it.binary }
+    var wrap by remember(file) { mutableStateOf(false) }
+    var raw by remember(file) { mutableStateOf(false) }
+    val actions = rememberMediaActions()
+    val scope = rememberCoroutineScope()
+    var busy by remember(file) { mutableStateOf(false) }
+    var notice by remember(file) { mutableStateOf<Notice?>(null) }
+    val clipboard = LocalClipboard.current
+    var copied by remember(file) { mutableStateOf(false) }
+
+    fun withBytes(action: suspend (ByteArray) -> Unit) {
+        if (busy) return
+        busy = true
+        scope.launch {
+            val bytes = download(file)
+            if (bytes == null) notice = Notice("Couldn't get ${file.name} from the gateway.", error = true) else action(bytes)
+            busy = false
+        }
+    }
+
+    val windowHeight = with(LocalDensity.current) { LocalWindowInfo.current.containerSize.height.toDp() }
+    val tall = min(windowHeight * 0.68f, 760.dp).coerceAtLeast(260.dp)
+    // Nothing to read: the reason needs only a short drawer.
+    val bodyHeight = if (result is FileLoad.Failed || result is FileLoad.Ready && ready == null || result == null) 300.dp else tall
+    val textual = ready != null && kind != GatewayFileKind.Markdown && kind != GatewayFileKind.Table || ready != null && raw
+
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth().padding(start = 18.dp, end = 8.dp, top = 2.dp, bottom = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            KindTile(kind)
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    file.name,
+                    style = Theme[typography][title].copy(fontWeight = FontWeight.SemiBold),
+                    color = Theme[colors][textColor],
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.semantics { heading() },
+                )
+                Text(
+                    listOfNotNull(
+                        file.folder.ifEmpty { "/" },
+                        ready?.byteSize?.let(::formatBytes),
+                        file.line?.let { "line $it" },
+                    ).joinToString(" · "),
+                    style = Theme[typography][caption],
+                    color = Theme[colors][textTertiary],
+                    maxLines = 1,
+                    overflow = TextOverflow.MiddleEllipsis,
+                )
+            }
+            if (busy) {
+                Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) { Spinner(Modifier.size(18.dp)) }
+            } else {
+                IconButton(Lucide.Download, contentDescription = "Save ${file.name}", onClick = {
+                    withBytes { notice = Notice(actions.save(it, file.name)) }
+                })
+                IconButton(Lucide.Share2, contentDescription = "Share ${file.name}", onClick = { withBytes { actions.share(it, file.name) } })
+            }
+        }
+
+        // A toolbar for what the text can do: view as rendered or source, wrap, copy.
+        if (ready != null) {
+            Row(
+                Modifier.fillMaxWidth().padding(start = 14.dp, end = 10.dp, bottom = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                if (kind == GatewayFileKind.Markdown || kind == GatewayFileKind.Table || kind == GatewayFileKind.Json) {
+                    SegmentedControl(
+                        options = listOf(false, true),
+                        selected = raw,
+                        onSelect = { raw = it },
+                        optionLabel = { if (it) "Source" else if (kind == GatewayFileKind.Json) "Formatted" else "Preview" },
+                        optionIcon = { if (it) Lucide.FileCode else kindIcon(kind) },
+                    )
+                }
+                Spacer(Modifier.weight(1f))
+                if (textual) {
+                    IconButton(
+                        Lucide.WrapText,
+                        contentDescription = if (wrap) "Don't wrap lines" else "Wrap lines",
+                        onClick = { wrap = !wrap },
+                        tint = if (wrap) Theme[colors][accentText] else Theme[colors][textSecondary],
+                        containerColor = if (wrap) Theme[colors][accentSoft] else Color.Transparent,
+                    )
+                }
+                IconButton(
+                    if (copied) Lucide.Check else Lucide.Copy,
+                    contentDescription = "Copy the text",
+                    onClick = {
+                        scope.launch {
+                            clipboard.setClipEntry(plainTextClipEntry(ready.text))
+                            copied = true
+                            kotlinx.coroutines.delay(1_500)
+                            copied = false
+                        }
+                    },
+                    tint = if (copied) Theme[colors][success] else Theme[colors][textSecondary],
+                )
+            }
+        }
+
+        notice?.let { NoticeLine(it) }
+        if (ready?.truncated == true) {
+            Banner(
+                "Showing the first ${formatBytes(ready.text.encodeToByteArray().size.toLong())} of ${formatBytes(ready.byteSize)}. Save gets the whole file.",
+                tint = Theme[colors][warning],
+                background = Theme[colors][warningSoft],
+            )
+        }
+
+        Box(Modifier.fillMaxWidth().height(bodyHeight).padding(horizontal = 12.dp)) {
+            AnimatedContent(result, transitionSpec = { fadeIn() togetherWith fadeOut() }, contentKey = { it?.let { r -> r::class } }) { state ->
+                when {
+                    state == FileLoad.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Spinner() }
+                    state is FileLoad.Failed -> Unavailable(file, kind, state.message, onSave = { withBytes { notice = Notice(actions.save(it, file.name)) } })
+                    ready == null -> Unavailable(file, kind, null, onSave = { withBytes { notice = Notice(actions.save(it, file.name)) } }, onShare = {
+                        withBytes { actions.share(it, file.name) }
+                    })
+                    else -> FileBody(file, kind, ready, raw = raw, wrap = wrap)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FileBody(file: GatewayFile, kind: GatewayFileKind, text: FileText, raw: Boolean, wrap: Boolean) {
+    val shape = RoundedCornerShape(Theme[radii][radiusMedium])
+    val framed = Modifier.fillMaxSize().clip(shape).background(Theme[colors][well]).border(1.dp, Theme[colors][stroke], shape)
+    when {
+        kind == GatewayFileKind.Markdown && !raw -> Box(framed.background(Theme[colors][surface])) {
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp)) {
+                SelectionContainer { MarkdownText(text.text) }
+            }
+        }
+        kind == GatewayFileKind.Table && !raw -> {
+            val delimiter = if (file.extension == "tsv") '\t' else ','
+            val table = remember(text) { parseDelimited(text.text, delimiter, truncated = text.truncated) }
+            DataTable(table, framed)
+        }
+        else -> {
+            val shown = if (kind == GatewayFileKind.Json && !raw && !text.truncated) remember(text) { prettyJson(text.text) } ?: text.text else text.text
+            CodeView(
+                shown,
+                language = text.language ?: languageOf(file),
+                modifier = framed.padding(vertical = 10.dp),
+                focusLine = file.line.takeIf { shown === text.text },
+                wrap = wrap,
+            )
+        }
+    }
+}
+
+/** A CSV or TSV file as a grid: the first row as the header, columns as wide as their cells (within reason). */
+@Composable
+private fun DataTable(table: DelimitedTable, modifier: Modifier) {
+    if (table.rows.isEmpty()) {
+        Box(modifier, contentAlignment = Alignment.Center) {
+            Text("The file is empty.", style = Theme[typography][bodySmall], color = Theme[colors][textTertiary])
+        }
+        return
+    }
+    val style = Theme[typography][bodySmall].copy(color = Theme[colors][textColor])
+    val headerStyle = style.copy(fontWeight = FontWeight.SemiBold)
+    val measurer = rememberTextMeasurer()
+    val density = LocalDensity.current
+    val charWidth = remember(style, density) { with(density) { measurer.measure("Ab0-.Mw1 x", style).size.width.toDp() / 10 } }
+    val widths: List<Dp> = remember(table, charWidth) {
+        (0 until table.columns).map { column ->
+            val longest = table.rows.take(200).maxOf { it.getOrNull(column)?.length ?: 0 }
+            charWidth * longest.coerceIn(3, 32) * 1.2f + 32.dp
+        }
+    }
+    val numberWidth = charWidth * table.rows.size.toString().length + 20.dp
+    val lineColor = Theme[colors][stroke]
+    Column(modifier) {
+        Box(Modifier.weight(1f).horizontalScroll(rememberScrollState())) {
+            LazyColumn(Modifier.width(numberWidth + widths.fold(0.dp) { sum, w -> sum + w })) {
+                itemsIndexed(table.rows) { index, row ->
+                    val header = index == 0
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .background(if (header) Theme[colors][surface2] else if (index % 2 == 0) Theme[colors][surface] else Color.Transparent),
+                    ) {
+                        Text(
+                            if (header) "" else index.toString(),
+                            style = Theme[typography][caption],
+                            color = Theme[colors][textTertiary],
+                            modifier = Modifier.width(numberWidth).padding(horizontal = 10.dp, vertical = 8.dp),
+                        )
+                        widths.forEachIndexed { column, width ->
+                            Text(
+                                row.getOrNull(column).orEmpty(),
+                                style = if (header) headerStyle else style,
+                                maxLines = if (header) 2 else 3,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.width(width).padding(horizontal = 12.dp, vertical = 8.dp),
+                            )
+                        }
+                    }
+                    Box(Modifier.fillMaxWidth().height(1.dp).background(lineColor))
+                }
+            }
+        }
+        Text(
+            buildString {
+                append("${table.rows.size - 1} rows · ${table.columns} columns")
+                if (table.more) append(" · more in the full file")
+            },
+            style = Theme[typography][caption],
+            color = Theme[colors][textTertiary],
+            modifier = Modifier.fillMaxWidth().background(Theme[colors][surface2]).padding(horizontal = 12.dp, vertical = 8.dp),
+        )
+    }
+}
+
+/** No preview: why, and Save / Share so the file can still be had. */
+@Composable
+private fun Unavailable(file: GatewayFile, kind: GatewayFileKind, error: String?, onSave: () -> Unit, onShare: (() -> Unit)? = null) {
+    Column(
+        Modifier.fillMaxSize().padding(horizontal = 24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        val tint = if (error != null) Theme[colors][danger] else Theme[colors][accent]
+        Box(
+            Modifier.size(64.dp).background(if (error != null) Theme[colors][dangerSoft] else Theme[colors][accentSoft], RoundedCornerShape(20.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            UnstyledIcon(if (error != null) Lucide.FileWarning else kindIcon(kind), contentDescription = null, tint = tint, modifier = Modifier.size(28.dp))
+        }
+        Spacer(Modifier.height(16.dp))
+        Text(
+            if (error != null) "Couldn't open ${file.name}" else "No preview for ${file.extension.uppercase().ifEmpty { "this" }} files",
+            style = Theme[typography][label],
+            color = Theme[colors][textColor],
+        )
+        Spacer(Modifier.height(6.dp))
+        Text(
+            error ?: "Save it to the phone, or share it to an app that opens it.",
+            style = Theme[typography][bodySmall],
+            color = Theme[colors][textTertiary],
+            textAlign = TextAlign.Center,
+        )
+        if (error == null && onShare != null) {
+            Spacer(Modifier.height(20.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Button("Save", onClick = onSave, leadingIcon = Lucide.Download, size = ButtonSize.Small)
+                Button("Share", onClick = onShare, leadingIcon = Lucide.Share2, variant = ButtonVariant.Secondary, size = ButtonSize.Small)
+            }
+        }
+    }
+}
+
+private class Notice(val text: String, val error: Boolean = false)
+
+@Composable
+private fun NoticeLine(notice: Notice) = Banner(
+    notice.text,
+    tint = if (notice.error) Theme[colors][danger] else Theme[colors][success],
+    background = if (notice.error) Theme[colors][dangerSoft] else Theme[colors][successSoft],
+)
+
+@Composable
+private fun Banner(text: String, tint: Color, background: Color) {
+    Text(
+        text,
+        style = Theme[typography][caption],
+        color = tint,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 12.dp, end = 12.dp, bottom = 10.dp)
+            .background(background, RoundedCornerShape(Theme[radii][radiusMedium]))
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+    )
+}
+
+/** The file's type on a tinted tile, the way the drawer's header names it at a glance. */
+@Composable
+private fun KindTile(kind: GatewayFileKind) {
+    Box(
+        Modifier.size(44.dp).background(Theme[colors][accentSoft], RoundedCornerShape(13.dp)),
+        contentAlignment = Alignment.Center,
+    ) {
+        UnstyledIcon(kindIcon(kind), contentDescription = kind.label, tint = Theme[colors][accentText], modifier = Modifier.size(22.dp))
+    }
+}
+
+internal fun kindIcon(kind: GatewayFileKind): ImageVector = when (kind) {
+    GatewayFileKind.Markdown, GatewayFileKind.Text -> Lucide.FileText
+    GatewayFileKind.Json -> Lucide.Braces
+    GatewayFileKind.Table -> Lucide.FileSpreadsheet
+    GatewayFileKind.Code -> Lucide.FileCode
+    GatewayFileKind.Image -> Lucide.FileImage
+    GatewayFileKind.Other -> Lucide.File
+}
+
+/** The highlighter's name for a file the gateway gave no language for. */
+private fun languageOf(file: GatewayFile): String? = when (file.kind) {
+    GatewayFileKind.Json -> "json"
+    GatewayFileKind.Code -> file.extension.ifEmpty { file.name.lowercase() }
+    else -> null
+}
+
+/** 1.4 KB, 12 MB: one decimal under ten, none above. */
+internal fun formatBytes(bytes: Long): String {
+    if (bytes < 1024) return "$bytes B"
+    val units = listOf("KB", "MB", "GB")
+    var value = bytes / 1024.0
+    var unit = 0
+    while (value >= 1024 && unit < units.lastIndex) {
+        value /= 1024
+        unit++
+    }
+    val shown = if (value < 10) ((value * 10).toLong() / 10.0).toString().removeSuffix(".0") else value.toLong().toString()
+    return "$shown ${units[unit]}"
+}

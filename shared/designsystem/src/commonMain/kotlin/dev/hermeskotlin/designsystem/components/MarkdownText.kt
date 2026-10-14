@@ -91,6 +91,7 @@ import androidx.compose.foundation.text.InlineTextContent
 import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalDensity
@@ -194,7 +195,8 @@ fun MarkdownText(text: String, modifier: Modifier = Modifier, streaming: Boolean
     val annotator = markdownAnnotator(annotate = annotate)
     val inlineContent = remember(prepared, math, density) { DefaultMarkdownInlineContent(inlineFormulas(prepared, math, density)) }
     val parentUris = LocalUriHandler.current
-    val webOnly = remember(parentUris) { WebLinksOnly(parentUris) }
+    val fileLinks = LocalFileLinks.current
+    val webOnly = remember(parentUris, fileLinks) { WebLinksOnly(parentUris, fileLinks) }
     CompositionLocalProvider(LocalUriHandler provides webOnly, LocalStreaming provides streaming, LocalMathStyle provides math) {
         Markdown(
             content = prepared,
@@ -282,13 +284,20 @@ private fun DisplayFormula(formula: MathFormula, math: MathStyle) {
 }
 
 /**
- * Opens only web and mail links. The text may come from a page the agent read, so a link to an
- * `intent:`, `file:` or app scheme must not reach another app on a tap.
+ * Where a tapped link that isn't a web or mail link goes, a file path for instance: true when it was
+ * taken care of. Null (the default) leaves such links inert.
  */
-private class WebLinksOnly(private val parent: UriHandler) : UriHandler {
+val LocalFileLinks = staticCompositionLocalOf<((String) -> Boolean)?> { null }
+
+/**
+ * Opens only web and mail links. The text may come from a page the agent read, so a link to an
+ * `intent:`, `file:` or app scheme must not reach another app on a tap; [files] may still show it in
+ * the app (a path on the gateway, opened in a preview).
+ */
+private class WebLinksOnly(private val parent: UriHandler, private val files: ((String) -> Boolean)?) : UriHandler {
     override fun openUri(uri: String) {
         val scheme = uri.substringBefore(':', "").lowercase()
-        if (scheme in setOf("http", "https", "mailto")) runCatching { parent.openUri(uri) }
+        if (scheme in setOf("http", "https", "mailto")) runCatching { parent.openUri(uri) } else files?.invoke(uri)
     }
 }
 
