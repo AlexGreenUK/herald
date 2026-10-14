@@ -264,4 +264,28 @@ class InboxTest {
         assertEquals("", keepLineBreaks(""))
         assertEquals("one line", keepLineBreaks("one line"))
     }
+
+    @Test
+    fun noGroupCanBeNamedLikeTheOtherFolder() {
+        val groups = InboxGroups().add("RUBIX")
+        // "Other" is the folder of jobs in no group, and "null" reads as no group: either would make two folders one.
+        listOf("Other", " other ", "OTHER", "null", "Null").forEach { name ->
+            assertEquals(groups, groups.add(name), name)
+            assertEquals(groups, groups.rename("RUBIX", name), name)
+            assertEquals(InboxGroups.NameRefusal.Reserved, groups.refusal(name))
+        }
+        assertEquals(listOf("RUBIX", "Others"), groups.add("Others").names)
+    }
+
+    @Test
+    fun aGroupNameIsJudgedAsItIsKept() {
+        val long = "x".repeat(InboxGroups.MAX_NAME)
+        val groups = InboxGroups().add(long)
+        // Longer than a name keeps, it is the same name once cut, so it is taken.
+        assertEquals(InboxGroups.NameRefusal.Taken, groups.refusal(long + "yyy"))
+        assertEquals(groups, groups.add(long + "yyy"))
+        assertNull(groups.refusal(long, renaming = long))
+        assertEquals(InboxGroups.NameRefusal.Blank, groups.refusal("   "))
+        assertEquals(listOf("Bar"), InboxGroups().add("RUBIX").rename("RUBIX", "  Bar ").names)
+    }
 }

@@ -338,22 +338,36 @@ data class InboxGroups(
      * own name back.
      */
     fun renameJob(bot: String, job: String, name: String, own: String): InboxGroups {
-        val clean = name.trim().take(MAX_NAME)
+        val clean = cleanName(name)
         val key = jobKey(bot, job)
         return if (clean.isEmpty() || clean == own) copy(renamed = renamed - key) else copy(renamed = renamed + (key to clean))
     }
 
-    /** Adds a group called [name] (trimmed, at most [MAX_NAME]); a blank or taken name changes nothing. */
-    fun add(name: String): InboxGroups {
-        val clean = name.trim().take(MAX_NAME)
-        if (clean.isEmpty() || names.any { it.equals(clean, ignoreCase = true) } || names.size >= MAX_GROUPS) return this
-        return copy(names = names + clean)
+    /**
+     * Why [name] can't be a group's name (taken, or [reserved]), else null; [renaming] is the group being renamed,
+     * whose own name is free. The name is judged as [cleanName] would keep it.
+     */
+    fun refusal(name: String, renaming: String? = null): NameRefusal? {
+        val clean = cleanName(name)
+        return when {
+            clean.isEmpty() -> NameRefusal.Blank
+            reserved(clean) -> NameRefusal.Reserved
+            names.any { it != renaming && it.equals(clean, ignoreCase = true) } -> NameRefusal.Taken
+            renaming == null && names.size >= MAX_GROUPS -> NameRefusal.TooMany
+            else -> null
+        }
     }
 
-    /** Renames [from] to [to], keeping its jobs; a blank or taken name changes nothing. */
+    /** Adds a group called [name] (trimmed, at most [MAX_NAME]); a blank, taken or [reserved] name changes nothing. */
+    fun add(name: String): InboxGroups {
+        if (refusal(name) != null) return this
+        return copy(names = names + cleanName(name))
+    }
+
+    /** Renames [from] to [to], keeping its jobs; a blank, taken or [reserved] name changes nothing. */
     fun rename(from: String, to: String): InboxGroups {
-        val clean = to.trim().take(MAX_NAME)
-        if (clean.isEmpty() || from !in names || names.any { it != from && it.equals(clean, ignoreCase = true) }) return this
+        val clean = cleanName(to)
+        if (from !in names || refusal(to, renaming = from) != null) return this
         return copy(names = names.map { if (it == from) clean else it }, jobs = jobs.mapValues { if (it.value == from) clean else it.value })
     }
 
@@ -364,10 +378,25 @@ data class InboxGroups(
     fun assign(bot: String, job: String, group: String?): InboxGroups =
         if (group == null || group !in names) copy(jobs = jobs - jobKey(bot, job)) else copy(jobs = jobs + (jobKey(bot, job) to group))
 
+    /** Why a group name was turned down. */
+    enum class NameRefusal { Blank, Taken, Reserved, TooMany }
+
     companion object {
         const val MAX_NAME = 40
         const val MAX_GROUPS = 20
+
+        /** What the Inbox calls the jobs in no group: no group can be named so, or the two would be one. */
+        const val OTHER = "Other"
+
         fun jobKey(bot: String, job: String) = "$bot/$job"
+
+        /** A group or job name as kept: trimmed, at most [MAX_NAME] characters. */
+        fun cleanName(name: String): String = name.trim().take(MAX_NAME).trim()
+
+        /** Names a group can't take: the Other folder's, and `null`, which reads as no group at all. */
+        fun reserved(name: String): Boolean = RESERVED.any { it.equals(cleanName(name), ignoreCase = true) }
+
+        private val RESERVED = listOf(OTHER, "null")
     }
 }
 

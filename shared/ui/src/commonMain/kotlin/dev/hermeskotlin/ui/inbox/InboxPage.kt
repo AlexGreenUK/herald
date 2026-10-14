@@ -52,6 +52,8 @@ import dev.hermeskotlin.designsystem.components.SheetAction
 import dev.hermeskotlin.designsystem.components.SheetHeader
 import dev.hermeskotlin.designsystem.components.TextField
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.snapshotFlow
+import dev.hermeskotlin.core.inbox.InboxGroups
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -212,7 +214,7 @@ internal fun InboxView(state: InboxUiState, viewModel: InboxActions, onBack: () 
             contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 96.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            items(state.folders, key = { it.filter.toString() }) { folder ->
+            items(state.folders, key = { it.filter.key }) { folder ->
                 FolderCard(
                     folder,
                     newestName = state.nameOf(folder.newest),
@@ -569,7 +571,7 @@ internal fun GroupsView(state: InboxUiState, viewModel: InboxActions) {
     }
     GroupNameDialog(
         naming = naming,
-        taken = groups.names,
+        groups = groups,
         onDismiss = { naming = null },
         onSave = { from, to ->
             if (from == null) viewModel.addGroup(to) else viewModel.renameGroup(from, to)
@@ -619,14 +621,24 @@ private fun RenameJobDialog(chip: JobChip?, onDismiss: () -> Unit, onSave: (JobC
 private data class GroupNaming(val from: String?)
 
 @Composable
-private fun GroupNameDialog(naming: GroupNaming?, taken: List<String>, onDismiss: () -> Unit, onSave: (from: String?, to: String) -> Unit) {
+private fun GroupNameDialog(naming: GroupNaming?, groups: InboxGroups, onDismiss: () -> Unit, onSave: (from: String?, to: String) -> Unit) {
     var shown by remember { mutableStateOf(naming) }
     if (naming != null) shown = naming
     val n = shown ?: return
     val name = rememberTextFieldState(n.from.orEmpty())
     LaunchedEffect(naming) { if (naming != null) name.edit { replace(0, length, naming.from.orEmpty()) } }
-    val text = name.text.toString().trim()
-    val clash = taken.any { it != n.from && it.equals(text, ignoreCase = true) }
+    // At most what a group's name keeps, so what is checked is what is saved.
+    LaunchedEffect(name) {
+        snapshotFlow { name.text.length }.collect { if (it > InboxGroups.MAX_NAME) name.edit { replace(InboxGroups.MAX_NAME, length, "") } }
+    }
+    val text = InboxGroups.cleanName(name.text.toString())
+    val refusal = groups.refusal(text, renaming = n.from)
+    val error = when (refusal) {
+        InboxGroups.NameRefusal.Taken -> "There's a group with that name."
+        InboxGroups.NameRefusal.Reserved -> "\"${InboxGroups.OTHER}\" is the folder for jobs in no group: pick another name."
+        InboxGroups.NameRefusal.TooMany -> "That's the most groups there can be."
+        InboxGroups.NameRefusal.Blank, null -> null
+    }
     Dialog(
         visible = naming != null,
         onDismissRequest = onDismiss,
@@ -638,11 +650,11 @@ private fun GroupNameDialog(naming: GroupNaming?, taken: List<String>, onDismiss
                 if (n.from == null) "Create" else "Save",
                 onClick = { onSave(n.from, text) },
                 size = ButtonSize.Small,
-                enabled = text.isNotEmpty() && !clash,
+                enabled = refusal == null,
             )
         },
     ) {
-        TextField(name, placeholder = "Group name", error = if (clash) "There's a group with that name." else null)
+        TextField(name, placeholder = "Group name", error = error)
     }
 }
 
@@ -746,7 +758,8 @@ internal fun FollowView(state: InboxUiState, viewModel: InboxActions) {
             FailuresRow(state.following.failures, enabled = !state.saving, onChange = viewModel::setFailures)
         }
         item(key = "label") { DayLabel("Jobs") }
-        items(state.jobs, key = { it.id }) { job ->
+        // A job id is only unique in its profile's cron store.
+        items(state.jobs, key = { "${it.profile ?: "default"}/${it.id}" }) { job ->
             FollowRow(job, state.following.of(job.id), enabled = !state.saving) { viewModel.setFollow(job, it) }
         }
     }

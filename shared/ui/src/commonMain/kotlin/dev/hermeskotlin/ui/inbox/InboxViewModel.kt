@@ -40,6 +40,17 @@ sealed interface InboxFilter {
 
     /** A group the user made; [name] null is "Other", the jobs in no group. */
     data class Group(val name: String?) : InboxFilter
+
+    /** What names this filter in a list (a folder's or a chip's key): one per filter, whatever a group is called. */
+    val key: String get() = when (this) {
+        All -> "all"
+        Failed -> "failed"
+        is Job -> "job:$bot/$job"
+        is Group -> if (name == null) "other" else "group:$name"
+    }
+
+    /** This filter once the group [from] is called [to]: the group's own filter follows it. */
+    fun afterRename(from: String, to: String): InboxFilter = if (this is Group && name == from) Group(to) else this
 }
 
 /**
@@ -275,7 +286,13 @@ class InboxViewModel(
 
     override fun addGroup(name: String) = editGroups { it.add(name) }
 
-    override fun renameGroup(from: String, to: String) = editGroups { it.rename(from, to) }
+    override fun renameGroup(from: String, to: String) {
+        val groups = _state.value.groups
+        if (from !in groups.names || groups.refusal(to, renaming = from) != null) return
+        // The folder or chip open on that group stays open under its new name.
+        _state.update { it.copy(filter = it.filter.afterRename(from, InboxGroups.cleanName(to))) }
+        editGroups { it.rename(from, to) }
+    }
 
     override fun removeGroup(name: String) = editGroups { it.remove(name) }
 

@@ -117,4 +117,21 @@ class InboxFilterTest {
         assertFalse(state.copy(filter = InboxFilter.Job("default", "brief")).atFolders)
         assertFalse(state.copy(groups = InboxGroups(layout = InboxLayout.List)).atFolders)
     }
+
+    @Test
+    fun everyFilterHasAKeyOfItsOwnWhateverAGroupIsCalled() {
+        val filters = listOf(
+            InboxFilter.All, InboxFilter.Failed, InboxFilter.Group(null), InboxFilter.Group("null"), InboxFilter.Group("Other"),
+            InboxFilter.Job("default", "brief"), InboxFilter.Job("siaulietis", "brief"),
+        )
+        assertEquals(filters.size, filters.map { it.key }.toSet().size)
+    }
+
+    @Test
+    fun aRenamedGroupKeepsItsFilter() {
+        assertEquals(InboxFilter.Group("Bar"), InboxFilter.Group("RUBIX").afterRename("RUBIX", "Bar"))
+        assertEquals(InboxFilter.Group("Home"), InboxFilter.Group("Home").afterRename("RUBIX", "Bar"))
+        assertEquals(InboxFilter.Group(null), InboxFilter.Group(null).afterRename("RUBIX", "Bar"))
+        assertEquals(InboxFilter.All, InboxFilter.All.afterRename("RUBIX", "Bar"))
+    }
 }
