@@ -131,6 +131,8 @@ actual fun rememberDecodedImage(bytes: ByteArray, maxEdge: Int): DecodedImage {
     if (!isTiff(bytes)) return DecodedImage(rememberImageBitmap(bytes, maxEdge), decoding = false)
     // Herald's own TIFF decoder is plain Kotlin: a big picture would hold up the UI thread.
     return produceState(DecodedImage(null, decoding = true), bytes, maxEdge) {
+        // produceState keeps its last value across new keys: a different file starts at the spinner again.
+        value = DecodedImage(null, decoding = true)
         value = DecodedImage(withContext(Dispatchers.Default) { decodeUpright(bytes, maxEdge)?.asImageBitmap() }, decoding = false)
     }.value
 }
