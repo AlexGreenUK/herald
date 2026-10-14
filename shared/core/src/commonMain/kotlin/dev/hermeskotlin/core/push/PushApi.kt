@@ -249,7 +249,8 @@ class PushApi(private val connection: GatewayConnection) {
             it.isNotEmpty() && info?.ok == true && info.versionAtLeast(PLUGIN_VERSION)
         }?.let { rpc to it.toList() }
         // What's still old after the update, verified copy by copy: the refreshes it sets off needn't look again.
-        if (update && copies.isNotEmpty()) scannedBots = ScannedBots(rpc, pending.toList(), emptyList())
+        // Only after a look that saw every profile; else they look again, and say again which they couldn't.
+        if (update && copies.isNotEmpty() && scannedBots?.rpc === rpc) scannedBots = ScannedBots(rpc, pending.toList(), emptyList())
         if (changed) _updates.update { it + 1 }
         val detail = (failures + updateFailure?.second.orEmpty()).distinct().takeIf { it.isNotEmpty() }?.joinToString("\n")
         if (detail != null && (info == null || !info.ok || !info.versionAtLeast(minimum))) {
@@ -274,12 +275,14 @@ class PushApi(private val connection: GatewayConnection) {
 
     /**
      * Kept for the connection: push and phone tools both prepare on every connect, and each look is a call per
-     * profile, each a fraction of a second on the gateway, while every other prepare waits on the lock.
+     * profile, each a fraction of a second on the gateway, while every other prepare waits on the lock. Only a
+     * look that saw every profile is kept: one that failed somewhere (a timeout, say) is tried again.
      */
     private var scannedBots: ScannedBots? = null
 
     private suspend fun botCopies(rpc: JsonRpcClient, failures: MutableList<String>): List<BotCopy> {
-        val scan = scannedBots?.takeIf { it.rpc === rpc } ?: scanBots(rpc).also { scannedBots = it }
+        val scan = scannedBots?.takeIf { it.rpc === rpc }
+            ?: scanBots(rpc).also { scannedBots = it.takeIf { scan -> scan.failures.isEmpty() } }
         failures += scan.failures
         return scan.copies
     }

@@ -372,6 +372,24 @@ class PushSetupTest {
     }
 
     @Test
+    fun aLookThatFailedSomewhereIsTriedAgainNotKept() = runTest {
+        val s = setup(FakeKeys())
+        val gateway = FakeGateway(installed = true).apply {
+            profiles["flaky"] = Copy(PushApi.PLUGIN_VERSION)
+            failedChecks += "flaky"
+        }
+        connect(s, gateway)
+        s.setup.enable()
+        assertTrue(s.setup.status.value.detail.orEmpty().contains("flaky"))
+
+        // A timeout once isn't the gateway's state for the rest of the connection.
+        gateway.failedChecks.clear()
+        s.setup.enable()
+        assertNull(s.setup.status.value.detail)
+        assertNull(s.setup.status.value.update)
+    }
+
+    @Test
     fun aBotUpdateFailureNamesTheProfileAndDoesNotPreventOtherUpdates() = runTest {
         val s = setup(FakeKeys())
         val gateway = FakeGateway(installed = true).apply {
