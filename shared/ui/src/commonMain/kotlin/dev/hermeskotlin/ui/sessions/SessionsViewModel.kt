@@ -276,10 +276,16 @@ class SessionsViewModel(
         if (shown) refreshQuietly()
     }
 
-    /** The chat on screen now goes by [ids] (a bot's chat by both of its ids); its banner, if any, goes. */
+    /**
+     * The chat on screen now goes by [ids] (a bot's chat by both of its ids); its banner, if any, goes. It leaves
+     * the other chats at once, not after they settle, so the badge and Next don't send the user back to it.
+     */
     fun setOpenChat(ids: Set<String>) {
         openIds.value = ids
         _banner.update { event -> event?.takeUnless { it.chatId in ids } }
+        val others = OtherChats(_others.value.chats.filterKeys { it !in ids })
+        _others.value = others
+        _badge.value = watch.badge(others)
     }
 
     /** The bots' chats, from the roster, for the badge and the banner. */
@@ -296,7 +302,7 @@ class SessionsViewModel(
     }
 
     /** The next other chat needing the user: requests oldest first, then replies oldest first; null when none does. */
-    fun nextChat(): OtherChat? = watch.queue(_others.value).firstOrNull()
+    fun nextChat(): OtherChat? = watch.queue(_others.value).firstOrNull { it.id !in openIds.value }
 
     /**
      * How far the listed chat [id] had been read, taken before it counts as read now, as a sidebar tap does,

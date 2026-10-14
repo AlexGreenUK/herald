@@ -218,6 +218,20 @@ class OtherChatsViewModelTest {
     }
 
     @Test
+    fun openingTheChatTakesItsBannerAndBadgeAwayAtOnce() {
+        runTest(dispatcher) {
+            val vm = watching()
+            replyIn(vm, "b")
+            assertNotNull(vm.banner.value)
+            // Opened from the sidebar: no waiting for the next look, or Next would go back to it.
+            vm.setOpenChat(setOf("b"))
+            assertNull(vm.banner.value)
+            assertEquals(SessionsBadge(), vm.badge.value)
+            assertNull(vm.nextChat())
+        }
+    }
+
+    @Test
     fun anotherProfileOrGatewayClearsTheBannerAndTheBadge() {
         runTest(dispatcher) {
             val vm = watching()
