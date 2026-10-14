@@ -18,6 +18,52 @@ internal object FileSamples {
             FileLoad.Ready(FileText(MARKDOWN, 2_410, truncated = false, binary = false, language = "markdown"))
     }
 
+    val pdfFile = GatewayFile("/opt/data/out/trip-budget.pdf")
+
+    /** A two-page trip budget: a summary with a cost chart, then the fuel log. */
+    val pdf: ByteArray by lazy {
+        val (r, g, b) = Triple(0.20f, 0.45f, 0.85f)
+        val summary = pdfPage {
+            rect(0, 742, 612, 50, r, g, b)
+            text(56, 760, "Weekend drive: Los Angeles to Zion", size = 18, bold = true, gray = 1f)
+            text(56, 706, "Trip budget", size = 22, bold = true)
+            text(56, 684, "Two people, three nights, about 860 miles there and back.", gray = 0.35f)
+            line(56, 666, 556, 666)
+            val costs = listOf("Fuel" to 416, "Lodging" to 540, "Food" to 310, "Park pass" to 35, "Extras" to 120)
+            costs.forEachIndexed { i, (name, usd) ->
+                val y = 630 - i * 34
+                val width = usd * 340 / 540
+                text(56, y + 6, name, size = 12)
+                rect(150, y, width, 22, r, g, b)
+                text(150 + width + 8, y + 6, "$$usd", size = 12, bold = true)
+            }
+            line(56, 450, 556, 450)
+            text(56, 424, "Total", size = 14, bold = true)
+            text(490, 424, "$1,421", size = 14, bold = true)
+            text(56, 380, "Notes", size = 14, bold = true)
+            listOf(
+                "Fill up in Barstow: the stretch past Baker has few stations.",
+                "Lodging is two nights in Springdale and one in Las Vegas.",
+                "The park pass covers the car for seven days.",
+            ).forEachIndexed { i, note -> text(68, 356 - i * 20, "- $note", gray = 0.3f) }
+            text(56, 40, "Page 1 of 2", size = 9, gray = 0.5f)
+        }
+        val log = pdfPage {
+            text(56, 730, "Fuel log", size = 22, bold = true)
+            val xs = listOf(56, 156, 386, 476)
+            rect(50, 686, 512, 26, 0.93f, 0.94f, 0.96f)
+            listOf("Date", "Station", "Gallons", "Cost").forEachIndexed { i, heading -> text(xs[i], 695, heading, bold = true) }
+            CSV.lines().drop(1).filter { it.isNotBlank() }.forEachIndexed { row, entry ->
+                val cells = entry.split(',')
+                val y = 662 - row * 28
+                listOf(cells[0], cells[1], cells[2], "$" + cells[3]).forEachIndexed { i, cell -> text(xs[i], y, cell) }
+                line(56, y - 10, 556, y - 10, gray = 0.9f)
+            }
+            text(56, 40, "Page 2 of 2", size = 9, gray = 0.5f)
+        }
+        samplePdf(listOf(summary, log))
+    }
+
     private val MARKDOWN = """
         # Weekend drive: Los Angeles to Zion
 
