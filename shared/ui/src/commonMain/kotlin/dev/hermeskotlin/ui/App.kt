@@ -72,6 +72,7 @@ import dev.hermeskotlin.ui.update.LocalUpdateOffer
 import dev.hermeskotlin.ui.update.rememberUpdateOffer
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
+import dev.hermeskotlin.core.inbox.InboxLink
 import dev.hermeskotlin.core.inbox.InboxLinks
 import dev.hermeskotlin.core.rooms.RoomLinks
 import org.koin.compose.koinInject
@@ -279,10 +280,15 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
         if (openDesktopRoom != null && desktopRoom == null && !roster.loading) openDesktopRoom = null
     }
     // A room asked for from outside the screens (a tapped notification) opens over the chat.
+    // A tapped Inbox notification: the drawer opens here, then the sidebar takes the link and consumes it.
+    // Only one of them consumes, after the drawer has settled, so the opening isn't cut short.
     val inboxLinks = koinInject<InboxLinks>()
     val inboxLink by inboxLinks.pending.collectAsStateWithLifecycle()
+    var shownInboxLink by remember { mutableStateOf<InboxLink?>(null) }
     LaunchedEffect(inboxLink) {
-        if (inboxLink != null) sidebar.open()
+        val link = inboxLink ?: return@LaunchedEffect
+        sidebar.open()
+        shownInboxLink = link
     }
     val roomLinks = koinInject<RoomLinks>()
     val roomLink by roomLinks.pending.collectAsStateWithLifecycle()
@@ -364,6 +370,11 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
                     }
                 },
                 selectedRunning = chatState.running,
+                inboxLink = shownInboxLink,
+                onInboxLinkTaken = { link ->
+                    shownInboxLink = null
+                    inboxLinks.consume(link)
+                },
             )
         },
     ) {
