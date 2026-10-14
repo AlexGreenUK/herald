@@ -20,7 +20,7 @@ class MarkdownTypographyTest {
         text = TextStyle.Default,
         code = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 12.5.sp),
         inlineCode = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 12.5.sp),
-        quote = TextStyle.Default, paragraph = TextStyle.Default,
+        quote = TextStyle(color = Color.DarkGray), paragraph = TextStyle.Default,
         ordered = TextStyle.Default, bullet = TextStyle.Default, list = TextStyle.Default,
         textLink = TextLinkStyles(SpanStyle(color = Color.Blue)),
         table = TextStyle.Default,
@@ -30,9 +30,10 @@ class MarkdownTypographyTest {
     @Test
     fun compactTextAndHeadingsKeepTheReasoningSizeAndColor() {
         val compact = normal.withTextStyle(small)
-        for (style in listOf(compact.text, compact.paragraph, compact.ordered, compact.bullet, compact.list, compact.table, compact.quote)) {
+        for (style in listOf(compact.text, compact.paragraph, compact.ordered, compact.bullet, compact.list, compact.table)) {
             assertEquals(small, style)
         }
+        assertEquals(small.copy(color = Color.DarkGray), compact.quote)
         for (heading in listOf(compact.h1, compact.h2, compact.h3, compact.h4, compact.h5, compact.h6, compact.alertTitle)) {
             assertEquals(13.5.sp, heading.fontSize)
             assertEquals(19.5.sp, heading.lineHeight)

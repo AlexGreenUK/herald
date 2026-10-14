@@ -130,7 +130,8 @@ internal fun DefaultMarkdownTypography.withTextStyle(style: TextStyle?): Default
     return copy(
         h1 = heading, h2 = heading, h3 = heading, h4 = heading, h5 = heading, h6 = heading,
         text = style, paragraph = style, ordered = style, bullet = style, list = style, table = style,
-        quote = style, code = codeStyle,
+        // A quote keeps its own muted color so it still stands apart from the text around it.
+        quote = style.copy(color = quote.color), code = codeStyle,
         inlineCode = inlineCode.copy(fontSize = style.fontSize, lineHeight = style.lineHeight, color = style.color),
         alertTitle = heading,
     )
