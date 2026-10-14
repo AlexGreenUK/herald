@@ -34,6 +34,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
@@ -326,7 +327,12 @@ class VoiceController(
                         var format: SpeechStreamEvent.Start? = null
                         var playing = false
                         // A player that failed hears nothing more; the finished reply is read out instead.
-                        stream.events.takeWhile { !playFailed }.collect { event ->
+                        stream.events
+                            // A closed socket can end its events with a cancellation of its own (OkHttp's, #183):
+                            // the voice broke off, which isn't a skip. A real skip or the chat's end isn't caught.
+                            .catch { }
+                            .takeWhile { !playFailed }
+                            .collect { event ->
                             when (event) {
                                 is SpeechStreamEvent.Start -> format = event
                                 is SpeechStreamEvent.Audio -> {
@@ -359,7 +365,9 @@ class VoiceController(
             }
         } finally {
             speechJob = null
-            withContext(NonCancellable) { stream.close() }
+            // Closing a socket the gateway already closed can throw (OkHttp's own cancellation, #183); it would
+            // otherwise end the whole chat, silently, right after the reply.
+            withContext(NonCancellable) { runCatching { stream.close() } }
         }
         return when {
             skipped -> Voiced.Skipped
