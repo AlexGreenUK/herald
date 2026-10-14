@@ -1,6 +1,8 @@
 package dev.hermeskotlin.ui.inbox
 
 import dev.hermeskotlin.core.inbox.ChipMode
+import dev.hermeskotlin.core.inbox.InboxApi
+import dev.hermeskotlin.core.inbox.InboxPluginTooOld
 import dev.hermeskotlin.core.inbox.InboxGroups
 import dev.hermeskotlin.core.inbox.InboxLayout
 import dev.hermeskotlin.core.inbox.InboxRun
@@ -133,5 +135,16 @@ class InboxFilterTest {
         assertEquals(InboxFilter.Group("Home"), InboxFilter.Group("Home").afterRename("RUBIX", "Bar"))
         assertEquals(InboxFilter.Group(null), InboxFilter.Group(null).afterRename("RUBIX", "Bar"))
         assertEquals(InboxFilter.All, InboxFilter.All.afterRename("RUBIX", "Bar"))
+    }
+
+    @Test
+    fun aSaveErrorSaysWhatWentWrong() {
+        assertTrue(saveErrorText(InboxPluginTooOld(InboxApi.ALL_JOBS_PLUGIN_VERSION)).contains(InboxApi.ALL_JOBS_PLUGIN_VERSION))
+        assertTrue(saveErrorText(InboxPluginTooOld(InboxApi.MIN_PLUGIN_VERSION)).contains(InboxApi.TOO_OLD))
+        // Anything else is said as it is, not as an old plugin.
+        val offline = saveErrorText(IllegalStateException("Not connected to the gateway."))
+        assertTrue(offline.contains("Not connected"))
+        assertFalse(offline.contains(InboxApi.ALL_JOBS_PLUGIN_VERSION))
+        assertEquals("Couldn't save that.", saveErrorText(IllegalStateException()))
     }
 }

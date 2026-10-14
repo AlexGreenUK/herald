@@ -127,6 +127,13 @@ data class Following(val jobs: Map<String, Follow> = emptyMap(), val failures: B
 
     /** Every job set to [follow], new ones too: what was set per job is dropped. */
     fun all(follow: Follow): Following = copy(jobs = emptyMap(), default = follow)
+
+    /**
+     * Whether [saved], what the gateway answered a save of this with, says the same: a plugin that ignores part
+     * of a save (one before 0.4.1 drops `default`) answers with less than it was sent.
+     */
+    fun echoedBy(saved: Following): Boolean =
+        saved.default == default && saved.failures == failures && jobs.all { (job, follow) -> saved.of(job) == follow }
 }
 
 @Serializable
@@ -135,7 +142,8 @@ private data class FollowReply(
     val error: String? = null,
     val jobs: Map<String, String> = emptyMap(),
     val failures: Boolean = false,
-    val default: String = "off",
+    /** Absent from a plugin before 0.4.1, which has no default: every job not listed is off. */
+    val default: String? = null,
 )
 
 @Serializable
@@ -145,6 +153,15 @@ private data class InboxReply(val ok: Boolean = false, val error: String? = null
 private data class ReadReply(val ok: Boolean = false, val error: String? = null, val run: InboxRun? = null)
 
 /**
+ * The gateway's herald-push plugin is older than an Inbox call needs: [needs] is the oldest version that has it,
+ * [InboxApi.MIN_PLUGIN_VERSION] for the Inbox itself, [InboxApi.ALL_JOBS_PLUGIN_VERSION] for All on and jobs
+ * switched off.
+ */
+class InboxPluginTooOld(val needs: String) : Exception(
+    if (needs == InboxApi.MIN_PLUGIN_VERSION) InboxApi.TOO_OLD else "The gateway's herald-push plugin needs $needs for that.",
+)
+
+/**
  * The Inbox's side of the herald-push plugin (`/herald-push cron …`, from 0.4.0), over the dashboard socket. This
  * phone is named by its push registration's device id, so the Inbox needs Notifications anywhere on.
  */
@@ -152,20 +169,38 @@ class InboxApi(private val push: PushApi, private val keys: PushKeys) {
 
     suspend fun following(): Following = follow("following") {}
 
-    suspend fun setFollowing(following: Following): Following = follow("follow") {
-        putJsonObject("jobs") { following.jobs.forEach { (job, mode) -> put(job, mode.wire) } }
-        put("failures", following.failures)
-        // A plugin before 0.4.1 refuses "off" and a default: say them only when they matter.
-        if (following.default != Follow.Off) put("default", following.default.wire)
+    /**
+     * Saves what this phone follows and gives back what the gateway now has. A plugin that answers with less
+     * than it was sent (one before 0.4.1 ignores `default`, and refuses jobs set to off) is [InboxPluginTooOld].
+     */
+    suspend fun setFollowing(following: Following): Following {
+        val saved = runCatching {
+            follow("follow") {
+                putJsonObject("jobs") { following.jobs.forEach { (job, mode) -> put(job, mode.wire) } }
+                put("failures", following.failures)
+                // A plugin before 0.4.1 refuses "off" and a default: say them only when they matter.
+                if (following.default != Follow.Off) put("default", following.default.wire)
+            }
+        }.getOrElse { e ->
+            // 0.4.0's refusal of a job set to off.
+            if (e is RpcException && e.message.startsWith(REFUSES_OFF)) throw InboxPluginTooOld(ALL_JOBS_PLUGIN_VERSION)
+            throw e
+        }
+        if (!following.echoedBy(saved)) throw InboxPluginTooOld(ALL_JOBS_PLUGIN_VERSION)
+        return saved
     }
 
-    /** The runs this phone follows, newest first; [before] (unix seconds) pages back. */
-    suspend fun runs(limit: Int = 50, before: Long = 0): List<InboxRun> {
+    /**
+     * The runs this phone follows, newest first, at most [limit]; [before] (unix seconds) pages back to the runs
+     * that finished before it. Plugin 0.4.2 ends a page with every run of its last second, so asking again before
+     * the oldest run's time leaves none out; an older plugin may cut that second short.
+     */
+    suspend fun runs(limit: Int = PAGE, before: Long = 0): List<InboxRun> {
         val body = request {
             put("limit", limit)
             if (before > 0) put("before", before)
         }
-        val reply = decode(InboxReply.serializer(), push.cron("inbox $body"))
+        val reply = decode(InboxReply.serializer(), push.cron("inbox $body")) { it.ok to it.error }
         if (!reply.ok) throw RpcException(0, reply.error ?: "The gateway couldn't list the runs.")
         return reply.runs
     }
@@ -177,13 +212,16 @@ class InboxApi(private val push: PushApi, private val keys: PushKeys) {
             put("job", run.job)
             put("run", run.run)
         }
-        return decode(ReadReply.serializer(), push.cron("read $body")).run
+        val reply = decode(ReadReply.serializer(), push.cron("read $body")) { it.ok to it.error }
+        if (reply.ok) return reply.run
+        if (reply.error == NO_SUCH_RUN) return null
+        throw RpcException(0, reply.error ?: "The gateway couldn't read the run.")
     }
 
     private suspend fun follow(op: String, more: JsonObjectBuilder.() -> Unit): Following {
-        val reply = decode(FollowReply.serializer(), push.cron("$op ${request(more)}"))
+        val reply = decode(FollowReply.serializer(), push.cron("$op ${request(more)}")) { it.ok to it.error }
         if (!reply.ok) throw RpcException(0, reply.error ?: "The gateway refused.")
-        val default = Follow.of(reply.default)
+        val default = Follow.of(reply.default ?: Follow.Off.wire)
         return Following(reply.jobs.mapValues { Follow.of(it.value) }.filterValues { it != default }, reply.failures, default)
     }
 
@@ -192,11 +230,13 @@ class InboxApi(private val push: PushApi, private val keys: PushKeys) {
         more()
     }
 
-    private fun <T> decode(serializer: KSerializer<T>, output: String?): T {
+    private fun <T> decode(serializer: KSerializer<T>, output: String?, status: (T) -> Pair<Boolean, String?>): T {
         output ?: throw RpcException(0, "The gateway's herald-push plugin isn't there.")
-        // A plugin from before the Inbox answers `cron …` with its usage line.
-        if (output.contains("\"usage:") && !output.contains("cron ")) throw RpcException(0, TOO_OLD)
-        return runCatching { HermesJson.decodeFromString(serializer, output) }.getOrElse { throw RpcException(0, TOO_OLD) }
+        val reply = runCatching { HermesJson.decodeFromString(serializer, output) }
+            .getOrElse { throw RpcException(0, "The gateway's herald-push plugin gave an answer the Inbox can't read.") }
+        val (ok, error) = status(reply)
+        if (!ok && isUsage(error)) throw InboxPluginTooOld(MIN_PLUGIN_VERSION)
+        return reply
     }
 
     companion object {
@@ -208,6 +248,18 @@ class InboxApi(private val push: PushApi, private val keys: PushKeys) {
 
         /** What a call says when the plugin predates the Inbox; the Inbox page shows its update notice for it. */
         const val TOO_OLD = "The gateway's herald-push plugin is too old for the Inbox."
+
+        /** The most runs the plugin lists at once. */
+        const val PAGE = 100
+
+        private const val NO_SUCH_RUN = "no such run"
+        private const val REFUSES_OFF = "mode must be notify or quiet"
+
+        /**
+         * Whether a refusal is the plugin's usage line: what it answers a `cron` call it doesn't know, so one
+         * from before the Inbox (0.4.0 has `follow` and `following` only, an older one no `cron` at all).
+         */
+        fun isUsage(error: String?): Boolean = error?.trimStart()?.startsWith("usage:") == true
     }
 }
 

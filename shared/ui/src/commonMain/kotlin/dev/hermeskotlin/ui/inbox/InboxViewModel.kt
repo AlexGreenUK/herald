@@ -13,6 +13,7 @@ import dev.hermeskotlin.core.inbox.Following
 import dev.hermeskotlin.core.inbox.InboxApi
 import dev.hermeskotlin.core.inbox.InboxGroups
 import dev.hermeskotlin.core.inbox.InboxLayout
+import dev.hermeskotlin.core.inbox.InboxPluginTooOld
 import dev.hermeskotlin.core.inbox.InboxRun
 import dev.hermeskotlin.core.inbox.InboxStore
 import dev.hermeskotlin.core.network.ApiResult
@@ -51,6 +52,14 @@ sealed interface InboxFilter {
 
     /** This filter once the group [from] is called [to]: the group's own filter follows it. */
     fun afterRename(from: String, to: String): InboxFilter = if (this is Group && name == from) Group(to) else this
+}
+
+/** What a save of the follow page that didn't go through says. */
+fun saveErrorText(error: Throwable): String = when {
+    error is InboxPluginTooOld && error.needs == InboxApi.ALL_JOBS_PLUGIN_VERSION ->
+        "Couldn't save that. All on and switching jobs off need the gateway's plugin ${InboxApi.ALL_JOBS_PLUGIN_VERSION}: update it in Settings."
+    error is InboxPluginTooOld -> "Couldn't save that. ${InboxApi.TOO_OLD} Update it in Settings."
+    else -> error.message?.takeIf { it.isNotBlank() }?.let { "Couldn't save that: $it" } ?: "Couldn't save that."
 }
 
 /**
@@ -321,7 +330,7 @@ class InboxViewModel(
                 store.replace(runs)
                 _state.update { it.copy(loading = false, error = null, block = null) }
             }.onFailure { e ->
-                val old = e.message?.contains("too old") == true
+                val old = e is InboxPluginTooOld
                 _state.update {
                     it.copy(
                         loading = false,
@@ -411,12 +420,7 @@ class InboxViewModel(
                 store.prune(following::covers)
                 load(quiet = true)
             }.onFailure { e ->
-                val message = if (next.default != Follow.Off || next.jobs.containsValue(Follow.Off)) {
-                    "Couldn't save that. All on and switching jobs off need the gateway's plugin ${InboxApi.ALL_JOBS_PLUGIN_VERSION}: update it in Settings."
-                } else {
-                    e.message ?: "Couldn't save that."
-                }
-                _state.update { it.copy(following = before, saving = false, message = message) }
+                _state.update { it.copy(following = before, saving = false, message = saveErrorText(e)) }
             }
         }
     }

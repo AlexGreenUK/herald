@@ -288,4 +288,16 @@ class InboxTest {
         assertEquals(InboxGroups.NameRefusal.Blank, groups.refusal("   "))
         assertEquals(listOf("Bar"), InboxGroups().add("RUBIX").rename("RUBIX", "  Bar ").names)
     }
+
+    @Test
+    fun aSaveTheGatewayAnswersWithLessIsNotEchoed() {
+        val allOn = Following().all(Follow.Quiet)
+        // Plugin 0.4.0 has no default: it answers an All on with nothing followed.
+        assertFalse(allOn.echoedBy(Following()))
+        assertTrue(allOn.echoedBy(Following(default = Follow.Quiet)))
+        val one = Following().with("a", Follow.Notify).copy(failures = true)
+        assertTrue(one.echoedBy(Following(jobs = mapOf("a" to Follow.Notify), failures = true)))
+        assertFalse(one.echoedBy(Following(jobs = mapOf("a" to Follow.Notify))))
+        assertFalse(one.echoedBy(Following(jobs = mapOf("a" to Follow.Quiet), failures = true)))
+    }
 }
