@@ -536,7 +536,7 @@ internal fun SettingsView(
                         Divider()
                         SwitchRow(
                             title = "Banner for other chats",
-                            detail = "A strip over the chat when another chat replies or waits on you, with Open and Next.",
+                            detail = "A card over the chat when another chat replies or waits on you, to open it from there.",
                             checked = settings.otherChatsBanner,
                             onCheckedChange = { on -> onUpdate { it.copy(otherChatsBanner = on) } },
                             icon = Lucide.PanelTop,

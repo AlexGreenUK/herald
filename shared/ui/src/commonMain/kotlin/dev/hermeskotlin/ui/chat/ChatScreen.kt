@@ -728,7 +728,6 @@ internal fun ChatView(
                             OtherChatBanner(
                                 event,
                                 onOpen = { onOpenOtherChat(event) },
-                                onNext = onNextChat,
                                 onDismiss = { onDismissOtherChat(event) },
                             )
                         }
