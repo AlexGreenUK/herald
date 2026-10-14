@@ -24,6 +24,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.FileProvider
 import dev.hermeskotlin.core.chat.OutgoingAttachment
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -171,7 +172,7 @@ internal fun InputStream.readAtMost(limit: Long): ByteArray? {
 internal fun decodeUpright(bytes: ByteArray, maxEdge: Int): Bitmap? {
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return decodeTiffUpright(bytes, maxEdge)
     var sample = 1
     while (max(bounds.outWidth, bounds.outHeight) / (sample * 2) >= maxEdge) sample *= 2
     val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })
@@ -179,6 +180,25 @@ internal fun decodeUpright(bytes: ByteArray, maxEdge: Int): Bitmap? {
     val orientation = runCatching {
         ExifInterface(bytes.inputStream()).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
     }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
+    return bitmap.oriented(orientation).scaledTo(maxEdge)
+}
+
+/** A TIFF, which Android doesn't decode: read by [decodeTiff], already within [maxEdge]. Null for anything else. */
+private fun decodeTiffUpright(bytes: ByteArray, maxEdge: Int): Bitmap? {
+    if (!isTiff(bytes)) return null
+    val tiff = try {
+        decodeTiff(bytes, maxEdge)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Throwable) {
+        // A file from an agent's reply: whatever goes wrong in the decode, the viewer says it can't show it.
+        null
+    } ?: return null
+    return Bitmap.createBitmap(tiff.argb, tiff.width, tiff.height, Bitmap.Config.ARGB_8888).oriented(tiff.orientation)
+}
+
+/** This bitmap turned upright by an EXIF (or TIFF) orientation; the transposing ones are left as they are. */
+private fun Bitmap.oriented(orientation: Int): Bitmap {
     val matrix = Matrix().apply {
         when (orientation) {
             ExifInterface.ORIENTATION_ROTATE_90 -> postRotate(90f)
@@ -188,8 +208,7 @@ internal fun decodeUpright(bytes: ByteArray, maxEdge: Int): Bitmap? {
             ExifInterface.ORIENTATION_FLIP_VERTICAL -> postScale(1f, -1f)
         }
     }
-    val rotated = if (matrix.isIdentity) bitmap else Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
-    return rotated.scaledTo(maxEdge)
+    return if (matrix.isIdentity) this else Bitmap.createBitmap(this, 0, 0, width, height, matrix, true)
 }
 
 private fun Bitmap.scaledTo(maxEdge: Int): Bitmap {
