@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Nous Girl in white on Hermes Agent's dark (AppIcons); themed icons draw the light one's lines. -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/launcher_nous_dark" />
+    <foreground android:drawable="@drawable/ic_launcher_nous_dark_foreground" />
+    <monochrome android:drawable="@drawable/ic_launcher_nous_foreground" />
+</adaptive-icon>

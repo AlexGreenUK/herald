@@ -7,7 +7,7 @@ import android.os.Build
 import androidx.core.app.Person
 import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
-import dev.hermeskotlin.android.MainActivity
+import dev.hermeskotlin.android.HeraldActivity
 import dev.hermeskotlin.core.bots.Bot
 
 /**
@@ -81,7 +81,7 @@ object BotShortcuts {
             .setShortLabel(bot.label)
             .setLongLabel(bot.label)
             .setIcon(BotIcons.icon(bot, picture))
-            .setIntent(Intent(Intent.ACTION_VIEW, Uri.parse("hermes://bot/${Uri.encode(bot.name)}"), context, MainActivity::class.java))
+            .setIntent(Intent(Intent.ACTION_VIEW, Uri.parse("hermes://bot/${Uri.encode(bot.name)}"), context, HeraldActivity::class.java))
             .setLongLived(true)
             .setPerson(person(bot, picture))
             .setCategories(setOf(SHARE_CATEGORY))

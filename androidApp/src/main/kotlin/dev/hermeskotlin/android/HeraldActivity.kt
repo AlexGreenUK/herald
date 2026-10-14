@@ -51,8 +51,12 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import org.koin.android.ext.android.inject
 
-// A FragmentActivity because BiometricPrompt (App lock) needs one.
-class MainActivity : FragmentActivity() {
+/**
+ * The app. The launcher doesn't start it by this name but through one alias per app icon (AppIcons), and the
+ * default icon's alias is called MainActivity, this activity's old name, so home-screen icons from before stay.
+ * A FragmentActivity because BiometricPrompt (App lock) needs one.
+ */
+class HeraldActivity : FragmentActivity() {
 
     // The last theme shown, read synchronously so the window behind the first frame already matches it.
     private val windowPrefs by lazy { getSharedPreferences("window", MODE_PRIVATE) }
