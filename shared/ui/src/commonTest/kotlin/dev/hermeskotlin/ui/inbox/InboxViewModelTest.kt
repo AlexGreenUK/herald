@@ -309,6 +309,19 @@ class InboxViewModelTest {
     }
 
     @Test
+    fun aListThatLandsWhileTheStoreHoldsAnotherGatewayShowsNoneOfItsRuns() = runTest(dispatcher) {
+        val socket = PluginGateway(CoroutineScope(dispatcher)) { """{"ok":true,"runs":${runsJson(run("a", 50))}}""" }
+        val vm = viewModel(socket)
+        vm.bind(one)
+        assertEquals(listOf("a"), vm.state.value.runs.map { it.job })
+        // The shared store moves to another gateway, whose Inbox has a run of its own.
+        store.bind(two.gatewayUrl.value, now = 0)
+        store.add(two.gatewayUrl.value, run("other", 60))
+        vm.refresh()
+        assertEquals(listOf("a"), vm.state.value.runs.map { it.job })
+    }
+
+    @Test
     fun comingIntoSightLooksAgainAndGoingOutOfItDoesnt() = runTest(dispatcher) {
         val socket = PluginGateway(CoroutineScope(dispatcher)) { """{"ok":true,"runs":[]}""" }
         val vm = viewModel(socket)

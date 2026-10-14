@@ -336,10 +336,17 @@ class InboxViewModel(
                 .debounce(1_000)
                 .collect { if (idle()) load(quiet = true) }
         }
-        // Opened while the socket was still coming up: look once it is there.
+        // Opened while the socket was still coming up: look once it is there. The follow page too, which waits
+        // with its controls off until what this phone follows has been read.
         viewModelScope.launch {
             connection.state.map { it is ConnectionState.Connected }.distinctUntilChanged().collect { connected ->
-                if (connected && visible && gateway != null) load(quiet = _state.value.runs.isNotEmpty())
+                if (!connected || !visible || gateway == null) return@collect
+                load(quiet = _state.value.runs.isNotEmpty())
+                val s = _state.value
+                if (s.choosing && !s.followingLoaded && !s.saving && followJob?.isActive != true) {
+                    val gen = generation
+                    followJob = viewModelScope.launch { readFollowing(gen) }
+                }
             }
         }
         viewModelScope.launch {
@@ -463,7 +470,8 @@ class InboxViewModel(
             if (gen != generation) return
             _state.update {
                 it.copy(
-                    runs = withOlder(store.state.value.runs),
+                    // The store holds another gateway's Inbox when it moved meanwhile: this one's runs stay.
+                    runs = if (store.bound == url) withOlder(store.state.value.runs) else it.runs,
                     loading = false,
                     error = null,
                     block = it.block.takeIf { b -> b == InboxBlock.PushOff },
@@ -495,7 +503,8 @@ class InboxViewModel(
             result.onSuccess { page ->
                 val (added, more) = pageIn(_state.value.runs, page, InboxApi.PAGE)
                 older = (older + added).distinctBy { it.key }
-                _state.update { it.copy(runs = withOlder(store.state.value.runs), loadingMore = false, more = more) }
+                // Onto the runs shown, which are this gateway's: the shared store may hold another's.
+                _state.update { it.copy(runs = withOlder(it.runs), loadingMore = false, more = more) }
             }.onFailure { e ->
                 _state.update { it.copy(loadingMore = false, moreError = e.message ?: "Couldn't load more.") }
             }
