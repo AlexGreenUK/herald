@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -174,14 +175,13 @@ internal fun OtherChatBanner(
             .clickable(onClickLabel = "Open", role = Role.Button, onClick = onOpen)
             .padding(start = 12.dp, end = 0.dp, top = 2.dp, bottom = 2.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
-        // With a preview under the title, the icon and the buttons stay level with the title.
-        verticalAlignment = if (event.preview == null) Alignment.CenterVertically else Alignment.Top,
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         UnstyledIcon(
             if (event.waiting) Lucide.ShieldAlert else Lucide.MessageCircle,
             contentDescription = null,
             tint = if (event.waiting) Theme[colors][warning] else Theme[colors][accentText],
-            modifier = Modifier.padding(top = if (event.preview == null) 0.dp else 16.dp).size(16.dp),
+            modifier = Modifier.size(16.dp),
         )
         Column(
             // Announced once as it comes; a newer event replacing it is announced in turn.
@@ -221,18 +221,23 @@ private fun BannerChip(text: String, onClick: () -> Unit) {
             .clickable(interaction, indication = null, role = Role.Button, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            text,
-            style = Theme[typography][caption].copy(fontWeight = FontWeight.Medium),
-            color = Theme[colors][textColor],
-            maxLines = 1,
-            modifier = Modifier
-                .heightIn(min = 30.dp)
+        // One fixed height, the label centred in it: a pill whose height followed the text sat unevenly.
+        Box(
+            Modifier
+                .height(30.dp)
                 .clip(CircleShape)
                 .background(Theme[colors][surface3], CircleShape)
                 .indication(interaction, rememberColoredIndication(Theme[colors][textColor]))
-                .padding(horizontal = 12.dp, vertical = 6.dp),
-        )
+                .padding(horizontal = 12.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text,
+                style = Theme[typography][caption].copy(fontWeight = FontWeight.Medium),
+                color = Theme[colors][textColor],
+                maxLines = 1,
+            )
+        }
     }
 }
 
