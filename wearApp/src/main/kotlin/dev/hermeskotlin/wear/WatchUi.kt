@@ -251,7 +251,7 @@ private fun TalkScreen(
     LaunchedEffect(current?.askId) { if (current != null) listState.scrollToItem(0) }
 
     if (inCall) {
-        ScreenScaffold(modifier = Modifier.halo(mood)) {
+        ScreenScaffold(modifier = Modifier.halo(mood, MaterialTheme.colorScheme.primaryContainer)) {
             CallScreen(call, mood, onMute = link::toggleMute, onEnd = link::endCall)
         }
         return
@@ -293,7 +293,7 @@ private fun TalkScreen(
             }
         }
     }
-    ScreenScaffold(scrollState = listState, modifier = Modifier.halo(mood)) { contentPadding -> content(contentPadding) }
+    ScreenScaffold(scrollState = listState, modifier = Modifier.halo(mood, MaterialTheme.colorScheme.primaryContainer)) { contentPadding -> content(contentPadding) }
 }
 
 /**
@@ -518,19 +518,15 @@ private fun Notice(text: String, onClick: () -> Unit) {
     }
 }
 
-/** An accent light rising from the bottom of the screen, brighter while something happens; amber or red to warn. */
-@Composable
-private fun Modifier.halo(mood: OrbMood): Modifier {
-    val accent = MaterialTheme.colorScheme.primaryContainer
-    return drawBehind {
-        val strength = when (mood) {
-            OrbMood.Idle -> 0.18f
-            OrbMood.Failed -> 0.2f
-            else -> 0.32f
-        }
-        val center = Offset(size.width / 2f, size.height * 1.08f)
-        drawRect(Brush.radialGradient(listOf(orbTint(mood, accent).copy(alpha = strength), Color.Transparent), center = center, radius = size.width * 0.8f))
+/** An [accent] light rising from the bottom of the screen, brighter while something happens; amber or red to warn. */
+private fun Modifier.halo(mood: OrbMood, accent: Color): Modifier = drawBehind {
+    val strength = when (mood) {
+        OrbMood.Idle -> 0.18f
+        OrbMood.Failed -> 0.2f
+        else -> 0.32f
     }
+    val center = Offset(size.width / 2f, size.height * 1.08f)
+    drawRect(Brush.radialGradient(listOf(orbTint(mood, accent).copy(alpha = strength), Color.Transparent), center = center, radius = size.width * 0.8f))
 }
 
 @Composable
@@ -540,7 +536,7 @@ private fun ChatsScreen(link: WatchLink, store: WatchStore, onPicked: () -> Unit
     val listState = rememberTransformingLazyColumnState()
     LaunchedEffect(Unit) { link.refreshChats() }
 
-    ScreenScaffold(scrollState = listState, modifier = Modifier.halo(OrbMood.Idle)) { contentPadding ->
+    ScreenScaffold(scrollState = listState, modifier = Modifier.halo(OrbMood.Idle, MaterialTheme.colorScheme.primaryContainer)) { contentPadding ->
         TransformingLazyColumn(state = listState, contentPadding = contentPadding, modifier = Modifier.fillMaxSize()) {
             item {
                 Text("Chats", modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp), style = geist(17, FontWeight.SemiBold), textAlign = TextAlign.Center)
@@ -598,7 +594,7 @@ private fun SettingsScreen(link: WatchLink, store: WatchStore) {
     val live by store.live.collectAsState()
     val liveVoice by link.liveVoice.collectAsState()
     val listState = rememberTransformingLazyColumnState()
-    ScreenScaffold(scrollState = listState, modifier = Modifier.halo(OrbMood.Idle)) { contentPadding ->
+    ScreenScaffold(scrollState = listState, modifier = Modifier.halo(OrbMood.Idle, MaterialTheme.colorScheme.primaryContainer)) { contentPadding ->
         TransformingLazyColumn(state = listState, contentPadding = contentPadding, modifier = Modifier.fillMaxSize()) {
             item {
                 Text("Settings", modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp), style = geist(17, FontWeight.SemiBold), textAlign = TextAlign.Center)
