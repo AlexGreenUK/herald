@@ -637,7 +637,10 @@ private fun bareAddress(word: String): String {
 private fun signedOut(address: String): String {
     val authority = address.substringBefore('/')
     val query = address.indexOfFirst(::opensQuery).let { if (it < 0) address.length else it }
-    val port = authority.substringAfterLast(':', "").let { it.isNotEmpty() && it.all(Char::isDigit) }
+    // A port follows a host (a name with a dot, an IP, localhost), not a user: `user:12/34?x@host` is a password.
+    val host = authority.substringBeforeLast(':')
+    val port = authority.substringAfterLast(':', "").let { it.isNotEmpty() && it.all(Char::isDigit) } &&
+        ('.' in host || host.startsWith('[') || host.equals("localhost", ignoreCase = true))
     return when {
         ':' in authority && '@' in address && !(port && address.indexOf('@') > query) -> address.substringAfterLast('@')
         '@' in authority -> address.substring(authority.lastIndexOf('@') + 1)
@@ -658,7 +661,8 @@ private val URL_ARGUMENT = Regex(
     RegexOption.IGNORE_CASE,
 )
 private val WORD = Regex("""\S+""")
-private val SCHEME = Regex("""\b[a-z][a-z0-9+.-]*://""", RegexOption.IGNORE_CASE)
+/** No word boundary: a scheme glued on, as in `x_https://`, is still one. */
+private val SCHEME = Regex("""[a-z][a-z0-9+.-]*://""", RegexOption.IGNORE_CASE)
 private const val CLOSERS = ").,;:'\"]>}"
 private val SPACES = Regex("""\s{2,}""")
 /** Past this, a line is long enough to cut before it's searched. */

@@ -115,6 +115,13 @@ class BriefErrorTest {
         assertEquals("https://host.example.com/ failed", briefError("https://user:pa/ss?x@host.example.com/ failed"))
         assertEquals("https://host.example.com/x", briefError("https://user:p@ss/word@host.example.com/x"))
         assertEquals("http://host.example.com:8080/x", briefError("http://host.example.com:8080/x?email=a@b.example.com"))
+        assertEquals("https://host.example.com/ failed", briefError("https://user:12/34?x@host.example.com/ failed"))
+    }
+
+    @Test
+    fun aSchemeGluedOnIsStillAnAddress() {
+        assertEquals("x_https://h.example.com/", briefError("x_https://u:S@h.example.com/"))
+        assertEquals("1https://h.example.com/", briefError("1https://u:S@h.example.com/"))
     }
 
     @Test
