@@ -136,6 +136,9 @@ class ChatSession(
     /** The running turn's reply so far as the last `session.resume` had it, for when the gap can't be filled. */
     private var inflightText: String? = null
 
+    /** When the turn running at the last `session.resume` started (gateway clock); null when none ran or it's unknown. */
+    private var turnStartedAt: Double? = null
+
     fun start() {
         if (jobs.isNotEmpty()) return
         jobs = listOf(
@@ -1610,6 +1613,7 @@ class ChatSession(
             }
             // Swap the live copy for the stored rows, which now hold the other client's prompt for sure.
             "message.complete" -> {
+                turnStartedAt = null
                 // Nothing can still wait on a person once the turn is over; this also clears a
                 // clarify answered on another client, which gets no request.cancel.
                 _state.update { it.copy(inputRequests = emptyList()) }
@@ -1784,7 +1788,9 @@ class ChatSession(
                     // The stored rows lead the list; what follows them (the live turn, local notes) stays as it is.
                     val stored = state.messages.takeWhile { it.key in shownBefore }.size
                     state.copy(
-                        messages = historyToMessages(rows, rowsSessionId).withRisks(flagged) + state.messages.drop(stored),
+                        // The live reply took in the turn's saved steps, which this page brings again.
+                        messages = (historyToMessages(rows, rowsSessionId).withRisks(flagged) + state.messages.drop(stored))
+                            .withSavedStepsInLiveReply(turnStartedAt, inflightText),
                         olderMessages = full,
                     )
                 }
@@ -1815,7 +1821,9 @@ class ChatSession(
         val unsettled = if (savedCopyAt != null) live else {
             live.filterNot { it is ChatMessage.User && it.check != null && storedPrompts.any { p -> p.contains(it.text) } }
         }
-        state.copy(messages = stored + unsettled, historyLoaded = true, historyError = null, savedCopyAt = savedCopyAt, olderMessages = older)
+        // Steps of the running turn are saved as it goes, and the live copy repeats them: show them once.
+        val messages = (stored + unsettled).withSavedStepsInLiveReply(turnStartedAt, inflightText)
+        state.copy(messages = messages, historyLoaded = true, historyError = null, savedCopyAt = savedCopyAt, olderMessages = older)
     }
 
     private suspend fun runCatchingAttach(client: JsonRpcClient, reconnected: Boolean = false): Boolean = try {
@@ -1864,6 +1872,7 @@ class ChatSession(
         // A turn already running when we attach is someone else's; reconcile with the stored rows when it ends.
         if (running && ownTurnsPending == 0) foreignTurn = true
         val inflight = result["inflight"] as? JsonObject
+        turnStartedAt = result.double("turn_started_at").takeIf { running }
         // Questions asked while no socket of ours was attached; the gateway keeps them open for us.
         val open = result["open_requests"].asObjectList().mapNotNull { snapshot ->
             InputRequest.parse(
@@ -1895,7 +1904,7 @@ class ChatSession(
                 // or, when the turn ended while away, as the transcript just read has it.
                 messages = when {
                     resumable -> state.messages
-                    running -> state.withInflight(streamed).messages
+                    running -> state.withInflight(streamed).messages.withSavedStepsInLiveReply(turnStartedAt, inflightText)
                     reconnected -> state.withoutStaleReply().messages
                     else -> state.messages
                 },
@@ -2095,6 +2104,40 @@ internal fun ChatState.withInflight(streamed: String): ChatState {
     if (streamed.length <= reply.text.length || !streamed.startsWith(reply.text)) return this
     return copy(messages = messages.toMutableList().apply { set(open, reply.copy(text = streamed)) })
 }
+
+/**
+ * The running turn's steps already saved, folded into its live reply. The gateway saves each step (text and tool
+ * calls) as the turn goes, while the live copy (`inflight.assistant`, then the stream) holds the whole reply so far:
+ * a chat opened mid-turn has both, the saved part right before the live one. Like Desktop, they are one reply only
+ * when all of it holds: the saved one was written after the turn began ([turnStartedAt], the gateway's clock; without
+ * it nothing folds), the live one is this turn's (it agrees with the gateway's copy, [inflightText]), and the live text
+ * carries on from the saved text. Then the live one stays (deltas keep landing on it), with the saved tool calls.
+ */
+internal fun List<ChatMessage>.withSavedStepsInLiveReply(turnStartedAt: Double?, inflightText: String?): List<ChatMessage> {
+    if (turnStartedAt == null || inflightText == null) return this
+    val liveAt = indexOfLast { it is ChatMessage.Assistant && it.streaming }
+    if (liveAt < 1) return this
+    val live = this[liveAt] as ChatMessage.Assistant
+    val saved = this[liveAt - 1] as? ChatMessage.Assistant ?: return this
+    if (saved.streaming || saved.error != null || saved.warning != null) return this
+    if (saved.timestamp == null || saved.timestamp < turnStartedAt) return this
+    // Steps are saved apart and joined with blank lines; the stream runs them together. Spacing aside, the same.
+    val savedText = saved.text.withoutSpaces()
+    val liveText = live.text.withoutSpaces()
+    val gatewayText = inflightText.withoutSpaces()
+    // A reply left streaming from an earlier turn isn't this one's, whatever was saved before it: this turn's
+    // carries on from the gateway's copy, and has nothing yet while that copy is still empty.
+    if (!liveText.startsWith(gatewayText) || (gatewayText.isEmpty() && liveText.isNotEmpty())) return this
+    if (!liveText.startsWith(savedText)) return this
+    val folded = live.copy(
+        reasoning = listOf(saved.reasoning, live.reasoning).filter { it.isNotEmpty() }.distinct().joinToString("\n\n"),
+        tools = saved.tools + live.tools.filter { tool -> saved.tools.none { it.id == tool.id } },
+        repliedTo = live.repliedTo ?: saved.repliedTo,
+    )
+    return take(liveAt - 1) + folded + drop(liveAt + 1)
+}
+
+private fun String.withoutSpaces(): String = filterNot { it.isWhitespace() }
 
 /**
  * The reply still marked streaming from a turn that ended while the link was down and couldn't be replayed. The
