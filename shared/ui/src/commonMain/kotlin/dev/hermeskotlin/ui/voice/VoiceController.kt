@@ -244,6 +244,16 @@ class VoiceController(
         speechJob?.cancel()
     }
 
+    /**
+     * Sends what's been said so far without waiting for the pause, where noise keeps the recording from
+     * hearing one (a car, wind; #185). Only while the chained chat listens: a live call has no recording.
+     */
+    fun sendNow() {
+        // As the button shows: once it has heard you, so the recording is under way and has something to send.
+        if (!canSendNow(_chat.value) || chatJob?.isActive != true) return
+        recorder.finish()
+    }
+
     fun dismissChatError() = _chat.update { it.copy(error = null) }
 
     /** One turn of the conversation, and how it went. */

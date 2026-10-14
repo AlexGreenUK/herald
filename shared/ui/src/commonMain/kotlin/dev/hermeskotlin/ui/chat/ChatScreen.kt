@@ -772,6 +772,7 @@ internal fun ChatView(
                     typeAfterVoice = true
                     actions.stopVoiceChat()
                 },
+                onSendNow = actions::sendVoiceNow,
             )
         }
     }
@@ -861,6 +862,7 @@ private fun ColumnScope.Dock(
                 onMute = actions::toggleVoiceMute,
                 onEnd = actions::stopVoiceChat,
                 onExpand = onExpandVoice,
+                onSendNow = actions::sendVoiceNow,
             )
         }
     } else {
