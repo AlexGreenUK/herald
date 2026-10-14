@@ -279,17 +279,22 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
     LaunchedEffect(desktopRoom, roster.loading) {
         if (openDesktopRoom != null && desktopRoom == null && !roster.loading) openDesktopRoom = null
     }
-    // A room asked for from outside the screens (a tapped notification) opens over the chat.
     // A tapped Inbox notification: the drawer opens here, then the sidebar takes the link and consumes it.
-    // Only one of them consumes, after the drawer has settled, so the opening isn't cut short.
+    // Only one of them consumes, after the drawer has settled, so the opening isn't cut short. A touch that
+    // stops the opening halfway still hands the link on: kept pending, the same notification tapped again
+    // would change nothing and open nothing.
     val inboxLinks = koinInject<InboxLinks>()
     val inboxLink by inboxLinks.pending.collectAsStateWithLifecycle()
     var shownInboxLink by remember { mutableStateOf<InboxLink?>(null) }
     LaunchedEffect(inboxLink) {
         val link = inboxLink ?: return@LaunchedEffect
-        sidebar.open()
-        shownInboxLink = link
+        try {
+            sidebar.open()
+        } finally {
+            shownInboxLink = link
+        }
     }
+    // A room asked for from outside the screens (a tapped notification) opens over the chat.
     val roomLinks = koinInject<RoomLinks>()
     val roomLink by roomLinks.pending.collectAsStateWithLifecycle()
     LaunchedEffect(roomLink) {
