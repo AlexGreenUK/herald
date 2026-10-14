@@ -25,6 +25,7 @@ import io.ktor.client.engine.mock.toByteArray
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ReceiveChannel
@@ -96,6 +97,23 @@ class StreamedSpeechTest {
         override fun finish() = Unit
     }
 
+    /** Hears one request, then nobody for [quiet] listens, then listens for good. */
+    private class QuietAfterOne(val quiet: Int) : VoiceRecorder {
+        var recordings = 0
+        val waiting = CompletableDeferred<Unit>()
+        override suspend fun record(activity: VoiceActivity, onLevel: (Float) -> Unit, onSpeech: () -> Unit): Recording {
+            if (recordings > quiet) {
+                waiting.complete(Unit)
+                awaitCancellation()
+            }
+            val speech = recordings++ == 0
+            if (speech) onSpeech()
+            return Recording(byteArrayOf(1, 2, 3), "audio/wav", heardSpeech = speech)
+        }
+
+        override fun finish() = Unit
+    }
+
     private class Player(val fails: Boolean = false) : SpeechPlayer {
         val clips = mutableListOf<SpokenAudio>()
         val streamed = MutableStateFlow<List<ByteArray>>(emptyList())
@@ -148,6 +166,8 @@ class StreamedSpeechTest {
         player: Player = Player(),
         recorder: VoiceRecorder = OneRequest(),
         holdPrompts: Boolean = false,
+        /** The speech provider refuses every reply, as one over its quota does. */
+        speakFails: Boolean = false,
         streams: () -> SpeechStream?,
     ): Setup {
         val spoken = mutableListOf<String>()
@@ -156,7 +176,9 @@ class StreamedSpeechTest {
                 when (request.url.encodedPath) {
                     "/api/auth/ws-ticket" -> respond("""{"ticket":"T","ttl_seconds":30}""", HttpStatusCode.OK, json)
                     "/api/audio/transcribe" -> respond("""{"ok":true,"transcript":"How was your day?"}""", HttpStatusCode.OK, json)
-                    "/api/audio/speak" -> {
+                    "/api/audio/speak" -> if (speakFails) {
+                        respond("""{"detail":"TTS chunk 1 failed: quota exceeded"}""", HttpStatusCode.BadRequest, json)
+                    } else {
                         spoken += Json.parseToJsonElement(request.body.toByteArray().decodeToString()).jsonObject["text"]!!.jsonPrimitive.content
                         respond("""{"ok":true,"data_url":"data:audio/mpeg;base64,AAAA","mime_type":"audio/mpeg"}""", HttpStatusCode.OK, json)
                     }
@@ -303,6 +325,22 @@ class StreamedSpeechTest {
 
         setup.voice.chat.first { it.phase == VoicePhase.Listening && setup.spoken.isNotEmpty() }
         assertEquals(listOf("It was good. And then some."), setup.spoken)
+        setup.voice.stopChat()
+    }
+
+    /** #184's case: the reply's voice failed, then nobody spoke for a while. The chat listens on. */
+    @Test
+    fun aVoiceThatFailedThenAQuietRoomKeepsTheChat() = runTest {
+        val recorder = QuietAfterOne(quiet = 4)
+        val setup = chat(recorder = recorder, speakFails = true) { null }
+
+        setup.socket.event("message.start")
+        setup.socket.event("message.complete", """{"text":"Fine.","status":"complete"}""")
+
+        recorder.waiting.await()
+        assertEquals(VoicePhase.Listening, setup.voice.chat.value.phase)
+        // Why the reply wasn't heard stays on show.
+        assertTrue(setup.voice.chat.value.error != null)
         setup.voice.stopChat()
     }
 
