@@ -59,10 +59,6 @@ import com.mikepenz.markdown.compose.components.markdownComponents
 import com.mikepenz.markdown.compose.elements.MarkdownCodeBlock
 import com.mikepenz.markdown.compose.elements.MarkdownCodeFence
 import com.mikepenz.markdown.compose.elements.MarkdownParagraph
-import com.mikepenz.markdown.compose.elements.MarkdownTable
-import com.mikepenz.markdown.compose.elements.MarkdownTableHeader
-import com.mikepenz.markdown.compose.elements.MarkdownTableRow
-import androidx.compose.ui.text.style.TextOverflow
 import com.mikepenz.markdown.compose.elements.MarkdownText as LibraryMarkdownText
 import dev.hermeskotlin.designsystem.accent
 import org.intellij.markdown.ast.ASTNode
@@ -164,7 +160,7 @@ fun MarkdownText(text: String, modifier: Modifier = Modifier, streaming: Boolean
             codeBlock = { MarkdownCodeBlock(it.content, it.node, block = { code, language, style -> CodeBlock(code, language, style) }) },
             paragraph = { HighlightedParagraph(it.content, it.node) },
             unorderedList = { DotList(it.content, it.node, it.listDepth) },
-            table = { WrappingTable(it.content, it.node, it.typography.table) },
+            table = { FittedTable(it.content, it.node, it.typography.table) },
         )
     }
     val density = LocalDensity.current
@@ -300,25 +296,6 @@ private fun HighlightedParagraph(content: String, node: ASTNode) {
         }.withHighlights(highlights, color)
     }
     LibraryMarkdownText(text, node, style = style)
-}
-
-/**
- * The library's table, but every cell shows all of its text on as many lines as it needs. The library
- * cuts each cell to one line with "…", which hides most words on a phone.
- */
-@Composable
-private fun WrappingTable(content: String, node: ASTNode, style: TextStyle) {
-    MarkdownTable(
-        content,
-        node,
-        style = style,
-        headerBlock = { text, header, width, cellStyle ->
-            MarkdownTableHeader(text, header, width, cellStyle, verticalAlignment = Alignment.Top, maxLines = Int.MAX_VALUE, overflow = TextOverflow.Clip)
-        },
-        rowBlock = { text, row, width, cellStyle ->
-            MarkdownTableRow(text, row, width, cellStyle, verticalAlignment = Alignment.Top, maxLines = Int.MAX_VALUE, overflow = TextOverflow.Clip)
-        },
-    )
 }
 
 /** A bullet list whose markers are small accent dots, centered on the first line; nested lists get muted ones. */

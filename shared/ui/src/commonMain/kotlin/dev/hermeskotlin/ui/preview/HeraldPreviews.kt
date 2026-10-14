@@ -160,6 +160,7 @@ enum class PreviewScene(val label: String) {
     MidTask("Typing while a task runs"),
     ConnectionCheck("The connection check"),
     LongChat("A chat to scroll back through"),
+    Tables("Tables in an answer"),
     Notices("Notices from the gateway"),
     Archived("Archived, with Undo"),
     Checkpoints("Checkpoints, one opened on its changes"),
@@ -193,6 +194,7 @@ fun HeraldPreview(scene: PreviewScene, dark: Boolean = true, accent: String = DE
         ) {
             when (scene) {
                 PreviewScene.Reply -> SampleChat(ChatSamples.reply)
+                PreviewScene.Tables -> SampleChat(ChatSamples.tables)
                 PreviewScene.Notices -> SampleChat(ChatSamples.notices)
                 PreviewScene.Working -> SampleChat(ChatSamples.working)
                 PreviewScene.Approval -> SampleChat(ChatSamples.approval)
