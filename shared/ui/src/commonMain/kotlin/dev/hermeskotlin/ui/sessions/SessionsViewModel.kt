@@ -54,6 +54,12 @@ import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.time.Clock
 
@@ -170,6 +176,7 @@ class SessionsViewModel(
 
     private val waiting = attention.waiting
     private val running = attention.running
+    private val requestsByChat = attention.requestsByChat
 
     fun setAttentionFilter(filter: AttentionFilter) {
         _attentionFilter.value = filter
@@ -210,6 +217,170 @@ class SessionsViewModel(
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_AFTER_MS), emptyMap())
 
+    /** Whether the chat is on screen with the app in the foreground ([setChatShown]). */
+    private val chatShown = MutableStateFlow(false)
+
+    /** Every id the chat on screen goes by: it never counts as another chat. */
+    private val openIds = MutableStateFlow<Set<String>>(emptySet())
+
+    /** The bots' chats, which the list doesn't have (they're hidden sessions); waiting and running are filled in here. */
+    private val botChats = MutableStateFlow<List<OtherChatRow>>(emptyList())
+
+    /**
+     * The list has been read since the chat came on screen, the gateway or profile changed, or the link
+     * came back; until then the watch only takes stock, so what the read brings in isn't news.
+     */
+    private val freshList = MutableStateFlow(false)
+
+    private val watch = OtherChatsWatch()
+
+    private val _others = MutableStateFlow(OtherChats())
+
+    /** The chats other than the one on screen, as last worked out while the chat showed. */
+    val others: StateFlow<OtherChats> = _others.asStateFlow()
+
+    private val _badge = MutableStateFlow(SessionsBadge())
+
+    /** What the Sessions button shows: chats waiting on the user and replies that are news, not every unread chat. */
+    val badge: StateFlow<SessionsBadge> = _badge.asStateFlow()
+
+    private val _banner = MutableStateFlow<OtherChatEvent?>(null)
+
+    /** What newly happened in another chat, for the banner over the chat; null when there's nothing to say. */
+    val banner: StateFlow<OtherChatEvent?> = _banner.asStateFlow()
+
+    private val _otherChatEvents = MutableSharedFlow<OtherChatEvent>(extraBufferCapacity = 4)
+
+    /** Each thing that newly happens in another chat, once, e.g. to buzz when one starts waiting. */
+    val otherChatEvents: SharedFlow<OtherChatEvent> = _otherChatEvents.asSharedFlow()
+
+    /**
+     * The chat is on screen with the app in the foreground, or no longer is. Only then are the other chats
+     * watched: that collects the live statuses, so the gateway's live list is polled while the chat shows,
+     * not only while the sidebar does (and not at all in the background). Coming back takes stock afresh, so
+     * what happened while away shows on the badge but never as a burst of banners.
+     */
+    fun setChatShown(shown: Boolean) {
+        if (chatShown.value == shown) return
+        if (shown) watch.reset() else watch.left(getTimeMillis() / 1000.0)
+        freshList.value = false
+        // The banner stays: a rotation passes through here, and its own timer takes away one gone stale meanwhile.
+        chatShown.value = shown
+        // The list may be old by now; the watch waits for this read before anything counts as new.
+        if (shown) refreshQuietly()
+    }
+
+    /** The chat on screen now goes by [ids] (a bot's chat by both of its ids); its banner, if any, goes. */
+    fun setOpenChat(ids: Set<String>) {
+        openIds.value = ids
+        _banner.update { event -> event?.takeUnless { it.chatId in ids } }
+    }
+
+    /** The bots' chats, from the roster, for the badge and the banner. */
+    fun setBotChats(rows: List<OtherChatRow>) {
+        botChats.value = rows
+    }
+
+    /**
+     * Takes away the banner for [event]. Matched by chat and time, not by value: the preview fills in after the
+     * banner shows, so a caller may still hold the event from before it did.
+     */
+    fun dismissBanner(event: OtherChatEvent) {
+        _banner.update { if (it != null && it.chatId == event.chatId && it.atMillis == event.atMillis) null else it }
+    }
+
+    /** The next other chat needing the user: requests oldest first, then replies oldest first; null when none does. */
+    fun nextChat(): OtherChat? = watch.queue(_others.value).firstOrNull()
+
+    /**
+     * How far the listed chat [id] had been read, taken before it counts as read now, as a sidebar tap does,
+     * for opening it from elsewhere (the banner, Next). Null when it isn't listed or has nothing new.
+     */
+    fun openListed(id: String): Double? {
+        val state = _state.value
+        val session = (state.sessions + state.projectSessions.orEmpty()).firstOrNull { it.id == id } ?: return null
+        val readUpTo = readUpTo(session)
+        markSeen(session)
+        return readUpTo
+    }
+
+    /** Whether a reconnect (or coming back) has settled: connected, the list read again, and a moment for the live statuses. */
+    private val settled = combine(chatShown, connection.state.map { it is ConnectionState.Connected }.distinctUntilChanged(), bound) { shown, connected, _ ->
+        shown && connected
+    }.flatMapLatest { live ->
+        flow {
+            emit(false)
+            if (!live) return@flow
+            freshList.first { it }
+            delay(SETTLE_MS)
+            emit(true)
+        }
+    }
+
+    @OptIn(FlowPreview::class)
+    private fun watchOtherChats() {
+        viewModelScope.launch {
+            chatShown.flatMapLatest { shown ->
+                if (!shown) return@flatMapLatest emptyFlow()
+                val listed = combine(_state, seen, waiting, running) { state, seen, waiting, running ->
+                    // Only the recent list: the archive showing shouldn't make every chat leave and come back.
+                    val sessions = if (state.filter == SessionListFilter.Recent) (state.sessions + state.projectSessions.orEmpty()).distinctBy { it.id } else emptyList()
+                    Listed(
+                        sessions.map { s ->
+                            OtherChatRow(OtherChat(s.id, s.displayTitle, waiting[s.id], seen?.isUnread(s) == true, running[s.id] == true, s.activityAt))
+                        },
+                        waiting,
+                        running,
+                    )
+                }
+                combine(listed, botChats, openIds, settled) { listed, bots, open, settled ->
+                    val botRows = bots.map { row ->
+                        row.copy(
+                            chat = row.chat.copy(
+                                waiting = row.ids.firstNotNullOfOrNull { listed.waiting[it] },
+                                running = row.ids.any { listed.running[it] == true },
+                            ),
+                        )
+                    }
+                    OtherChats.of(listed.rows + botRows, open) to settled
+                }
+                // The list and the live statuses move separately (a turn's end bumps the list before the poll
+                // says it stopped): let a change settle, so a turn just starting doesn't read as a reply.
+                .debounce(OTHERS_SETTLE_MS)
+            }.collect { (others, settled) ->
+                _others.value = others
+                val event = watch.update(others, getTimeMillis(), settled)
+                _badge.value = watch.badge(others)
+                // A banner for something since dealt with (answered, read, archived) goes.
+                _banner.update { shown -> shown?.takeIf { others.stillTrue(it) } }
+                if (event != null) {
+                    // What is asked is already here; a reply's text is read from the gateway just after.
+                    val shown = if (event.waiting) event.copy(preview = previewOf(requestsByChat.value[event.chatId])) else event
+                    _banner.value = shown
+                    _otherChatEvents.tryEmit(shown)
+                    if (!shown.waiting) fillReplyPreview(shown)
+                }
+            }
+        }
+    }
+
+    /**
+     * Reads the newest row of the chat [event] is about and puts the start of its reply into the banner, if that
+     * banner still shows. A Bot Chat lives in its bot's profile. Failing, the banner keeps just its title.
+     */
+    private fun fillReplyPreview(event: OtherChatEvent) {
+        val url = gateway?.gatewayUrl ?: return
+        val profile = event.bot ?: this.profile
+        viewModelScope.launch {
+            val page = api.messages(url, event.chatId, limit = PREVIEW_ROWS, profile = profile) as? ApiResult.Success ?: return@launch
+            val reply = page.value.messages.lastOrNull { it.role == "assistant" && !it.isHidden && it.text.isNotBlank() }
+            val preview = previewOf(reply?.text) ?: return@launch
+            _banner.update { shown -> if (shown == event) shown.copy(preview = preview) else shown }
+        }
+    }
+
+    private class Listed(val rows: List<OtherChatRow>, val waiting: Map<String, Waiting>, val running: Map<String, Boolean>)
+
     /** The list is on screen (the sidebar open or docked), or no longer is. */
     fun setVisible(shown: Boolean) {
         visible.value = shown
@@ -235,6 +406,7 @@ class SessionsViewModel(
     init {
         observeServerChanges()
         observeSearch()
+        watchOtherChats()
     }
 
     /** Idempotent: binds to [gateway] and [profile] and loads the first page once. */
@@ -254,6 +426,13 @@ class SessionsViewModel(
         projectsAgain = false
         selectAfterLoad = null
         projectChangesMissing = false
+        // Another gateway or profile: its chats are other chats, and what was said about the last ones goes.
+        watch.clear()
+        freshList.value = false
+        _others.value = OtherChats()
+        _badge.value = SessionsBadge()
+        _banner.value = null
+        botChats.value = emptyList()
         load(refresh = false)
         if (newGateway) {
             _user.value = null
@@ -736,6 +915,7 @@ class SessionsViewModel(
                     )
                 }
             }
+            if (result is ApiResult.Success) freshList.value = true
         }
     }
 
@@ -758,6 +938,7 @@ class SessionsViewModel(
             var wasConnected = true
             connection.state.collect { state ->
                 val connected = state is ConnectionState.Connected
+                if (!connected) freshList.value = false
                 if (connected && !wasConnected) load(refresh = false)
                 wasConnected = connected
             }
@@ -795,11 +976,20 @@ class SessionsViewModel(
     }
 
     private companion object {
+        /** Rows read for a reply's preview: the newest few, as tool rows can follow the reply's text. */
+        const val PREVIEW_ROWS = 6
+
         val REFRESH_EVENTS = setOf("sessions.changed", "session.title")
         const val MIN_QUERY = 2
 
         /** Brief gaps (a screen rotating) keep the statuses collected. */
         const val STOP_AFTER_MS = 5_000L
+
+        /** After a reconnect's list read, how long the live statuses get to catch up before changes count as news. */
+        const val SETTLE_MS = 3_000L
+
+        /** How long the other chats must hold still before a change in them counts. */
+        const val OTHERS_SETTLE_MS = 1_500L
 
         /** How often a change on the gateway may ask for the projects again; a turn changes sessions every 2 s. */
         const val PROJECTS_EVERY_MS = 30_000L
