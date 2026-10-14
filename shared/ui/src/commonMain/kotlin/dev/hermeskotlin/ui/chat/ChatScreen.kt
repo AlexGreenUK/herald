@@ -1,6 +1,8 @@
 package dev.hermeskotlin.ui.chat
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
@@ -174,7 +176,6 @@ import dev.hermeskotlin.core.bots.mentionable
 import dev.hermeskotlin.ui.bots.BotAvatar
 import dev.hermeskotlin.ui.bots.LocalBotFaces
 import com.composables.icons.lucide.Lucide
-import com.composables.icons.lucide.PanelLeft
 import com.composables.icons.lucide.Pencil
 import com.composables.icons.lucide.MessageSquare
 import com.composables.icons.lucide.RotateCw
@@ -242,6 +243,7 @@ import dev.hermeskotlin.ui.voice.VoiceChatState
 import dev.hermeskotlin.ui.voice.VoicePanel
 import dev.hermeskotlin.ui.voice.VoicePhase
 import dev.hermeskotlin.ui.voice.VoiceScreen
+import dev.hermeskotlin.ui.voice.briefError
 import dev.hermeskotlin.core.voice.speakableText
 import androidx.compose.runtime.saveable.rememberSaveable
 import dev.hermeskotlin.ui.voice.rememberMicrophonePermission
@@ -306,6 +308,8 @@ import androidx.compose.runtime.produceState
 import kotlin.time.Clock
 import kotlinx.coroutines.launch
 import org.koin.compose.viewmodel.koinViewModel
+import dev.hermeskotlin.ui.sessions.OtherChatEvent
+import dev.hermeskotlin.ui.sessions.SessionsBadge
 
 @Composable
 fun ChatScreen(
@@ -319,6 +323,14 @@ fun ChatScreen(
     /** Switches profile (`/profile`); null is the gateway's launch profile. */
     onSwitchProfile: (String?) -> Unit,
     viewModel: ChatViewModel = koinViewModel(),
+    /** What the Sessions button says about the other chats. */
+    sessionsBadge: SessionsBadge = SessionsBadge(),
+    /** Something that just happened in another chat, for the banner; null shows none. */
+    otherChatBanner: OtherChatEvent? = null,
+    onOpenOtherChat: (OtherChatEvent) -> Unit = {},
+    onDismissOtherChat: (OtherChatEvent) -> Unit = {},
+    /** Goes to the next chat needing the user; false when none does. Null offers no Next. */
+    onNextChat: (() -> Boolean)? = null,
 ) {
     LaunchedEffect(target) { viewModel.open(target) }
     val state = viewModel.state.collectAsStateWithLifecycle().value
@@ -452,6 +464,11 @@ fun ChatScreen(
         wallpaper = rememberChatWallpaper(),
         place = target.gateway.label,
         profile = target.profile,
+        sessionsBadge = sessionsBadge,
+        otherChatBanner = otherChatBanner,
+        onOpenOtherChat = onOpenOtherChat,
+        onDismissOtherChat = onDismissOtherChat,
+        onNextChat = onNextChat?.let { next -> { if (!next()) notice = "Nothing waiting" } },
     )
 
     AttachSheet(visible = attachOpen, onDismiss = { attachOpen = false }, picker = attachmentPicker)
@@ -585,6 +602,11 @@ internal fun ChatView(
     place: String? = null,
     /** The profile the chat runs in; null is the launch profile, shown as "default". */
     profile: String? = null,
+    sessionsBadge: SessionsBadge = SessionsBadge(),
+    otherChatBanner: OtherChatEvent? = null,
+    onOpenOtherChat: (OtherChatEvent) -> Unit = {},
+    onDismissOtherChat: (OtherChatEvent) -> Unit = {},
+    onNextChat: (() -> Unit)? = null,
 ) {
     Box(
         Modifier
@@ -617,6 +639,8 @@ internal fun ChatView(
                 onOpenSidebar = onOpenSidebar,
                 onNewChat = onNewChat,
                 onOpenMenu = onOpenMenu,
+                sessionsBadge = sessionsBadge,
+                onNextChat = onNextChat,
             )
             // The composer floats over the conversation, which scrolls on beneath it; its height pads the list.
             var dockHeight by remember { mutableIntStateOf(0) }
@@ -714,6 +738,22 @@ internal fun ChatView(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
+                    // Another chat replied or waits on the user. Kept while it slides away, so its text doesn't go first.
+                    var lastBanner by remember { mutableStateOf(otherChatBanner) }
+                    if (otherChatBanner != null) lastBanner = otherChatBanner
+                    AnimatedVisibility(
+                        visible = otherChatBanner != null,
+                        enter = fadeIn() + slideInVertically { -it },
+                        exit = fadeOut() + slideOutVertically { -it },
+                    ) {
+                        lastBanner?.let { event ->
+                            OtherChatBanner(
+                                event,
+                                onOpen = { onOpenOtherChat(event) },
+                                onDismiss = { onDismissOtherChat(event) },
+                            )
+                        }
+                    }
                     AnimatedVisibility(visible = linkStatus != null, enter = fadeIn(), exit = fadeOut()) {
                         OfflineBanner(place, lastLinkStatus, onRetry = onRetryConnection)
                     }
@@ -793,6 +833,7 @@ internal fun ChatView(
                     typeAfterVoice = true
                     actions.stopVoiceChat()
                 },
+                onSendNow = actions::sendVoiceNow,
             )
         }
     }
@@ -849,8 +890,8 @@ private fun ColumnScope.Dock(
         )
     }
     attachmentError?.let { Banner(it, actionLabel = null, onAction = actions::dismissAttachmentError) }
-    voiceChat.error?.let { Banner(it, actionLabel = null, onAction = actions::dismissVoiceChatError) }
-    dictation.error?.let { Banner(it, actionLabel = null, onAction = actions::dismissDictationError) }
+    voiceChat.error?.let { Banner(briefError(it), actionLabel = null, onAction = actions::dismissVoiceChatError) }
+    dictation.error?.let { Banner(briefError(it), actionLabel = null, onAction = actions::dismissDictationError) }
     AnimatedVisibility(visible = notice != null) { NoticeLine(notice.orEmpty()) }
     // One place says what's happening: the current action, with the status text and plan folded beneath.
     AnimatedVisibility(visible = state.running, enter = fadeIn(), exit = fadeOut()) {
@@ -882,6 +923,7 @@ private fun ColumnScope.Dock(
                 onMute = actions::toggleVoiceMute,
                 onEnd = actions::stopVoiceChat,
                 onExpand = onExpandVoice,
+                onSendNow = actions::sendVoiceNow,
             )
         }
     } else {
@@ -980,13 +1022,17 @@ internal fun TopBar(
     onOpenMenu: (() -> Unit)?,
     /** In place of New chat and the menu, e.g. a room's own buttons. */
     trailing: (@Composable () -> Unit)? = null,
+    /** What the Sessions button says about the other chats. */
+    sessionsBadge: SessionsBadge = SessionsBadge(),
+    /** A long press on Sessions: the next chat needing the user. */
+    onNextChat: (() -> Unit)? = null,
 ) {
     Row(
         Modifier.fillMaxWidth().padding(start = 4.dp, end = 10.dp, top = 4.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        BarButton(Lucide.PanelLeft, "Sessions", onClick = onOpenSidebar, tint = Theme[colors][textTertiary])
+        SessionsButton(sessionsBadge, onClick = onOpenSidebar, onNext = onNextChat)
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 titleFace?.invoke()
