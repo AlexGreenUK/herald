@@ -449,7 +449,7 @@ fun HeraldPreview(scene: PreviewScene, dark: Boolean = true, accent: String = DE
                 PreviewScene.InboxReport -> OpenSidebar {
                     SidebarPage {
                         Column(Modifier.fillMaxSize()) {
-                            RunView(InboxSamples.report(), "☀️ Morning briefing", loading = false, partial = false, onBack = {})
+                            RunView(InboxSamples.report(), "☀️ Morning briefing", loading = false, note = null, onBack = {})
                         }
                     }
                 }

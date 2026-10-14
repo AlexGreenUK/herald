@@ -10,6 +10,8 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
+private const val GW = "https://gw"
+
 class InboxTest {
 
     // Each time its own run, as the gateway names them: a run is its job and when it finished.
@@ -87,12 +89,12 @@ class InboxTest {
     fun theFirstLookStartsReadAndLaterRunsAreUnread() = runTest {
         val store = InboxStore(InMemoryKeyValueStore())
         store.bind("https://gw", now = 2_000)
-        store.replace(listOf(run(at = 1_500), run(at = 2_500)))
+        store.replace(GW, listOf(run(at = 2_500), run(at = 1_500)), complete = true)
         val state = store.state.value
         assertEquals(listOf(2_500L, 1_500L), state.runs.map { it.at })
         assertEquals(1, state.unread)
 
-        store.markRead(state.runs.first())
+        store.markRead(GW, state.runs.first())
         assertEquals(0, store.state.value.unread)
     }
 
@@ -100,11 +102,11 @@ class InboxTest {
     fun aPushedRunTheGatewayHasntListedYetIsKept() = runTest {
         val store = InboxStore(InMemoryKeyValueStore())
         store.bind("https://gw", now = 0)
-        store.add(run(job = "pushed", at = 3_000))
-        store.replace(listOf(run(at = 2_000)))
+        store.add(GW, run(job = "pushed", at = 3_000))
+        store.replace(GW, listOf(run(at = 2_000)), complete = true)
         assertEquals(listOf("pushed", "006998ffc458"), store.state.value.runs.map { it.job })
-        // An older pushed run the gateway no longer lists is dropped with the rest.
-        store.replace(listOf(run(at = 4_000)))
+        // An older pushed run a whole list no longer has is dropped with the rest.
+        store.replace(GW, listOf(run(at = 4_000)), complete = true)
         assertEquals(listOf(4_000L), store.state.value.runs.map { it.at })
     }
 
@@ -112,15 +114,15 @@ class InboxTest {
     fun runsOfJobsNoLongerFollowedAreDropped() = runTest {
         val store = InboxStore(InMemoryKeyValueStore())
         store.bind("https://gw", now = 0)
-        store.replace(listOf(run(job = "a", at = 3_000), run(job = "b", at = 2_000)))
+        store.replace(GW, listOf(run(job = "a", at = 3_000), run(job = "b", at = 2_000)), complete = true)
 
-        store.prune(Following().with("a", Follow.Notify)::covers)
+        store.prune(GW, Following().with("a", Follow.Notify)::covers)
         assertEquals(listOf("a"), store.state.value.runs.map { it.job })
 
-        store.prune(Following().all(Follow.Off)::covers)
+        store.prune(GW, Following().all(Follow.Off)::covers)
         assertEquals(emptyList(), store.state.value.runs)
         // The gateway lists nothing either, so nothing comes back.
-        store.replace(emptyList())
+        store.replace(GW, emptyList(), complete = true)
         assertEquals(emptyList(), store.state.value.runs)
     }
 
@@ -128,8 +130,8 @@ class InboxTest {
     fun readingARunInFullReplacesItsShortCopy() = runTest {
         val store = InboxStore(InMemoryKeyValueStore())
         store.bind("https://gw", now = 0)
-        store.add(run(text = "Short"))
-        store.add(run(text = "Short and the rest"))
+        store.add(GW, run(text = "Short"))
+        store.add(GW, run(text = "Short and the rest"))
         assertEquals(listOf("Short and the rest"), store.state.value.runs.map { it.text })
     }
 
@@ -138,8 +140,8 @@ class InboxTest {
         val disk = InMemoryKeyValueStore()
         val first = InboxStore(disk)
         first.bind("https://one", now = 0)
-        first.add(run(at = 10, text = "x".repeat(5_000)))
-        first.markAllRead()
+        first.add("https://one", run(at = 10, text = "x".repeat(5_000)))
+        first.markAllRead("https://one")
 
         val again = InboxStore(disk)
         again.bind("https://one", now = 99)
@@ -151,6 +153,36 @@ class InboxTest {
         val other = InboxStore(disk)
         other.bind("https://two", now = 0)
         assertTrue(other.state.value.runs.isEmpty())
+    }
+
+    @Test
+    fun aPushForAnotherGatewayGoesToItsInboxWithoutMovingTheStore() = runTest {
+        val disk = InMemoryKeyValueStore()
+        val store = InboxStore(disk)
+        store.bind("https://one", now = 0)
+        store.add("https://one", run(job = "mine", at = 10))
+        val two = InboxStore(disk)
+        two.bind("https://two", now = 0)
+        two.editGroups("https://two") { it.renameJob("default", "theirs", "Their name", own = "morning-briefing") }
+
+        // The app switched to one while a push signed by two was being opened.
+        val groups = store.receive("https://two", run(job = "theirs", at = 20))
+        assertEquals("https://one", store.bound)
+        assertEquals(listOf("mine"), store.state.value.runs.map { it.job })
+        // Two's own name for the job, for the notification.
+        assertEquals("Their name", groups.nameOf(run(job = "theirs", at = 20)))
+        // It is there when the app goes back to two.
+        store.bind("https://two")
+        assertEquals(listOf("theirs"), store.state.value.runs.map { it.job })
+    }
+
+    @Test
+    fun aPushStartsAnInboxJustBeforeItsRunSoTheRunIsUnread() = runTest {
+        val disk = InMemoryKeyValueStore()
+        InboxStore(disk).receive(GW, run(at = 5_000))
+        val store = InboxStore(disk)
+        store.bind(GW, now = 9_999)
+        assertEquals(1, store.state.value.unread)
     }
 
     @Test
@@ -196,7 +228,7 @@ class InboxTest {
         val disk = InMemoryKeyValueStore()
         val first = InboxStore(disk)
         first.bind("https://gw", now = 0)
-        first.editGroups { it.add("RUBIX").assign("default", "pulse", "RUBIX").copy(mode = ChipMode.Groups) }
+        first.editGroups(GW) { it.add("RUBIX").assign("default", "pulse", "RUBIX").copy(mode = ChipMode.Groups) }
 
         val again = InboxStore(disk)
         again.bind("https://gw", now = 0)
@@ -242,7 +274,7 @@ class InboxTest {
         val disk = InMemoryKeyValueStore()
         val first = InboxStore(disk)
         first.bind("https://gw", now = 0)
-        first.editGroups { it.renameJob("default", "j", "Briefing", own = "morning-briefing") }
+        first.editGroups(GW) { it.renameJob("default", "j", "Briefing", own = "morning-briefing") }
         val again = InboxStore(disk)
         again.bind("https://gw", now = 0)
         assertEquals("Briefing", again.state.value.groups.renamedOf("default", "j"))
@@ -263,5 +295,136 @@ class InboxTest {
         assertEquals("Before  \n```\na\nb\n```\n| A | B |\n|---|---|\n| 1 | 2 |\nkept  \nlast", keepLineBreaks(doc))
         assertEquals("", keepLineBreaks(""))
         assertEquals("one line", keepLineBreaks("one line"))
+    }
+
+    @Test
+    fun noGroupCanBeNamedLikeTheOtherFolder() {
+        val groups = InboxGroups().add("RUBIX")
+        // "Other" is the folder of jobs in no group, and "null" reads as no group: either would make two folders one.
+        listOf("Other", " other ", "OTHER", "null", "Null").forEach { name ->
+            assertEquals(groups, groups.add(name), name)
+            assertEquals(groups, groups.rename("RUBIX", name), name)
+            assertEquals(InboxGroups.NameRefusal.Reserved, groups.refusal(name))
+        }
+        assertEquals(listOf("RUBIX", "Others"), groups.add("Others").names)
+    }
+
+    @Test
+    fun aGroupNameIsJudgedAsItIsKept() {
+        val long = "x".repeat(InboxGroups.MAX_NAME)
+        val groups = InboxGroups().add(long)
+        // Longer than a name keeps, it is the same name once cut, so it is taken.
+        assertEquals(InboxGroups.NameRefusal.Taken, groups.refusal(long + "yyy"))
+        assertEquals(groups, groups.add(long + "yyy"))
+        assertNull(groups.refusal(long, renaming = long))
+        assertEquals(InboxGroups.NameRefusal.Blank, groups.refusal("   "))
+        assertEquals(listOf("Bar"), InboxGroups().add("RUBIX").rename("RUBIX", "  Bar ").names)
+    }
+
+    @Test
+    fun aSaveTheGatewayAnswersWithLessIsNotEchoed() {
+        val allOn = Following().all(Follow.Quiet)
+        // Plugin 0.4.0 has no default: it answers an All on with nothing followed.
+        assertFalse(allOn.echoedBy(Following()))
+        assertTrue(allOn.echoedBy(Following(default = Follow.Quiet)))
+        val one = Following().with("a", Follow.Notify).copy(failures = true)
+        assertTrue(one.echoedBy(Following(jobs = mapOf("a" to Follow.Notify), failures = true)))
+        assertFalse(one.echoedBy(Following(jobs = mapOf("a" to Follow.Notify))))
+        assertFalse(one.echoedBy(Following(jobs = mapOf("a" to Follow.Quiet), failures = true)))
+    }
+
+    @Test
+    fun aListKeepsTheLongerTextOfARunAndDropsOnlyWhatItSaysIsGone() {
+        val long = run(at = 3_000, text = "Morning, and the whole of the briefing")
+        val listed = run(at = 3_000, text = "Morning")
+        // A pushed or fully read copy keeps its text when the list brings only its start.
+        assertEquals(listOf(long.text), InboxStore.mergeListed(listOf(long), listOf(listed), complete = true).map { it.text })
+
+        val pushedOld = run(job = "pushed", at = 1_000)
+        val newer = run(job = "newer", at = 9_000)
+        val page = listOf(run(at = 5_000), run(at = 4_000))
+        // A list that stopped short says nothing of the runs before it.
+        assertEquals(listOf(9_000L, 5_000L, 4_000L, 1_000L), InboxStore.mergeListed(listOf(newer, pushedOld), page, complete = false).map { it.at })
+        // A whole one does: the older run is gone from the gateway; one newer than the list may only be ahead of it.
+        assertEquals(listOf(9_000L, 5_000L, 4_000L), InboxStore.mergeListed(listOf(newer, pushedOld), page, complete = true).map { it.at })
+        // A whole empty list is the gateway saying there is nothing.
+        assertEquals(emptyList(), InboxStore.mergeListed(listOf(newer, pushedOld), emptyList(), complete = true))
+    }
+
+    @Test
+    fun aReadRunStaysReadAfterItLeavesTheListAndComesBack() = runTest {
+        val store = InboxStore(InMemoryKeyValueStore())
+        store.bind(GW, now = 0)
+        val old = run(job = "old", at = 1_000)
+        store.replace(GW, listOf(old), complete = true)
+        store.markRead(GW, old)
+        // Off the list for a while (a page further back, or a job switched off and on again)...
+        store.replace(GW, listOf(run(job = "new", at = 2_000)), complete = true)
+        store.markRead(GW, store.state.value.runs.first())
+        // ...and back: still read.
+        store.replace(GW, listOf(run(job = "new", at = 2_000), old), complete = true)
+        assertEquals(0, store.state.value.unread)
+    }
+
+    @Test
+    fun theReadSetForgetsTheOldestRunsFirst() {
+        val read = (0 until InboxStore.MAX_READ + 5).map { "default/j/2026-10-12_00-00-${it.toString().padStart(4, '0')}" }.toSet()
+        val trimmed = InboxStore.trimRead(read)
+        assertEquals(InboxStore.MAX_READ, trimmed.size)
+        assertFalse("default/j/2026-10-12_00-00-0000" in trimmed)
+        assertTrue("default/j/2026-10-12_00-00-${(InboxStore.MAX_READ + 4).toString().padStart(4, '0')}" in trimmed)
+    }
+
+    @Test
+    fun aChangeForAGatewayTheStoreHasLeftIsDropped() = runTest {
+        val disk = InMemoryKeyValueStore()
+        val store = InboxStore(disk)
+        store.bind("https://one", now = 0)
+        store.bind("https://two", now = 0)
+        // A list read, or a push, that started for the first gateway lands after the switch.
+        store.replace("https://one", listOf(run(at = 5)), complete = true)
+        store.add("https://one", run(job = "late", at = 6))
+        store.editGroups("https://one") { it.add("RUBIX") }
+        assertEquals(emptyList(), store.state.value.runs)
+        assertEquals(InboxGroups(), store.state.value.groups)
+        store.bind("https://one", now = 0)
+        assertEquals(emptyList(), store.state.value.runs)
+    }
+
+    @Test
+    fun aForgottenGatewaysInboxGoesWithIt() = runTest {
+        val disk = InMemoryKeyValueStore()
+        val store = InboxStore(disk)
+        store.bind(GW, now = 0)
+        store.add(GW, run())
+        store.forget(GW)
+        assertNull(disk.get(InboxStore.keyFor(GW)))
+        assertNull(store.bound)
+        assertEquals(emptyList(), store.state.value.runs)
+    }
+
+    @Test
+    fun aRunListThatNoLongerReadsKeepsTheGroupsAndNames() = runTest {
+        val disk = InMemoryKeyValueStore()
+        disk.put(
+            InboxStore.keyFor(GW),
+            """{"runs":[{"nope":1}],"read":["a"],"since":7,"groups":{"names":["RUBIX"],"renamed":{"default/j":"Brief"}}}""",
+        )
+        val store = InboxStore(disk)
+        store.bind(GW, now = 99)
+        assertEquals(emptyList(), store.state.value.runs)
+        assertEquals(listOf("RUBIX"), store.state.value.groups.names)
+        assertEquals("Brief", store.state.value.groups.renamedOf("default", "j"))
+        assertEquals(7, store.state.value.since)
+    }
+
+    @Test
+    fun theFirstPushedRunOfANewInboxIsUnread() = runTest {
+        val store = InboxStore(InMemoryKeyValueStore())
+        val pushed = run(at = 1_760_000_000)
+        // As the push listener starts an Inbox: from just before the run, on the gateway's clock.
+        store.bind(GW, now = pushed.at - 1)
+        store.add(GW, pushed)
+        assertEquals(1, store.state.value.unread)
     }
 }

@@ -23,6 +23,9 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -51,7 +54,11 @@ import dev.hermeskotlin.designsystem.components.Dialog
 import dev.hermeskotlin.designsystem.components.SheetAction
 import dev.hermeskotlin.designsystem.components.SheetHeader
 import dev.hermeskotlin.designsystem.components.TextField
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.semantics.Role
+import dev.hermeskotlin.core.inbox.InboxGroups
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -109,6 +116,9 @@ import dev.hermeskotlin.ui.components.uses24HourClock
 import dev.hermeskotlin.ui.sessions.MessageBanner
 import dev.hermeskotlin.ui.sessions.SubpageHeader
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.Flow
+import androidx.compose.runtime.rememberUpdatedState
 import org.koin.compose.viewmodel.koinViewModel
 
 /**
@@ -128,13 +138,46 @@ internal fun InboxPage(
 ) {
     val state = viewModel.state.collectAsStateWithLifecycle().value
     LaunchedEffect(gateway) { viewModel.bind(gateway) }
+    // In sight: the page reads the gateway when it comes into view, and on its nudges only while it shows.
+    DisposableEffect(visible) {
+        viewModel.setVisible(visible)
+        onDispose { viewModel.setVisible(false) }
+    }
+    // The two lists keep their place while the page is away: a report, the follow or groups page, or a folder
+    // opened over the folders. A list off screen can come back at its top, so where each was when it went is
+    // kept (the run list's per folder) and put back when it returns. A folder opened afresh starts at its top.
+    val foldersList = rememberLazyListState(viewModel.places[ShownList.Folders.name]?.index ?: 0, viewModel.places[ShownList.Folders.name]?.offset ?: 0)
+    val runsKey = ShownList.Runs.name + "/" + state.shownFilter.key
+    val runsList = rememberLazyListState(viewModel.places[runsKey]?.index ?: 0, viewModel.places[runsKey]?.offset ?: 0)
+    val showing = when {
+        state.open != null || state.choosing || state.grouping -> null
+        state.atFolders -> ShownList.Folders.name
+        else -> runsKey
+    }
+    var last by remember { mutableStateOf(showing) }
+    var lastPlace by remember { mutableStateOf(ListPlace()) }
+    val showingNow by rememberUpdatedState(showing)
+    LaunchedEffect(foldersList) { foldersList.places().collect { if (showingNow == ShownList.Folders.name) lastPlace = it } }
+    // The run list is on screen whichever folder it shows. (Compared with [runsKey] here, the collector kept the
+    // key of the folder it started in, so in any other folder every move was dropped.)
+    LaunchedEffect(runsList) {
+        runsList.places().collect { if (showingNow?.startsWith(ShownList.Runs.name) == true) lastPlace = it }
+    }
+    LaunchedEffect(showing) {
+        val before = last
+        if (before != null && before != showing) viewModel.places[before] = lastPlace
+        last = showing
+        if (showing == null) return@LaunchedEffect
+        val place = viewModel.places[showing] ?: ListPlace()
+        lastPlace = place
+        if (showing == ShownList.Folders.name) foldersList.restore(place) else runsList.restore(place)
+    }
     LaunchedEffect(openKey) {
         if (openKey != null) {
             viewModel.openKey(openKey)
             onOpenedKey()
         }
     }
-    LaunchedEffect(Unit) { viewModel.refresh() }
     LaunchedEffect(state.message) {
         if (state.message != null) {
             delay(4_000)
@@ -150,19 +193,32 @@ internal fun InboxPage(
         viewModel.setFilter(InboxFilter.All)
     }
 
-    Column(Modifier.fillMaxSize()) {
-        when {
-            state.open != null -> RunView(state.open, state.nameOf(state.open), state.openLoading, state.openPartial, onBack = viewModel::closeRun)
-            state.choosing -> FollowView(state, viewModel)
-            state.grouping -> GroupsView(state, viewModel)
-            else -> InboxView(state, viewModel, onBack = onBack, onOpenSettings = onOpenSettings)
+    Box(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize()) {
+            when {
+                state.open != null -> RunView(state.open, state.nameOf(state.open), state.openLoading, state.openNote, onBack = viewModel::closeRun)
+                state.choosing -> FollowView(state, viewModel)
+                state.grouping -> GroupsView(state, viewModel)
+                else -> InboxView(state, viewModel, onBack = onBack, onOpenSettings = onOpenSettings, foldersList = foldersList, runsList = runsList)
+            }
         }
-        state.message?.let { MessageBanner(it, onDismiss = viewModel::dismissMessage, modifier = Modifier.padding(bottom = 96.dp)) }
+        // Over the page's foot, where the lists leave room for it: each page fills the height itself. Above the
+        // sidebar's New chat button, which lies over that foot too.
+        state.message?.let {
+            MessageBanner(it, onDismiss = viewModel::dismissMessage, modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 96.dp))
+        }
     }
 }
 
 @Composable
-internal fun InboxView(state: InboxUiState, viewModel: InboxActions, onBack: () -> Unit, onOpenSettings: () -> Unit) {
+internal fun InboxView(
+    state: InboxUiState,
+    viewModel: InboxActions,
+    onBack: () -> Unit,
+    onOpenSettings: () -> Unit,
+    foldersList: LazyListState = rememberLazyListState(),
+    runsList: LazyListState = rememberLazyListState(),
+) {
     val unread = state.unread
     val folders = state.groups.layout == InboxLayout.Folders
     val inFolder = folders && state.shownFilter != InboxFilter.All
@@ -209,12 +265,14 @@ internal fun InboxView(state: InboxUiState, viewModel: InboxActions, onBack: () 
         )
         state.atFolders -> LazyColumn(
             Modifier.fillMaxSize(),
+            state = foldersList,
             contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 96.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            items(state.folders, key = { it.filter.toString() }) { folder ->
+            items(state.folders, key = { it.filter.key }) { folder ->
                 FolderCard(
                     folder,
+                    recent = state.more,
                     newestName = state.nameOf(folder.newest),
                     onClick = { viewModel.setFilter(folder.filter) },
                     onLongClick = (folder.filter as? InboxFilter.Job)?.let { f ->
@@ -228,6 +286,7 @@ internal fun InboxView(state: InboxUiState, viewModel: InboxActions, onBack: () 
         }
         else -> LazyColumn(
             Modifier.fillMaxSize(),
+            state = runsList,
             contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 96.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
@@ -239,6 +298,9 @@ internal fun InboxView(state: InboxUiState, viewModel: InboxActions, onBack: () 
                     item(key = "day-$day") { DayLabel(day) }
                 }
                 item(key = run.key) { RunCard(run, state.nameOf(run), unread = state.isUnread(run), onClick = { viewModel.open(run) }) }
+            }
+            if (state.more || state.moreError != null) {
+                item(key = "more") { MoreRow(state.loadingMore, state.moreError, onClick = viewModel::loadMore) }
             }
         }
     }
@@ -258,8 +320,8 @@ private fun FilterChips(state: InboxUiState, onSelect: (InboxFilter) -> Unit, on
         state.chips.map { Triple(it.filter, it.label, it.unread) }
     }
     val failed = state.failed
-    if (chips.size < 2 && failed == 0) return
     val selected = state.shownFilter
+    if (!showsChips(chips.size, failed, selected)) return
     Row(
         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -293,7 +355,7 @@ private fun FilterChips(state: InboxUiState, onSelect: (InboxFilter) -> Unit, on
 /** A folder: its name, unread count, when it last reported and that report's opening words. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun FolderCard(folder: InboxFolder, newestName: String, onClick: () -> Unit, onLongClick: (() -> Unit)?) {
+private fun FolderCard(folder: InboxFolder, newestName: String, recent: Boolean, onClick: () -> Unit, onLongClick: (() -> Unit)?) {
     val shape = RoundedCornerShape(Theme[radii][radiusLarge])
     val group = folder.filter is InboxFilter.Group
     Row(
@@ -338,7 +400,9 @@ private fun FolderCard(folder: InboxFolder, newestName: String, onClick: () -> U
             }
             Text(
                 buildString {
-                    append(if (folder.runs == 1) "1 report" else "${folder.runs} reports")
+                    // Only the newest runs are on the phone while the gateway has more: the count says so.
+                    val reports = if (folder.runs == 1) "report" else "reports"
+                    append(if (recent) "${folder.runs} recent $reports" else "${folder.runs} $reports")
                     append(" · ")
                     append(timeLabel(folder.newest.at))
                     if (folder.failed > 0) append(" · ${folder.failed} failed")
@@ -347,7 +411,7 @@ private fun FolderCard(folder: InboxFolder, newestName: String, onClick: () -> U
                 color = if (folder.failed > 0) Theme[colors][danger] else Theme[colors][textMuted],
             )
             Text(
-                (if (group) "$newestName: " else "") + folder.newest.text.toPreview(),
+                (if (group) "$newestName: " else "") + remember(folder.newest.text) { folder.newest.text.toPreview() },
                 style = Theme[typography][bodySmall].copy(fontSize = 13.sp, lineHeight = 19.sp),
                 color = Theme[colors][textSecondary],
                 maxLines = 2,
@@ -450,7 +514,7 @@ private fun RunCard(run: InboxRun, name: String, unread: Boolean, onClick: () ->
                 color = if (run.failed) Theme[colors][danger] else Theme[colors][textMuted],
             )
             Text(
-                run.text.toPreview(),
+                remember(run.text) { run.text.toPreview() },
                 style = Theme[typography][bodySmall].copy(fontSize = 13.sp, lineHeight = 19.sp),
                 color = Theme[colors][textSecondary],
                 maxLines = 3,
@@ -460,9 +524,24 @@ private fun RunCard(run: InboxRun, name: String, unread: Boolean, onClick: () ->
     }
 }
 
+/** The foot of the list: the reports before the oldest one shown, from the gateway. */
+@Composable
+private fun MoreRow(loading: Boolean, error: String?, onClick: () -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (error != null) Text(error, style = Theme[typography][bodySmall], color = Theme[colors][danger])
+        Button(
+            if (loading) "Loading…" else if (error != null) "Try again" else "Older reports",
+            onClick = onClick,
+            variant = ButtonVariant.Ghost,
+            size = ButtonSize.Small,
+            enabled = !loading,
+        )
+    }
+}
+
 /** One run in full, as Markdown. */
 @Composable
-internal fun RunView(run: InboxRun, name: String, loading: Boolean, partial: Boolean, onBack: () -> Unit) {
+internal fun RunView(run: InboxRun, name: String, loading: Boolean, note: RunNote?, onBack: () -> Unit) {
     SubpageHeader(name, onBack = onBack, subtitle = (if (run.failed) "Failed · " else "") + messageTime(run.at.toDouble(), uses24HourClock()))
     Column(
         Modifier
@@ -471,9 +550,13 @@ internal fun RunView(run: InboxRun, name: String, loading: Boolean, partial: Boo
             .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        if (partial) {
+        if (note != null) {
             Text(
-                "Only the start of this report is on the phone. Connect to the gateway to read the rest.",
+                when (note) {
+                    RunNote.Offline -> "Only the start of this report is on the phone. Connect to the gateway to read the rest."
+                    RunNote.Gone -> "Only the start of this report is on the phone: the gateway no longer has it."
+                    RunNote.Failed -> "Only the start of this report is on the phone: the gateway couldn't send the rest."
+                },
                 style = Theme[typography][bodySmall],
                 color = Theme[colors][textTertiary],
             )
@@ -569,7 +652,7 @@ internal fun GroupsView(state: InboxUiState, viewModel: InboxActions) {
     }
     GroupNameDialog(
         naming = naming,
-        taken = groups.names,
+        groups = groups,
         onDismiss = { naming = null },
         onSave = { from, to ->
             if (from == null) viewModel.addGroup(to) else viewModel.renameGroup(from, to)
@@ -619,14 +702,24 @@ private fun RenameJobDialog(chip: JobChip?, onDismiss: () -> Unit, onSave: (JobC
 private data class GroupNaming(val from: String?)
 
 @Composable
-private fun GroupNameDialog(naming: GroupNaming?, taken: List<String>, onDismiss: () -> Unit, onSave: (from: String?, to: String) -> Unit) {
+private fun GroupNameDialog(naming: GroupNaming?, groups: InboxGroups, onDismiss: () -> Unit, onSave: (from: String?, to: String) -> Unit) {
     var shown by remember { mutableStateOf(naming) }
     if (naming != null) shown = naming
     val n = shown ?: return
     val name = rememberTextFieldState(n.from.orEmpty())
     LaunchedEffect(naming) { if (naming != null) name.edit { replace(0, length, naming.from.orEmpty()) } }
-    val text = name.text.toString().trim()
-    val clash = taken.any { it != n.from && it.equals(text, ignoreCase = true) }
+    // At most what a group's name keeps, so what is checked is what is saved.
+    LaunchedEffect(name) {
+        snapshotFlow { name.text.length }.collect { if (it > InboxGroups.MAX_NAME) name.edit { replace(InboxGroups.MAX_NAME, length, "") } }
+    }
+    val text = InboxGroups.cleanName(name.text.toString())
+    val refusal = groups.refusal(text, renaming = n.from)
+    val error = when (refusal) {
+        InboxGroups.NameRefusal.Taken -> "There's a group with that name."
+        InboxGroups.NameRefusal.Reserved -> "\"${InboxGroups.OTHER}\" is the folder for jobs in no group: pick another name."
+        InboxGroups.NameRefusal.TooMany -> "That's the most groups there can be."
+        InboxGroups.NameRefusal.Blank, null -> null
+    }
     Dialog(
         visible = naming != null,
         onDismissRequest = onDismiss,
@@ -638,11 +731,11 @@ private fun GroupNameDialog(naming: GroupNaming?, taken: List<String>, onDismiss
                 if (n.from == null) "Create" else "Save",
                 onClick = { onSave(n.from, text) },
                 size = ButtonSize.Small,
-                enabled = text.isNotEmpty() && !clash,
+                enabled = refusal == null,
             )
         },
     ) {
-        TextField(name, placeholder = "Group name", error = if (clash) "There's a group with that name." else null)
+        TextField(name, placeholder = "Group name", error = error)
     }
 }
 
@@ -736,19 +829,43 @@ internal fun FollowView(state: InboxUiState, viewModel: InboxActions) {
         ListSkeleton()
         return
     }
+    // A save replaces all this phone follows on the gateway, so nothing changes until that has been read.
+    val enabled = state.canEditFollowing
     LazyColumn(
         Modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 96.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        item(key = "all") { AllJobsRow(state.following.default, enabled = !state.saving, onSet = viewModel::setAll) }
+        state.followingError?.let { error ->
+            item(key = "following-error") { FollowingNotice(error, onRetry = viewModel::chooseJobs) }
+        }
+        item(key = "all") { AllJobsRow(state.following.default, enabled = enabled, onSet = viewModel::setAll) }
         item(key = "failures") {
-            FailuresRow(state.following.failures, enabled = !state.saving, onChange = viewModel::setFailures)
+            FailuresRow(state.following.failures, enabled = enabled, onChange = viewModel::setFailures)
         }
         item(key = "label") { DayLabel("Jobs") }
-        items(state.jobs, key = { it.id }) { job ->
-            FollowRow(job, state.following.of(job.id), enabled = !state.saving) { viewModel.setFollow(job, it) }
+        // A job id is only unique in its profile's cron store.
+        items(state.jobs, key = { "${it.profile ?: "default"}/${it.id}" }) { job ->
+            FollowRow(job, state.following.of(job.id), enabled = enabled) { viewModel.setFollow(job, it) }
         }
+    }
+}
+
+/** What this phone follows couldn't be read (or a save's outcome is unknown): the page waits, with a retry. */
+@Composable
+private fun FollowingNotice(text: String, onRetry: () -> Unit) {
+    val shape = RoundedCornerShape(Theme[radii][radiusLarge])
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(Theme[colors][surface], shape)
+            .border(1.dp, Theme[colors][stroke], shape)
+            .clickable(onClickLabel = "Try again", onClick = onRetry)
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text(text, style = Theme[typography][bodySmall], color = Theme[colors][textSecondary])
+        Text("Try again", style = Theme[typography][bodySmall].copy(fontWeight = FontWeight.SemiBold), color = Theme[colors][accentText])
     }
 }
 
@@ -779,6 +896,7 @@ private fun AllJobsRow(default: Follow, enabled: Boolean, onSet: (Follow) -> Uni
             options = Follow.entries,
             selected = default,
             onSelect = { if (enabled) onSet(it) },
+            enabled = enabled,
             optionLabel = {
                 when (it) {
                     Follow.Off -> "All off"
@@ -799,7 +917,7 @@ private fun FailuresRow(on: Boolean, enabled: Boolean, onChange: (Boolean) -> Un
             .clip(shape)
             .background(Theme[colors][surface])
             .border(1.dp, Theme[colors][stroke], shape)
-            .clickable(enabled = enabled) { onChange(!on) }
+            .toggleable(value = on, enabled = enabled, role = Role.Switch, onValueChange = onChange)
             .padding(14.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -839,6 +957,7 @@ private fun FollowRow(job: CronJob, follow: Follow, enabled: Boolean, onChange: 
                 options = Follow.entries,
                 selected = follow,
                 onSelect = { if (enabled) onChange(it) },
+                enabled = enabled,
                 optionLabel = {
                     when (it) {
                         Follow.Off -> "Off"
@@ -863,3 +982,19 @@ private fun String.toPreview(): String = this
 
 @Composable
 private fun timeLabel(at: Long): String = messageTime(at.toDouble(), uses24HourClock())
+
+/** Where a list was scrolled to: its first item showing, and how far that item is scrolled off the top. */
+data class ListPlace(val index: Int = 0, val offset: Int = 0)
+
+/** Where this list is, each time it moves. */
+private fun LazyListState.places(): Flow<ListPlace> =
+    snapshotFlow { ListPlace(firstVisibleItemIndex, firstVisibleItemScrollOffset) }.distinctUntilChanged()
+
+/** The Inbox's two lists. */
+private enum class ShownList { Folders, Runs }
+
+/** Puts the list back at [place], unless it is there already. */
+private suspend fun LazyListState.restore(place: ListPlace) {
+    if (firstVisibleItemIndex == place.index && firstVisibleItemScrollOffset == place.offset) return
+    scrollToItem(place.index, place.offset)
+}

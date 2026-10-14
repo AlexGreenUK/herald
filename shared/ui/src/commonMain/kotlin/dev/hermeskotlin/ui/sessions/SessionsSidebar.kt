@@ -92,7 +92,7 @@ import androidx.compose.ui.draw.rotate
 import dev.hermeskotlin.core.settings.SettingsStore
 import org.koin.compose.koinInject
 import com.composables.icons.lucide.Inbox
-import dev.hermeskotlin.core.inbox.InboxLinks
+import dev.hermeskotlin.core.inbox.InboxLink
 import dev.hermeskotlin.core.inbox.InboxStore
 import dev.hermeskotlin.ui.inbox.InboxPage
 import androidx.compose.ui.focus.FocusRequester
@@ -262,6 +262,9 @@ fun SessionsSidebar(
     onOpenPlugin: (DashboardPlugin) -> Unit = {},
     /** The open chat has a turn running. */
     selectedRunning: Boolean = false,
+    /** A tapped Inbox notification the app passed on: the Inbox opens, at its run; [onInboxLinkTaken] once it has. */
+    inboxLink: InboxLink? = null,
+    onInboxLinkTaken: (InboxLink) -> Unit = {},
     viewModel: SessionsViewModel = koinViewModel(),
     bots: BotsViewModel = koinViewModel(),
     rooms: RoomsViewModel = koinViewModel(),
@@ -301,17 +304,20 @@ fun SessionsSidebar(
     var searchOpen by remember { mutableStateOf(false) }
     var scheduledOpen by remember { mutableStateOf(false) }
     var inboxOpen by remember { mutableStateOf(false) }
-    // A tapped Inbox notification: the Inbox, at that run. The page takes the key and opens the run itself.
-    val inboxLinks = koinInject<InboxLinks>()
-    val inboxLink by inboxLinks.pending.collectAsStateWithLifecycle()
+    // A tapped Inbox notification, passed on by the app once it opened the drawer: the Inbox, at that run. The
+    // page takes the key and opens the run itself.
     var inboxOpenKey by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(inboxLink) {
         val link = inboxLink ?: return@LaunchedEffect
         inboxOpen = true
         inboxOpenKey = link.key
-        inboxLinks.consume(link)
+        onInboxLinkTaken(link)
     }
-    val inboxUnread = koinInject<InboxStore>().state.collectAsStateWithLifecycle().value.unread
+    // The badge is this gateway's Inbox: the store is bound here too, so it counts before the Inbox is opened.
+    val inboxStore = koinInject<InboxStore>()
+    LaunchedEffect(gateway) { inboxStore.bind(gateway.gatewayUrl.value) }
+    val inboxKept = inboxStore.state.collectAsStateWithLifecycle().value
+    val inboxUnread = if (inboxStore.bound == gateway.gatewayUrl.value) inboxKept.unread else 0
     var capabilitiesOpen by remember { mutableStateOf(false) }
     var configOpen by remember { mutableStateOf(false) }
     var pluginsOpen by remember { mutableStateOf(false) }
