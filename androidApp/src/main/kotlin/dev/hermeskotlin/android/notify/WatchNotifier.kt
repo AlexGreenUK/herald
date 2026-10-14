@@ -66,6 +66,9 @@ class WatchNotifier(
                     val side = host.sideChats.value
                     val waiting = chats.values.filter { it.storedId != open && it.storedId !in side && bots.botWithChat(it.storedId) == null }
                     if (visible && !prefs.notifyOtherChatsInApp) {
+                        // Coming into sight, ChatNotifier took them down already; the setting turned off in sight,
+                        // they'd stay in the shade for good, forgotten here, so they go now either way.
+                        notified.forEach(notifications::cancelRequest)
                         notified.clear()
                     } else if (prefs.notifyRequests) {
                         for (chat in waiting) {
