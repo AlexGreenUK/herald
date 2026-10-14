@@ -348,7 +348,8 @@ private fun DotList(content: String, node: ASTNode, depth: Int) {
     val dot = Theme[colors][if (depth == 0) accentText else textMuted]
     // Centers the dot on the first line of the item's text. Only the dot is pushed down: a task item's
     // checkbox takes the same marker slot and sits on the line as it is.
-    val lineHeight = LocalMarkdownTypography.current.list.lineHeight
+    // Only an sp line height converts to dp; any other falls back to the body's.
+    val lineHeight = LocalMarkdownTypography.current.list.lineHeight.takeIf { it.isSp } ?: Theme[typography][body].lineHeight
     val top = with(LocalDensity.current) { ((lineHeight.toDp() - BULLET_DOT) / 2) }
     MarkdownListItems(content, node, depth, markerModifier = { Modifier.padding(start = 2.dp, end = 10.dp) }) { _, _, _ ->
         Box(Modifier.padding(top = top).size(BULLET_DOT).background(dot, CircleShape))
