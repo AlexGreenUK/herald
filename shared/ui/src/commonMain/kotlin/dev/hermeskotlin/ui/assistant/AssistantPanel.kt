@@ -420,8 +420,8 @@ private fun ColumnScope.Ready(
             Text(currentAction(chat), style = Theme[typography][caption], color = Theme[colors][textSecondary], maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
-    (chat.error ?: state.dictation.error)?.let {
-        Text(briefError(it), style = Theme[typography][bodySmall], color = Theme[colors][danger], modifier = Modifier.padding(start = 6.dp, end = 6.dp, bottom = 10.dp))
+    (chat.error ?: state.dictation.error?.let(::briefError))?.let {
+        Text(it, style = Theme[typography][bodySmall], color = Theme[colors][danger], modifier = Modifier.padding(start = 6.dp, end = 6.dp, bottom = 10.dp))
     }
 
     if (chat.inputRequests.isNotEmpty()) {

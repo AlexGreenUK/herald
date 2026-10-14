@@ -590,26 +590,39 @@ private val VENDOR_MESSAGE = Regex(""""message"\s*:\s*"((?:[^"\\]|\\.)*)"""")
  * `url='wss://…?TrustedClientToken=…'` and all, which fills the screen and puts tokens on it.
  */
 internal fun briefError(message: String): String {
+    if (message.isBlank()) return message.trim()
     val brief = message.lineSequence().map(::briefLine).firstOrNull { it.isNotEmpty() } ?: return VOICE_FAILED
-    return if (brief.length <= BRIEF_MAX) brief else brief.take(BRIEF_MAX - 1).trimEnd() + "…"
+    if (brief.length <= BRIEF_MAX) return brief
+    // Not between the halves of an emoji.
+    val cut = if (brief[BRIEF_MAX - 2].isHighSurrogate()) BRIEF_MAX - 2 else BRIEF_MAX - 1
+    return brief.take(cut).trimEnd() + "…"
 }
 
-private fun briefLine(line: String): String = line.replace(QUOTED_URL, "")
+private fun briefLine(line: String): String = line.replace(URL_ARGUMENT, "")
     // The address says what couldn't be reached; its query, fragment and sign-in are where keys and tokens ride.
-    .replace(ADDRESS) { bareAddress(it.value) }
+    .replace(ADDRESS, "$1$2")
+    .replace(PATH_QUERY, "$1")
     .replace(SPACES, " ").trim().trimEnd(',', ';', ':').trimEnd()
 
-private fun bareAddress(address: String): String {
-    val scheme = address.substringBefore("://") + "://"
-    val rest = address.substring(scheme.length).substringBefore('?').substringBefore('#')
-    val host = rest.substringBefore('/')
-    return scheme + host.substringAfterLast('@') + rest.substring(host.length)
-}
-
-/** Python's `url='…'` or `url=…`, as aiohttp and httpx put it in their errors; not "url = " in prose. */
-private val QUOTED_URL = Regex("""[,;]?\s*\burl\s*=\s*(?:'[^']*'|"[^"]*")|[,;]?\s*\burl=[^\s,;)]+""", RegexOption.IGNORE_CASE)
-/** A web or socket address, up to whatever closes it in a sentence. */
-private val ADDRESS = Regex("""\b(?:https?|wss?)://[^\s'"()<>,]+""", RegexOption.IGNORE_CASE)
+/**
+ * Python's `url='…'`, `url=URL('…')` or `url=…` (also `base_url=` and the like), as aiohttp, yarl and httpx put
+ * it in their errors; not "url = " in prose. An unquoted one runs to the next space, short of what closes it.
+ */
+private val URL_ARGUMENT = Regex(
+    """[,;]?\s*\b(?:\w+_)?url\s*=\s*(?:URL\((?:'[^']*'|"[^"]*")\)|'[^']*'|"[^"]*")""" +
+        """|[,;]?\s*\b(?:\w+_)?url=\S+?(?=[,;)]*(?:\s|$))""",
+    RegexOption.IGNORE_CASE,
+)
+/**
+ * An address: its scheme ($1), sign-in, host and path ($2), then its query or fragment. The path ends where a
+ * sentence closes it; a query runs on to the next space or quote, short of the punctuation that ends a sentence.
+ */
+private val ADDRESS = Regex(
+    """\b([a-z][a-z0-9+.-]*://)(?:[^\s'"/@]*@)?([^\s'"()<>,?#]*)(?:[?#][^\s'"]*?(?=[).,;:]*(?:[\s'"]|$)))?""",
+    RegexOption.IGNORE_CASE,
+)
+/** A bare path's query, as in `GET /v1/speech?key=…`. */
+private val PATH_QUERY = Regex("""(?<![\w/:.])(/[^\s'"?#]*)[?#][^\s'"]*?(?=[).,;:]*(?:[\s'"]|$))""")
 private val SPACES = Regex("""\s{2,}""")
 private const val BRIEF_MAX = 200
 private const val VOICE_FAILED = "The voice service failed."

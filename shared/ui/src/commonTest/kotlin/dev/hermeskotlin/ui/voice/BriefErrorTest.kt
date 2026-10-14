@@ -56,6 +56,44 @@ class BriefErrorTest {
     }
 
     @Test
+    fun aQueryWithCommasOrBracketsGoesWhole() {
+        assertEquals("Failed: https://tts.example.com/v1", briefError("Failed: https://tts.example.com/v1?ids=1,2&key=SECRET"))
+        assertEquals("Failed: https://tts.example.com/v1 now", briefError("Failed: https://tts.example.com/v1?a=(1)&key=SECRET now"))
+        assertEquals("Failed: https://tts.example.com/v1.", briefError("Failed: https://tts.example.com/v1?key=SECRET."))
+    }
+
+    @Test
+    fun anUnquotedUrlArgumentGoesWhole() {
+        assertEquals("403", briefError("403, url=wss://h.example.com/s?a=1;TrustedClientToken=SECRET"))
+        assertEquals("403 later", briefError("403, url=wss://h.example.com/s?ids=1,2&token=X later"))
+        assertEquals("403", briefError("403, base_url='https://h.example.com/v1?key=X'"))
+    }
+
+    @Test
+    fun yarlsUrlReprGoesWhole() {
+        assertEquals("Can't connect", briefError("Can't connect, url=URL('wss://h.example.com/s?t=X')"))
+        assertEquals("The voice service failed.", briefError("url=URL('wss://h.example.com/s?t=X')"))
+    }
+
+    @Test
+    fun aSignInWithAQuestionMarkStillGoes() {
+        assertEquals("Failed: https://tts.example.com/v1", briefError("Failed: https://user:p?ss@tts.example.com/v1"))
+    }
+
+    @Test
+    fun otherSchemesAndBarePathsLoseTheirQueryToo() {
+        assertEquals("Failed: rtsp://cam.example.com/live", briefError("Failed: rtsp://cam.example.com/live?token=X"))
+        assertEquals("404 on GET /v1/speech", briefError("404 on GET /v1/speech?TrustedClientToken=X"))
+    }
+
+    @Test
+    fun theCutDoesntSplitAnEmoji() {
+        val brief = briefError("A".repeat(198) + "😀".repeat(10))
+
+        assertEquals("A".repeat(198) + "…", brief)
+    }
+
+    @Test
     fun urlInProseIsntAnArgument() {
         assertEquals("Set the url = the gateway's address", briefError("Set the url = the gateway's address"))
     }
