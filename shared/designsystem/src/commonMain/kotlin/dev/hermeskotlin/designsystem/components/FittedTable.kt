@@ -10,10 +10,17 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.Placeable
 import androidx.compose.ui.semantics.CollectionInfo
@@ -26,6 +33,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import com.mikepenz.markdown.compose.LocalMarkdownColors
 import com.mikepenz.markdown.compose.LocalMarkdownDimens
@@ -77,7 +85,7 @@ private fun TableGrid(
     dividerThickness: Dp,
 ) {
     val columnCount = rows.maxOf { it.size }
-    val stripedRows = remember(rows.size) { (2 until rows.size step 2).toList() }
+    val grid = remember { GridOffsets() }
     Layout(
         content = {
             rows.forEachIndexed { rowIndex, cells ->
@@ -100,14 +108,12 @@ private fun TableGrid(
                     }
                 }
             }
-            // The lines between rows (the one under the header a little stronger) and between columns,
-            // placed by the layout below.
-            repeat(rows.size - 1) { Box(Modifier.background(if (it == 0) dividerColor else dividerColor.fainter())) }
-            repeat(columnCount - 1) { Box(Modifier.background(dividerColor.fainter())) }
-            // A faint tint behind every second body row, so a long row can be followed across.
-            repeat(stripedRows.size) { Box(Modifier.background(dividerColor.fainter(0.3f))) }
         },
-        modifier = Modifier.semantics { collectionInfo = CollectionInfo(rowCount = rows.size, columnCount = columnCount) },
+        modifier = Modifier
+            .semantics { collectionInfo = CollectionInfo(rowCount = rows.size, columnCount = columnCount) }
+            // Drawn rather than laid out as boxes: a box as tall as a table of thousands of lines asks for
+            // Constraints Compose can't represent.
+            .drawBehind { drawGrid(grid, dividerColor, dividerThickness.roundToPx().coerceAtLeast(1).toFloat()) },
     ) { measurables, _ ->
         val narrowest = IntArray(columnCount)
         val widest = IntArray(columnCount)
@@ -131,25 +137,45 @@ private fun TableGrid(
                 rowHeights[rowIndex] = maxOf(rowHeights[rowIndex], placeable.height)
             }
         }
-        val width = widths.sum()
-        val height = rowHeights.sum()
-        val line = dividerThickness.roundToPx().coerceAtLeast(1)
-        val rowLines = (0 until rows.size - 1).map { measurables[next++].measure(Constraints.fixed(width, line)) }
-        val columnLines = (0 until columnCount - 1).map { measurables[next++].measure(Constraints.fixed(line, height)) }
-        val stripes = stripedRows.map { measurables[next++].measure(Constraints.fixed(width, rowHeights[it])) }
         val rowTops = tableOffsets(rowHeights)
         val columnLefts = tableOffsets(widths)
+        grid.rowTops = rowTops
+        grid.columnLefts = columnLefts
 
-        layout(width, height) {
-            // Placed first, so the cells and lines are drawn over the tint.
-            stripes.forEachIndexed { i, placeable -> placeable.placeRelative(0, rowTops[stripedRows[i]]) }
+        layout(widths.sum(), rowHeights.sum()) {
             var index = 0
             rows.forEachIndexed { rowIndex, cells ->
                 for (column in cells.indices) placeables[index++].placeRelative(columnLefts[column], rowTops[rowIndex])
             }
-            rowLines.forEachIndexed { row, placeable -> placeable.placeRelative(0, rowTops[row + 1] - line) }
-            columnLines.forEachIndexed { column, placeable -> placeable.placeRelative(columnLefts[column + 1] - line, 0) }
         }
+    }
+}
+
+/** Where the last layout put each row and column, for drawing the grid behind the cells. */
+private class GridOffsets {
+    var rowTops by mutableStateOf(IntArray(0))
+    var columnLefts by mutableStateOf(IntArray(0))
+}
+
+/**
+ * A faint tint behind every second body row, so a long row can be followed across, then the lines between
+ * rows (the one under the header a little stronger) and between columns.
+ */
+private fun DrawScope.drawGrid(grid: GridOffsets, dividerColor: Color, line: Float) {
+    val rowTops = grid.rowTops
+    val columnLefts = grid.columnLefts
+    val bottomOf = { row: Int -> if (row + 1 < rowTops.size) rowTops[row + 1].toFloat() else size.height }
+    for (row in 2 until rowTops.size step 2) {
+        drawRect(dividerColor.fainter(0.3f), Offset(0f, rowTops[row].toFloat()), Size(size.width, bottomOf(row) - rowTops[row]))
+    }
+    for (row in 1 until rowTops.size) {
+        val color = if (row == 1) dividerColor else dividerColor.fainter()
+        drawRect(color, Offset(0f, rowTops[row] - line), Size(size.width, line))
+    }
+    for (column in 1 until columnLefts.size) {
+        val start = columnLefts[column] - line
+        val x = if (layoutDirection == LayoutDirection.Rtl) size.width - start - line else start
+        drawRect(dividerColor.fainter(), Offset(x, 0f), Size(line, size.height))
     }
 }
 

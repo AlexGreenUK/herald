@@ -78,6 +78,13 @@ class TableColumnsTest {
     }
 
     @Test
+    fun aLongCellOfShortWordsWrapsWithinTheRoom() {
+        // Short words, but a 30,000 px cell on one line: only the wanted width is cut to the room.
+        val widths = tableColumnWidths(min = intArrayOf(40, 100), max = intArrayOf(40, 30_000), available = 1300)
+        assertContentEquals(intArrayOf(40, 1260), widths)
+    }
+
+    @Test
     fun leftoverPixelsGoOnlyToColumnsThatWantedMore() {
         // 101 px to share between two wordy columns; the emoji column (min == max) gets none of it.
         val widths = tableColumnWidths(min = intArrayOf(40, 30, 30), max = intArrayOf(40, 300, 300), available = 201)
