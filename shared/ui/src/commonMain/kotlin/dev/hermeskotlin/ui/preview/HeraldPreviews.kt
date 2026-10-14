@@ -165,6 +165,7 @@ enum class PreviewScene(val label: String) {
     Checkpoints("Checkpoints, one opened on its changes"),
     ProjectOptions("A project's options"),
     NewProject("A new project"),
+    Threads("Threads above the pinned chats"),
     Models("Your starred and recent models in the model picker"),
     ModelsAll("Every model, one row per model, in the model picker"),
     ModelSearch("A search in the model picker"),
@@ -212,6 +213,17 @@ fun HeraldPreview(scene: PreviewScene, dark: Boolean = true, accent: String = DE
                         statuses = ChatSamples.sessionStatuses,
                         drafts = ChatSamples.sessionDrafts,
                         projects = ChatSamples.projects,
+                    )
+                }
+                PreviewScene.Threads -> OpenSidebar {
+                    SessionsSidebarSample(
+                        ChatSamples.threadSessions(),
+                        selectedId = "s1",
+                        userLabel = ChatSamples.USER,
+                        statuses = ChatSamples.threadStatuses,
+                        drafts = ChatSamples.sessionDrafts,
+                        projects = ChatSamples.projects,
+                        threads = ChatSamples.threads,
                     )
                 }
                 PreviewScene.Bots -> OpenSidebar {
@@ -667,6 +679,10 @@ private fun NewChatPreview() = HeraldPreview(PreviewScene.NewChat)
 @Preview(widthDp = 412, heightDp = 892)
 @Composable
 private fun SidebarPreview() = HeraldPreview(PreviewScene.Sidebar)
+
+@Preview(widthDp = 412, heightDp = 892)
+@Composable
+private fun ThreadsPreview() = HeraldPreview(PreviewScene.Threads)
 
 @Preview(widthDp = 412, heightDp = 892)
 @Composable

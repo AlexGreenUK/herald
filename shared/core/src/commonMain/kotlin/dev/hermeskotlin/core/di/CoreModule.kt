@@ -47,6 +47,8 @@ import dev.hermeskotlin.core.bots.BotChats
 import dev.hermeskotlin.core.bots.BotHealth
 import dev.hermeskotlin.core.bots.BotsApi
 import dev.hermeskotlin.core.projects.ProjectsApi
+import dev.hermeskotlin.core.threads.ThreadsApi
+import dev.hermeskotlin.core.threads.ThreadsRepository
 import dev.hermeskotlin.core.bots.SidebarModeStore
 import dev.hermeskotlin.core.rooms.RoomLinks
 import dev.hermeskotlin.core.rooms.RoomSeenStore
@@ -114,6 +116,8 @@ val coreModule = module {
     single { PetApi(get()) }
     single { BotsApi(get()) }
     single { ProjectsApi(get()) }
+    single { ThreadsApi(get()) }
+    single { ThreadsRepository(get(), get(), get(), get()) }
     single { BotChats(get<BotsApi>()) }
     single { RoomsApi(get()) }
     single { RoomSeenStore(get()) }

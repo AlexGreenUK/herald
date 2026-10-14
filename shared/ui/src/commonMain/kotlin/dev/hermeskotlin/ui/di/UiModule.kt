@@ -36,7 +36,15 @@ val uiModule = module {
     viewModelOf(::ConfigViewModel)
     viewModelOf(::PluginsViewModel)
     viewModelOf(::InsightsViewModel)
-    viewModelOf(::ChatViewModel)
+    // Spelled out: past 22 parameters viewModelOf has no overload, and the last two are optional.
+    viewModel {
+        ChatViewModel(
+            get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(),
+            get(), get(), get(), get(), get(), get(), get(), get(), get(), get(),
+            seen = getOrNull(),
+            threads = getOrNull(),
+        )
+    }
     viewModelOf(::SettingsViewModel)
     // Watched places are the platform's; one without them shows none.
     viewModel { PhoneToolsViewModel(get(), get(), getOrNull<WatchedPlaces>() ?: NoWatchedPlaces) }
