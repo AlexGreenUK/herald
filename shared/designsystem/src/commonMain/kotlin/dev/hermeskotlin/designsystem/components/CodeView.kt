@@ -52,16 +52,19 @@ fun CodeView(
     val lines = remember(text) { splitLines(text) }
     val palette = if (Theme[colors][background].luminance() < 0.5f) SyntaxColors.Dark else SyntaxColors.Light
     // Colored off the main thread; until then (or for a file too big to color) the lines show plain.
-    val colored by produceState<AnnotatedString?>(null, text, language, palette) {
+    // The state outlives a change of [text]: each coloring keeps the text it was made from, and one made from
+    // other text is never cut into this text's lines (a Source / Formatted switch would cut out of range).
+    val highlight by produceState<Pair<String, AnnotatedString>?>(null, text, language, palette) {
         val syntax = CodeHighlighter.language(language)
         value = if (syntax == null || text.length > MAX_HIGHLIGHT_CHARS) {
             null
         } else {
             withContext(Dispatchers.Default) {
-                runCatching { highlightedCode(text, CodeHighlighter.spans(text, syntax), palette) }.getOrNull()
+                runCatching { text to highlightedCode(text, CodeHighlighter.spans(text, syntax), palette) }.getOrNull()
             }
         }
     }
+    val colored = coloringOf(highlight, text)
     val style = Theme[typography][code].copy(color = Theme[colors][textColor])
     val gutterStyle = style.copy(color = Theme[colors][textMuted], textAlign = TextAlign.End)
     val measurer = rememberTextMeasurer()
@@ -101,6 +104,10 @@ fun CodeView(
         }
     }
 }
+
+/** [highlight]'s coloring when it was made from [text] itself, else null (the lines show plain until it's redone). */
+internal fun coloringOf(highlight: Pair<String, AnnotatedString>?, text: String): AnnotatedString? =
+    highlight?.takeIf { it.first == text }?.second
 
 /** Each line's range in [text], its break left out; a trailing break makes no empty last line. */
 internal fun splitLines(text: String): List<IntRange> {

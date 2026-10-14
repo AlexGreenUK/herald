@@ -1,7 +1,9 @@
 package dev.hermeskotlin.designsystem.components
 
+import androidx.compose.ui.text.AnnotatedString
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 
 class CodeViewTest {
 
@@ -25,5 +27,15 @@ class CodeViewTest {
         assertEquals(80, unwrappedColumns(80))
         assertEquals(MAX_LINE_COLUMNS, unwrappedColumns(200_000))
         assertEquals(0, unwrappedColumns(0))
+    }
+
+    @Test
+    fun aColoringOfOtherTextIsntUsed() {
+        val raw = """{"a":1}"""
+        val colored = raw to AnnotatedString(raw)
+        assertEquals(colored.second, coloringOf(colored, raw))
+        // Switched to the indented text, the one-line coloring would be cut out of range.
+        assertNull(coloringOf(colored, "{\n  \"a\": 1\n}"))
+        assertNull(coloringOf(null, raw))
     }
 }
