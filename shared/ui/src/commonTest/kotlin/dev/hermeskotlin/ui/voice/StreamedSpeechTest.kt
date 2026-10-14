@@ -25,6 +25,7 @@ import io.ktor.client.engine.mock.toByteArray
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ReceiveChannel
@@ -117,7 +118,8 @@ class StreamedSpeechTest {
         }
     }
 
-    private class Stream : SpeechStream {
+    /** [closedByTheGateway]: like OkHttp's socket once the gateway closed it, closing throws a cancellation of its own. */
+    private class Stream(val closedByTheGateway: Boolean = false) : SpeechStream {
         val gateway = Channel<SpeechStreamEvent>(Channel.UNLIMITED)
         val appended = MutableStateFlow("")
         var finished = false
@@ -135,6 +137,7 @@ class StreamedSpeechTest {
         override suspend fun close() {
             closed = true
             gateway.close()
+            if (closedByTheGateway) throw CancellationException("WebSocket session closed with code NORMAL.")
         }
     }
 
@@ -303,6 +306,79 @@ class StreamedSpeechTest {
 
         setup.voice.chat.first { it.phase == VoicePhase.Listening && setup.spoken.isNotEmpty() }
         assertEquals(listOf("It was good. And then some."), setup.spoken)
+        setup.voice.stopChat()
+    }
+
+    /** #183: the gateway closed the speech socket, and closing it threw OkHttp's cancellation: the chat goes on. */
+    @Test
+    fun aSocketTheGatewayClosedDoesntEndTheChat() = runTest {
+        val stream = Stream(closedByTheGateway = true)
+        val setup = chat(recorder = OneRequest(requests = 2)) { stream }
+
+        setup.socket.event("message.start")
+        setup.socket.event("message.delta", """{"text":"Fine. "}""")
+        stream.appended.first { it.isNotEmpty() }
+        // Its events end the same way, which is the voice breaking off, not a skip.
+        stream.gateway.close(CancellationException("WebSocket session closed with code NORMAL."))
+        setup.socket.event("message.delta", """{"text":"And you?"}""")
+        setup.socket.event("message.complete", """{"text":"Fine. And you?","status":"complete"}""")
+
+        // The finished reply is read out instead, and the next turn goes out.
+        setup.socket.submits.first { it.size == 2 }
+        assertEquals(listOf("Fine. And you?"), setup.spoken)
+        assertTrue(stream.closed)
+        setup.voice.stopChat()
+    }
+
+    /** Events that end with a stray cancellation are the voice breaking off, not a skip: the reply is read out. */
+    @Test
+    fun eventsEndedByTheSocketsOwnCancellationReadTheReply() = runTest {
+        val stream = Stream()
+        val setup = chat(stream)
+
+        setup.socket.event("message.start")
+        setup.socket.event("message.delta", """{"text":"Fine. "}""")
+        stream.appended.first { it.isNotEmpty() }
+        stream.gateway.close(CancellationException("WebSocket session closed with code NORMAL."))
+        setup.socket.event("message.delta", """{"text":"And you?"}""")
+        setup.socket.event("message.complete", """{"text":"Fine. And you?","status":"complete"}""")
+
+        setup.voice.chat.first { it.phase == VoicePhase.Listening && setup.spoken.isNotEmpty() }
+        assertEquals(listOf("Fine. And you?"), setup.spoken)
+        setup.voice.stopChat()
+    }
+
+    /** Ended before the turn starts, on a socket whose close throws: nothing escapes the cleanup. */
+    @Test
+    fun endingEarlyOnASocketThatThrowsWhenClosed() = runTest {
+        val stream = Stream(closedByTheGateway = true)
+        var opened = false
+        val setup = chat(holdPrompts = true) { opened = true; stream }
+        while (!opened) yield()
+
+        setup.voice.stopChat()
+        testScheduler.runCurrent()
+
+        assertTrue(stream.closed)
+        assertEquals(VoicePhase.Off, setup.voice.chat.value.phase)
+    }
+
+    /** A reply that was voiced to its end, on a socket that throws when it's closed afterwards, listens again. */
+    @Test
+    fun aVoicedReplyOnASocketTheGatewayClosedListensAgain() = runTest {
+        val stream = Stream(closedByTheGateway = true)
+        val setup = chat(recorder = OneRequest(requests = 2)) { stream }
+
+        setup.socket.event("message.start")
+        setup.socket.event("message.complete", """{"text":"Done.","status":"complete"}""")
+        stream.appended.first { it == "Done." }
+        stream.gateway.send(SpeechStreamEvent.Start(sampleRate = 24_000))
+        stream.gateway.send(SpeechStreamEvent.Audio(byteArrayOf(1, 0)))
+        stream.gateway.send(SpeechStreamEvent.End)
+
+        setup.socket.submits.first { it.size == 2 }
+        // Voiced as it streamed: not read again.
+        assertTrue(setup.spoken.isEmpty())
         setup.voice.stopChat()
     }
 
