@@ -29,6 +29,9 @@ class GatewayFileTest {
     fun escapesAreDecodedAndTheLineIsKept() {
         assertEquals(GatewayFile("/home/me/My Notes/plan ü.md"), GatewayFile.fromLink("file:///home/me/My%20Notes/plan%20%C3%BC.md"))
         assertEquals(GatewayFile("/tmp/100%real.txt"), GatewayFile.fromLink("/tmp/100%real.txt"))
+        assertEquals(GatewayFile("/tmp/%-1 50%.txt"), GatewayFile.fromLink("/tmp/%-1%2050%.txt"))
+        // A character outside the BMP keeps both halves of its surrogate pair beside an escape.
+        assertEquals(GatewayFile("/tmp/My 😀.txt"), GatewayFile.fromLink("file:///tmp/My%20😀.txt"))
         assertEquals(GatewayFile("/src/App.kt", line = 42), GatewayFile.fromLink("/src/App.kt:42"))
         assertEquals(GatewayFile("/src/App.kt", line = 42), GatewayFile.fromLink("/src/App.kt:42:7"))
         assertEquals(GatewayFile("/src/App.kt", line = 12), GatewayFile.fromLink("file:///src/App.kt#L12"))

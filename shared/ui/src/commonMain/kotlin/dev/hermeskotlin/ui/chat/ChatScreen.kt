@@ -442,7 +442,11 @@ fun ChatScreen(
         onViewImage = { viewing = it },
         onOpenFile = { file ->
             // A picture opens in the viewer, like one the reply delivered.
-            if (file.kind == GatewayFileKind.Image) viewing = ViewerImage(file.name, source = file.path) else previewing = file
+            if (file.kind == GatewayFileKind.Image) {
+                viewing = ViewerImage(file.name, fetch = { (viewModel.downloadFile(file) as? FileDownload.Ready)?.bytes })
+            } else {
+                previewing = file
+            }
         },
         onNotice = { notice = it },
         wallpaper = rememberChatWallpaper(),
@@ -492,7 +496,7 @@ fun ChatScreen(
         onAction = viewModel::runControl,
         onDismiss = { controlOpen = false },
     )
-    FilePreviewSheet(
+    FileViewer(
         file = previewing,
         onDismiss = { previewing = null },
         load = viewModel::previewFile,

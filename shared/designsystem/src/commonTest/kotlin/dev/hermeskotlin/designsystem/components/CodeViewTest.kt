@@ -19,4 +19,11 @@ class CodeViewTest {
         assertEquals(listOf(""), lines(""))
         assertEquals(listOf("", ""), lines("\n\n"))
     }
+
+    @Test
+    fun aLongSingleLineIsLaidOutAtABoundedWidth() {
+        assertEquals(80, unwrappedColumns(80))
+        assertEquals(MAX_LINE_COLUMNS, unwrappedColumns(200_000))
+        assertEquals(0, unwrappedColumns(0))
+    }
 }

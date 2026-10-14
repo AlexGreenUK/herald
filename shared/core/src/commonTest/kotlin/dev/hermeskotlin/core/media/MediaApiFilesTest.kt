@@ -74,4 +74,20 @@ class MediaApiFilesTest {
         assertEquals("bytes", bytes.decodeToString())
         assertEquals(listOf("/api/fs/download", "/api/files/download"), paths)
     }
+
+    @Test
+    fun aFileOverTheCapIsRefusedWhileItStreams() = runTest {
+        val api = MediaApi(createHttpClient(MockEngine { respond("x".repeat(2_000), HttpStatusCode.OK) }), maxDownloadBytes = 1_000)
+
+        val result = assertIs<ApiResult.Failed>(api.download(url, "/big.bin"))
+
+        assertEquals(413, result.status)
+        assertEquals(MediaApi.TOO_LARGE, result.message)
+    }
+
+    @Test
+    fun aFileAtTheCapComesWhole() = runTest {
+        val api = MediaApi(createHttpClient(MockEngine { respond("x".repeat(1_000), HttpStatusCode.OK) }), maxDownloadBytes = 1_000)
+        assertEquals(1_000, assertIs<ApiResult.Success<ByteArray>>(api.download(url, "/ok.bin")).value.size)
+    }
 }

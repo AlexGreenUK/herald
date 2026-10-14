@@ -69,7 +69,7 @@ fun CodeView(
     val charWidth = remember(style, density) { with(density) { measurer.measure("0000000000", style).size.width.toDp() / 10 } }
     // The digits plus room on either side: a number never runs into the frame's edge or the code.
     val gutterWidth = charWidth * lines.size.toString().length.coerceAtLeast(2) * 1.15f + 22.dp
-    val longest = remember(lines) { lines.maxOfOrNull { it.last - it.first + 1 } ?: 0 }
+    val longest = remember(lines) { unwrappedColumns(lines.maxOfOrNull { it.last - it.first + 1 } ?: 0) }
     val state = rememberLazyListState()
     LaunchedEffect(focusLine, lines.size) {
         val target = focusLine?.minus(1)?.takeIf { it in lines.indices } ?: return@LaunchedEffect
@@ -84,6 +84,8 @@ fun CodeView(
             LazyColumn(width, state = state) {
                 itemsIndexed(lines, key = { index, _ -> index }) { index, range ->
                     val number = index + 1
+                    // A line past the width the list can take (minified code, a log line) wraps within it.
+                    val overlong = range.last - range.first + 1 > MAX_LINE_COLUMNS
                     val lineText = colored?.subSequence(range.first, range.last + 1) ?: AnnotatedString(text.substring(range.first, range.last + 1))
                     Row(
                         Modifier
@@ -92,7 +94,7 @@ fun CodeView(
                             .padding(end = 12.dp),
                     ) {
                         BasicText(number.toString(), style = gutterStyle, softWrap = false, modifier = Modifier.width(gutterWidth).padding(start = 8.dp, end = 4.dp))
-                        BasicText(lineText, style = style, softWrap = wrap, modifier = Modifier.padding(start = 12.dp))
+                        BasicText(lineText, style = style, softWrap = wrap || overlong, modifier = Modifier.padding(start = 12.dp))
                     }
                 }
             }
@@ -113,6 +115,15 @@ internal fun splitLines(text: String): List<IntRange> {
     }
     return ranges
 }
+
+/**
+ * How many characters wide the unwrapped list is laid out: the longest line's, up to [MAX_LINE_COLUMNS].
+ * Unbounded, one long line (minified JSON) would ask for a width Compose's constraints can't hold.
+ */
+internal fun unwrappedColumns(longest: Int): Int = longest.coerceIn(0, MAX_LINE_COLUMNS)
+
+/** About 15,000 dp of monospace: far past any screen, well inside what a layout can measure. */
+internal const val MAX_LINE_COLUMNS = 2_000
 
 /** Lines shown above the one a link points at, so it doesn't sit at the very top. */
 private const val FOCUS_CONTEXT = 4

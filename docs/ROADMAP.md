@@ -162,7 +162,7 @@ uses. The protocol itself is described in [hermes-protocol-research.md](hermes-p
 - [x] File and PDF attachments (`file.attach` as `@file:` refs, `pdf.attach` with a `file.attach` fallback when the gateway can't render pages)
 - [x] Images in history: stored `@image:` refs fetched through `GET /api/media`, `@file:` refs as file cards, the attached-context block hidden
 - [x] Pictures and files the agent delivers (`MEDIA:` paths, Markdown images, `::preview` widget files) shown inline or as cards, fetched through `GET /api/files/download`
-- [x] Links to files on the gateway (`[name](/path)`, `file://`, `/src/App.kt:42`) open in a preview drawer: Markdown rendered, JSON indented, CSV/TSV as a table, code with line numbers at the linked line; Save and Share fetch the whole file (`GET /api/fs/read-text`, `GET /api/fs/download`)
+- [x] Links to files on the gateway (`[name](/path)`, `file://`, `/src/App.kt:42`) open full screen: Markdown rendered, JSON indented, CSV/TSV as a table, code with line numbers at the linked line; Save and Share fetch the whole file (`GET /api/fs/read-text`, `GET /api/fs/download`)
 - [x] Full-screen image viewer with pinch-zoom; Save (Pictures / Download `Herald`) and Share for pictures and files
 - [x] Chats open as the `desktop` surface (`source` on `session.create` / `session.resume`), so the agent knows Markdown and files render
 - [ ] Run `::preview` widgets inline (a WebView with Desktop's theme prelude)

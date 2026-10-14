@@ -83,8 +83,16 @@ internal val LocalMediaLoader = staticCompositionLocalOf<suspend (String) -> Byt
 /** Opens the full-screen viewer for a picture. */
 internal val LocalOpenImage = staticCompositionLocalOf<(ViewerImage) -> Unit> { {} }
 
-/** What the viewer shows: bytes already at hand, or a source to load them from. */
-internal class ViewerImage(val name: String, val source: String? = null, val bytes: ByteArray? = null)
+/**
+ * What the viewer shows: bytes already at hand, a source to load them from, or its own [fetch] (a picture a
+ * reply linked to, read through the chat's profile).
+ */
+internal class ViewerImage(
+    val name: String,
+    val source: String? = null,
+    val bytes: ByteArray? = null,
+    val fetch: (suspend () -> ByteArray?)? = null,
+)
 
 /** The pictures and files a reply delivered, under its text. */
 @Composable
@@ -231,7 +239,7 @@ internal fun ImageViewer(image: ViewerImage, onDismiss: () -> Unit) {
     val load = LocalMediaLoader.current
     val actions = rememberMediaActions()
     val scope = rememberCoroutineScope()
-    val bytes by produceState(image.bytes, image) { if (value == null) value = image.source?.let { load(it) } }
+    val bytes by produceState(image.bytes, image) { if (value == null) value = image.fetch?.invoke() ?: image.source?.let { load(it) } }
     var notice by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(notice) {
         if (notice != null) {

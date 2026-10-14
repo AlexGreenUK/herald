@@ -4,7 +4,7 @@ import dev.hermeskotlin.core.media.FileText
 import dev.hermeskotlin.core.media.GatewayFile
 import dev.hermeskotlin.ui.chat.FileLoad
 
-/** Files a reply linked to, as their preview drawer shows them. */
+/** Files a reply linked to, as their viewer shows them. */
 internal object FileSamples {
 
     fun of(scene: PreviewScene): Pair<GatewayFile, FileLoad> = when (scene) {

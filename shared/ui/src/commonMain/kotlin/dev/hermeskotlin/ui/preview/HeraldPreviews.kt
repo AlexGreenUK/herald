@@ -49,7 +49,8 @@ import dev.hermeskotlin.core.capabilities.McpServer
 import dev.hermeskotlin.core.capabilities.Skill
 import dev.hermeskotlin.core.capabilities.Toolset
 import dev.hermeskotlin.ui.chat.CheckpointsSheetView
-import dev.hermeskotlin.ui.chat.FilePreviewSheet
+import dev.hermeskotlin.ui.chat.FileDownload
+import dev.hermeskotlin.ui.chat.FileViewerPage
 import dev.hermeskotlin.ui.chat.ProcessesSheetView
 import dev.hermeskotlin.ui.chat.SessionControlSheetView
 import dev.hermeskotlin.ui.chat.UsageSheetView
@@ -165,7 +166,7 @@ enum class PreviewScene(val label: String) {
     Notices("Notices from the gateway"),
     Archived("Archived, with Undo"),
     Checkpoints("Checkpoints, one opened on its changes"),
-    FileMarkdown("A Markdown file a reply linked to, rendered in its drawer"),
+    FileMarkdown("A Markdown file a reply linked to, rendered full screen"),
     FileCode("A code file opened at the line its link names"),
     FileTable("A CSV file as a table"),
     FileMissing("A linked file the gateway no longer has"),
@@ -494,10 +495,9 @@ fun HeraldPreview(scene: PreviewScene, dark: Boolean = true, accent: String = DE
                         initiallyExpanded = "9f2c1ab47e0d55aa",
                     )
                 }
-                PreviewScene.FileMarkdown, PreviewScene.FileCode, PreviewScene.FileTable, PreviewScene.FileMissing -> Box(Modifier.fillMaxSize()) {
-                    SampleChat(ChatSamples.reply)
+                PreviewScene.FileMarkdown, PreviewScene.FileCode, PreviewScene.FileTable, PreviewScene.FileMissing -> {
                     val (file, load) = FileSamples.of(scene)
-                    FilePreviewSheet(file = file, onDismiss = {}, load = { load }, download = { null }, preset = load)
+                    FileViewerPage(file, onDismiss = {}, load = { load }, download = { FileDownload.Failed("") }, preset = load)
                 }
                 PreviewScene.Models, PreviewScene.ModelsAll, PreviewScene.ModelSearch -> Box(Modifier.fillMaxSize()) {
                     SampleChat(ChatSamples.reply)

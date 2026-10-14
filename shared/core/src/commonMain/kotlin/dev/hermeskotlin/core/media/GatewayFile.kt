@@ -61,24 +61,34 @@ data class GatewayFile(val path: String, val line: Int? = null) {
         private val LINE_SUFFIX = Regex(""":(\d+)(?::\d+)?$""")
         private val WINDOWS_DRIVE = Regex("""^/[A-Za-z]:/""")
 
-        /** `%XX` escapes as UTF-8; a `%` that starts no escape stays as it is. */
+        /**
+         * `%XX` escapes as UTF-8; a `%` that starts no escape stays as it is. Literal text between escapes is
+         * encoded a run at a time, so a character outside the BMP (an emoji) keeps both halves of its pair.
+         */
         private fun percentDecode(text: String): String {
             if ('%' !in text) return text
             val out = ArrayList<Byte>(text.length)
+            var literal = 0
             var i = 0
+            fun flush(end: Int) {
+                if (end > literal) text.substring(literal, end).encodeToByteArray().forEach { out += it }
+            }
             while (i < text.length) {
-                val c = text[i]
-                val hex = if (c == '%' && i + 2 <= text.lastIndex) text.substring(i + 1, i + 3).toIntOrNull(16) else null
-                if (hex != null) {
-                    out += hex.toByte()
+                val escape = text[i] == '%' && i + 2 <= text.lastIndex && text[i + 1].isHexDigit() && text[i + 2].isHexDigit()
+                if (escape) {
+                    flush(i)
+                    out += text.substring(i + 1, i + 3).toInt(16).toByte()
                     i += 3
+                    literal = i
                 } else {
-                    c.toString().encodeToByteArray().forEach { out += it }
                     i++
                 }
             }
+            flush(text.length)
             return out.toByteArray().decodeToString()
         }
+
+        private fun Char.isHexDigit() = this in '0'..'9' || this in 'a'..'f' || this in 'A'..'F'
     }
 }
 
@@ -93,7 +103,7 @@ enum class GatewayFileKind(val label: String) {
     Other("File"),
     ;
 
-    /** Shown in the preview drawer at all; the rest go straight to a card with Save and Share. */
+    /** Shown in the file viewer at all; the rest go straight to a card with Save and Share. */
     val previewable: Boolean get() = this != Image && this != Other
 
     companion object {

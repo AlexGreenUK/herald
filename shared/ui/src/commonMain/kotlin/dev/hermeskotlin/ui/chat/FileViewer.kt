@@ -12,12 +12,15 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
@@ -38,7 +41,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -47,7 +49,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.min
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import com.composables.icons.lucide.ArrowLeft
 import com.composables.icons.lucide.Braces
 import com.composables.icons.lucide.Check
 import com.composables.icons.lucide.Copy
@@ -73,11 +77,11 @@ import dev.hermeskotlin.core.media.prettyJson
 import dev.hermeskotlin.designsystem.accent
 import dev.hermeskotlin.designsystem.accentSoft
 import dev.hermeskotlin.designsystem.accentText
+import dev.hermeskotlin.designsystem.background
 import dev.hermeskotlin.designsystem.bodySmall
 import dev.hermeskotlin.designsystem.caption
 import dev.hermeskotlin.designsystem.code
 import dev.hermeskotlin.designsystem.colors
-import dev.hermeskotlin.designsystem.components.BottomSheet
 import dev.hermeskotlin.designsystem.components.Button
 import dev.hermeskotlin.designsystem.components.ButtonSize
 import dev.hermeskotlin.designsystem.components.ButtonVariant
@@ -116,36 +120,40 @@ sealed interface FileLoad {
     data class Failed(val message: String) : FileLoad
 }
 
+/** A linked file's whole bytes for Save and Share, or why the gateway wouldn't hand them over. */
+sealed interface FileDownload {
+    class Ready(val bytes: ByteArray) : FileDownload
+
+    data class Failed(val message: String) : FileDownload
+}
+
 /**
- * A file on the gateway that a reply linked to, opened in a drawer: Markdown rendered, JSON indented,
- * CSV and TSV as a table, code and text with line numbers, scrolled both ways. Save and Share fetch the
- * whole file; the preview only reads the start the gateway hands out. A file with nothing to show
- * (a PDF, an archive, a file the gateway calls binary) gets a card with Save and Share.
+ * A file on the gateway that a reply linked to, opened full screen over the chat: Markdown rendered, JSON
+ * indented, CSV and TSV as a table, code and text with line numbers, scrolled both ways. Save and Share
+ * fetch the whole file; the preview only reads the start the gateway hands out. A file with nothing to
+ * show (a PDF, an archive, a file the gateway calls binary) gets Save and Share buttons. Back closes it.
  */
 @Composable
-internal fun FilePreviewSheet(
+internal fun FileViewer(
     file: GatewayFile?,
     onDismiss: () -> Unit,
     load: suspend (GatewayFile) -> FileLoad,
-    download: suspend (GatewayFile) -> ByteArray?,
-    /** A preview set up beforehand, for screenshots; the sheet loads nothing then. */
-    preset: FileLoad? = null,
+    download: suspend (GatewayFile) -> FileDownload,
 ) {
-    // The last file stays while the sheet slides away.
-    var shown by remember { mutableStateOf(file) }
-    if (file != null) shown = file
-    BottomSheet(visible = file != null, onDismiss = onDismiss) {
-        val current = shown ?: return@BottomSheet
-        FilePreviewContent(current, load, download, preset)
+    if (file == null) return
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+        FileViewerPage(file, onDismiss, load, download)
     }
 }
 
+/** The viewer's page, apart from its window, so previews can draw it; [preset] skips loading for screenshots. */
 @Composable
-private fun FilePreviewContent(
+internal fun FileViewerPage(
     file: GatewayFile,
+    onDismiss: () -> Unit,
     load: suspend (GatewayFile) -> FileLoad,
-    download: suspend (GatewayFile) -> ByteArray?,
-    preset: FileLoad?,
+    download: suspend (GatewayFile) -> FileDownload,
+    preset: FileLoad? = null,
 ) {
     val kind = file.kind
     val result by produceState(preset ?: if (kind.previewable) FileLoad.Loading else null, file, preset) {
@@ -165,24 +173,23 @@ private fun FilePreviewContent(
         if (busy) return
         busy = true
         scope.launch {
-            val bytes = download(file)
-            if (bytes == null) notice = Notice("Couldn't get ${file.name} from the gateway.", error = true) else action(bytes)
+            when (val result = download(file)) {
+                is FileDownload.Ready -> action(result.bytes)
+                is FileDownload.Failed -> notice = Notice("Couldn't get ${file.name}: ${result.message.replaceFirstChar { it.lowercase() }}", error = true)
+            }
             busy = false
         }
     }
 
-    val windowHeight = with(LocalDensity.current) { LocalWindowInfo.current.containerSize.height.toDp() }
-    val tall = min(windowHeight * 0.68f, 760.dp).coerceAtLeast(260.dp)
-    // Nothing to read: the reason needs only a short drawer.
-    val bodyHeight = if (result is FileLoad.Failed || result is FileLoad.Ready && ready == null || result == null) 300.dp else tall
     val textual = ready != null && kind != GatewayFileKind.Markdown && kind != GatewayFileKind.Table || ready != null && raw
 
-    Column(Modifier.fillMaxWidth()) {
+    Column(Modifier.fillMaxSize().background(Theme[colors][background]).windowInsetsPadding(WindowInsets.safeDrawing)) {
         Row(
-            Modifier.fillMaxWidth().padding(start = 18.dp, end = 8.dp, top = 2.dp, bottom = 12.dp),
+            Modifier.fillMaxWidth().padding(start = 4.dp, end = 8.dp, top = 6.dp, bottom = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+            IconButton(Lucide.ArrowLeft, contentDescription = "Close", onClick = onDismiss, tint = Theme[colors][textColor])
             KindTile(kind)
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
@@ -266,7 +273,7 @@ private fun FilePreviewContent(
             )
         }
 
-        Box(Modifier.fillMaxWidth().height(bodyHeight).padding(horizontal = 12.dp)) {
+        Box(Modifier.fillMaxWidth().weight(1f).padding(start = 12.dp, end = 12.dp, bottom = 12.dp)) {
             AnimatedContent(result, transitionSpec = { fadeIn() togetherWith fadeOut() }, contentKey = { it?.let { r -> r::class } }) { state ->
                 when {
                     state == FileLoad.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Spinner() }
@@ -286,11 +293,11 @@ private fun FileBody(file: GatewayFile, kind: GatewayFileKind, text: FileText, r
     val shape = RoundedCornerShape(Theme[radii][radiusMedium])
     val framed = Modifier.fillMaxSize().clip(shape).background(Theme[colors][well]).border(1.dp, Theme[colors][stroke], shape)
     when {
-        kind == GatewayFileKind.Markdown && !raw -> Box(framed.background(Theme[colors][surface])) {
-            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp)) {
+        // Rendered Markdown reads as a page of its own, not a box on one.
+        kind == GatewayFileKind.Markdown && !raw ->
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 4.dp)) {
                 SelectionContainer { MarkdownText(text.text) }
             }
-        }
         kind == GatewayFileKind.Table && !raw -> {
             val delimiter = if (file.extension == "tsv") '\t' else ','
             val table = remember(text) { parseDelimited(text.text, delimiter, truncated = text.truncated) }
@@ -434,11 +441,11 @@ private fun Banner(text: String, tint: Color, background: Color) {
     )
 }
 
-/** The file's type on a tinted tile, the way the drawer's header names it at a glance. */
+/** The file's type on a tinted tile, the way the viewer's header names it at a glance. */
 @Composable
 private fun KindTile(kind: GatewayFileKind) {
     Box(
-        Modifier.size(44.dp).background(Theme[colors][accentSoft], RoundedCornerShape(13.dp)),
+        Modifier.size(40.dp).background(Theme[colors][accentSoft], RoundedCornerShape(12.dp)),
         contentAlignment = Alignment.Center,
     ) {
         UnstyledIcon(kindIcon(kind), contentDescription = kind.label, tint = Theme[colors][accentText], modifier = Modifier.size(22.dp))

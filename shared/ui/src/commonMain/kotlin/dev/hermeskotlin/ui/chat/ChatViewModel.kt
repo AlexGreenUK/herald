@@ -666,7 +666,7 @@ class ChatViewModel(
     }
 
     /**
-     * The start of a gateway file a reply linked to, for its preview drawer; the reason in plain words
+     * The start of a gateway file a reply linked to, for its viewer; the reason in plain words
      * when the gateway won't hand it over.
      */
     suspend fun previewFile(file: GatewayFile): FileLoad {
@@ -677,15 +677,16 @@ class ChatViewModel(
         }
     }
 
-    /** A whole gateway file a reply linked to, for Save and Share; cached like the chat's other media. */
-    suspend fun downloadFile(file: GatewayFile): ByteArray? {
-        val key = "fs:${target?.profile.orEmpty()}:${file.path}"
-        mediaCache[key]?.let { return it }
-        val gateway = target?.gateway?.gatewayUrl ?: return null
-        val bytes = (media.download(gateway, file.path, target?.profile) as? ApiResult.Success)?.value ?: return null
-        if (mediaCache.size >= MAX_CACHED_MEDIA) mediaCache.remove(mediaCache.keys.first())
-        mediaCache[key] = bytes
-        return bytes
+    /**
+     * A whole gateway file a reply linked to, through the chat's profile: for Save and Share, and for a
+     * linked picture. Fetched each time, so a file the agent has since rewritten comes back as it is now.
+     */
+    suspend fun downloadFile(file: GatewayFile): FileDownload {
+        val gateway = target?.gateway?.gatewayUrl ?: return FileDownload.Failed("Not connected to a gateway.")
+        return when (val result = media.download(gateway, file.path, target?.profile)) {
+            is ApiResult.Success -> FileDownload.Ready(result.value)
+            else -> FileDownload.Failed(fileError(result))
+        }
     }
 
     /** Adds picked files to the composer tray, up to [OutgoingAttachment.MAX_COUNT]. */
@@ -1221,7 +1222,7 @@ class ChatViewModel(
     }
 }
 
-/** Why a gateway file couldn't be read, in the words the preview drawer shows. */
+/** Why a gateway file couldn't be read, in the words the file viewer shows. */
 internal fun fileError(result: ApiResult<*>): String = when (result) {
     is ApiResult.Failed -> when (result.status) {
         404 -> "It isn't on the gateway, or it has moved since the reply was written."

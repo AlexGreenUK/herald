@@ -7,6 +7,11 @@ import dev.hermeskotlin.core.network.map
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.request.get
+import io.ktor.client.request.prepareGet
+import io.ktor.client.statement.bodyAsChannel
+import io.ktor.utils.io.readRemaining
+import kotlinx.coroutines.CancellationException
+import kotlinx.io.readByteArray
 import io.ktor.client.request.parameter
 import io.ktor.http.contentLength
 import kotlinx.serialization.SerialName
@@ -34,6 +39,8 @@ class MediaApi(
     private val client: HttpClient,
     /** For pictures from the open web: no gateway cookies go along. */
     private val web: HttpClient = client,
+    /** The most a linked file is fetched into memory for Save or Share ([download]). */
+    private val maxDownloadBytes: Long = MAX_DOWNLOAD_BYTES,
 ) {
 
     /**
@@ -69,12 +76,24 @@ class MediaApi(
      * backend like the preview does), falling back to [file] on a gateway without it.
      */
     suspend fun download(url: GatewayUrl, path: String, profile: String? = null): ApiResult<ByteArray> {
-        val result = apiCall {
-            client.get(url.resolve("api/fs/download")) {
-                parameter("path", path)
-                profile?.let { parameter("profile", it) }
+        // Streamed and counted: unlike the managed route, /api/fs/download has no size cap of its own.
+        val result = client.prepareGet(url.resolve("api/fs/download")) {
+            parameter("path", path)
+            profile?.let { parameter("profile", it) }
+        }.execute { response ->
+            apiCall { response }.let { checked ->
+                if (checked !is ApiResult.Success) return@execute checked.map { ByteArray(0) }
+                if ((response.contentLength() ?: 0) > maxDownloadBytes) return@execute ApiResult.Failed(413, TOO_LARGE)
+                val bytes = try {
+                    response.bodyAsChannel().readRemaining(maxDownloadBytes + 1).readByteArray()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    return@execute ApiResult.Unavailable(e.message ?: "Download failed")
+                }
+                if (bytes.size > maxDownloadBytes) ApiResult.Failed(413, TOO_LARGE) else ApiResult.Success(bytes)
             }
-        }.map { it.body<ByteArray>() }
+        }
         // FastAPI's own "Not Found" means no such route; the route's own 404 says "File not found".
         val noRoute = result is ApiResult.Failed && (result.status == 405 || result.status == 404 && result.message in setOf("Not Found", "HTTP 404"))
         return if (noRoute) {
@@ -91,8 +110,12 @@ class MediaApi(
         response.body<ByteArray>().also { check(it.size <= MAX_REMOTE_BYTES) { "Picture is too large" } }
     }
 
-    private companion object {
-        const val MAX_REMOTE_BYTES = 20L * 1024 * 1024
+    companion object {
+        private const val MAX_REMOTE_BYTES = 20L * 1024 * 1024
+
+        const val MAX_DOWNLOAD_BYTES = 64L * 1024 * 1024
+
+        const val TOO_LARGE = "It's over 64 MB, too large to fetch to the phone from the chat."
     }
 
     /** The image's bytes, decoded from the `data_url` the gateway answers with (media folders only). */
