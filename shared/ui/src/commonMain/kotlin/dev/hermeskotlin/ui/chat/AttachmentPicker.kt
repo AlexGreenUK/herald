@@ -26,3 +26,6 @@ expect fun rememberAttachmentPicker(
 /** Decodes an encoded image, sampled down to about [maxEdge] px on its long side; null when it can't be read. */
 @Composable
 expect fun rememberImageBitmap(bytes: ByteArray, maxEdge: Int = 320): ImageBitmap?
+
+/** [rememberImageBitmap] outside composition, for decoding off the main thread. */
+expect fun decodeImageBitmap(bytes: ByteArray, maxEdge: Int): ImageBitmap?

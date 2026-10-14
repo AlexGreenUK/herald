@@ -120,9 +120,11 @@ suspend fun readAttachments(context: Context, uris: List<Uri>): Pair<List<Outgoi
 
 @Composable
 actual fun rememberImageBitmap(bytes: ByteArray, maxEdge: Int): ImageBitmap? = remember(bytes, maxEdge) {
-    // A full-size photo is sampled down to what the view needs rather than decoded whole.
-    decodeUpright(bytes, maxEdge)?.asImageBitmap()
+    decodeImageBitmap(bytes, maxEdge)
 }
+
+// A full-size photo is sampled down to what the view needs rather than decoded whole.
+actual fun decodeImageBitmap(bytes: ByteArray, maxEdge: Int): ImageBitmap? = decodeUpright(bytes, maxEdge)?.asImageBitmap()
 
 /**
  * Reads one picked item: photos are upright, at most [MAX_EDGE] px and JPEG; anything else is sent as is.
