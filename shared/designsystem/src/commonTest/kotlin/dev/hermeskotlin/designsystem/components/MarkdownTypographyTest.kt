@@ -54,6 +54,17 @@ class MarkdownTypographyTest {
     }
 
     @Test
+    fun aCompactStyleTakesWhatItLeavesUnsetFromTheBody() {
+        val body = TextStyle(fontSize = 15.sp, lineHeight = 22.sp, color = Color.White)
+        val compact = compactStyle(body, TextStyle(fontSize = 12.sp))!!
+        assertEquals(12.sp, compact.fontSize)
+        // The bullet dots are placed by the line height, and formulas are drawn in the text color.
+        assertEquals(22.sp, compact.lineHeight)
+        assertEquals(Color.White, compact.color)
+        assertEquals(null, compactStyle(body, null))
+    }
+
+    @Test
     fun repliesWithoutAnOverrideKeepTheirTypography() {
         assertSame(normal, normal.withTextStyle(null))
     }

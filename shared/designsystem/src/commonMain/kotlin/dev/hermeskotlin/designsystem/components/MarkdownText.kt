@@ -119,6 +119,9 @@ val LocalCodeWrap = compositionLocalOf { false }
 /** The Markdown being drawn is still streaming in. */
 private val LocalStreaming = compositionLocalOf { false }
 
+/** [textStyle] laid over the reply's [body] style: what it leaves unset (color, line height, font) stays the body's. */
+internal fun compactStyle(body: TextStyle, textStyle: TextStyle?): TextStyle? = textStyle?.let(body::merge)
+
 /** A compact text style keeps every block small, while code keeps its own font and links their accent. */
 internal fun DefaultMarkdownTypography.withTextStyle(style: TextStyle?): DefaultMarkdownTypography {
     if (style == null) return this
@@ -144,7 +147,9 @@ internal fun DefaultMarkdownTypography.withTextStyle(style: TextStyle?): Default
 @Composable
 fun MarkdownText(text: String, modifier: Modifier = Modifier, streaming: Boolean = false, textStyle: TextStyle? = null) {
     val prepared = remember(text) { MathMarkup.prepare(text) }
-    val bodyStyle = textStyle ?: Theme[typography][body].copy(color = Theme[colors][textColor])
+    val replyStyle = Theme[typography][body].copy(color = Theme[colors][textColor])
+    val compact = compactStyle(replyStyle, textStyle)
+    val bodyStyle = compact ?: replyStyle
     val codeStyle = Theme[typography][code].copy(color = Theme[colors][textColor])
     val headingStyle = Theme[typography][heading].copy(color = Theme[colors][textColor])
     val linkColor = Theme[colors][accentText]
@@ -160,19 +165,19 @@ fun MarkdownText(text: String, modifier: Modifier = Modifier, streaming: Boolean
         h2 = headingStyle.copy(fontSize = 19.sp, lineHeight = 26.sp),
         h3 = headingStyle,
         h4 = headingStyle,
-        h5 = bodyStyle.copy(fontWeight = FontWeight.SemiBold),
-        h6 = bodyStyle.copy(fontWeight = FontWeight.SemiBold),
-        text = bodyStyle,
+        h5 = replyStyle.copy(fontWeight = FontWeight.SemiBold),
+        h6 = replyStyle.copy(fontWeight = FontWeight.SemiBold),
+        text = replyStyle,
         code = codeStyle,
         inlineCode = codeStyle,
-        quote = bodyStyle.copy(color = Theme[colors][textTertiary]),
-        paragraph = bodyStyle,
-        ordered = bodyStyle,
-        bullet = bodyStyle,
-        list = bodyStyle,
+        quote = replyStyle.copy(color = Theme[colors][textTertiary]),
+        paragraph = replyStyle,
+        ordered = replyStyle,
+        bullet = replyStyle,
+        list = replyStyle,
         textLink = TextLinkStyles(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)),
-        table = bodyStyle,
-    ).withTextStyle(textStyle)
+        table = replyStyle,
+    ).withTextStyle(compact)
     val components = remember {
         markdownComponents(
             codeFence = { MarkdownCodeFence(it.content, it.node, block = { code, language, style -> CodeBlock(code, language, style) }) },
