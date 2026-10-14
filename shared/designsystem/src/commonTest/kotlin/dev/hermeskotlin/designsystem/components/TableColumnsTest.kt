@@ -56,4 +56,11 @@ class TableColumnsTest {
     fun noColumnsIsFine() {
         assertEquals(0, tableColumnWidths(IntArray(0), IntArray(0), 500).size)
     }
+
+    @Test
+    fun eachRowStartsWhereTheRowsAboveItEnd() {
+        assertContentEquals(intArrayOf(0, 30, 50, 95), tableRowOffsets(intArrayOf(30, 20, 45, 10)))
+        assertContentEquals(intArrayOf(0), tableRowOffsets(intArrayOf(12)))
+        assertContentEquals(intArrayOf(), tableRowOffsets(intArrayOf()))
+    }
 }

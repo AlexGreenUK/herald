@@ -139,10 +139,11 @@ private fun TableGrid(
         val rowLines = (0 until rows.size - 1).map { measurables[next++].measure(Constraints.fixed(width, line)) }
         val columnLines = (0 until columnCount - 1).map { measurables[next++].measure(Constraints.fixed(line, height)) }
         val stripes = stripedRows.map { measurables[next++].measure(Constraints.fixed(width, rowHeights[it])) }
+        val rowTops = tableRowOffsets(rowHeights)
 
         layout(width, height) {
             // Placed first, so the cells and lines are drawn over the tint.
-            stripes.forEachIndexed { i, placeable -> placeable.placeRelative(0, rowHeights.take(stripedRows[i]).sum()) }
+            stripes.forEachIndexed { i, placeable -> placeable.placeRelative(0, rowTops[stripedRows[i]]) }
             var index = 0
             var y = 0
             rows.forEachIndexed { rowIndex, cells ->

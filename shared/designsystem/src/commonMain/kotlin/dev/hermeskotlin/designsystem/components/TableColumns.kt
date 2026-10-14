@@ -32,3 +32,10 @@ internal fun tableColumnWidths(min: IntArray, max: IntArray, available: Int): In
     }
     return widths
 }
+
+/** Where each row starts, from the top of the table, given the [heights] of the rows: one pass, kept for placing. */
+internal fun tableRowOffsets(heights: IntArray): IntArray {
+    val offsets = IntArray(heights.size)
+    for (row in 1 until heights.size) offsets[row] = offsets[row - 1] + heights[row - 1]
+    return offsets
+}
