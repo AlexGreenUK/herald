@@ -294,6 +294,7 @@ fun SessionsSidebar(
     val settingsStore = koinInject<SettingsStore>()
     val settings = settingsStore.settings.collectAsStateWithLifecycle().value
     val pinnedCollapsed = settings?.pinnedCollapsed ?: false
+    val threadsCollapsed = settings?.threadsCollapsed ?: false
     val projectsAsDropdown = settings?.projectsAsDropdown ?: false
     var profilesOpen by remember { mutableStateOf(false) }
 
@@ -593,6 +594,8 @@ fun SessionsSidebar(
                         shownProject = state.project,
                         pinnedCollapsed = pinnedCollapsed,
                         onTogglePinned = { settingsStore.update { it.copy(pinnedCollapsed = !it.pinnedCollapsed) } },
+                        threadsCollapsed = threadsCollapsed,
+                        onToggleThreads = { settingsStore.update { it.copy(threadsCollapsed = !it.threadsCollapsed) } },
                         status = {
                             if (!state.loading && state.error == null && (state.projects.isNotEmpty() || state.canMakeProjects)) {
                                 item(key = "projects") {
@@ -804,6 +807,7 @@ internal fun SessionsSidebarSample(
 ) {
     // Folds for real in the gallery, kept only while the preview shows.
     var pinnedCollapsed by remember { mutableStateOf(false) }
+    var threadsCollapsed by remember { mutableStateOf(false) }
     Box(
         Modifier
             .fillMaxSize()
@@ -828,6 +832,8 @@ internal fun SessionsSidebarSample(
                     threads = sections.threads,
                     pinnedCollapsed = pinnedCollapsed,
                     onTogglePinned = { pinnedCollapsed = !pinnedCollapsed },
+                    threadsCollapsed = threadsCollapsed,
+                    onToggleThreads = { threadsCollapsed = !threadsCollapsed },
                     status = {
                         if (projects.isNotEmpty() || canMakeProjects) {
                             item(key = "projects") {
@@ -1325,6 +1331,10 @@ private fun SessionList(
     pinnedCollapsed: Boolean = false,
     /** Folds or unfolds the Pinned section; null, its label is plain text. */
     onTogglePinned: (() -> Unit)? = null,
+    /** The Threads section is folded to the threads [visibleThreads] keeps. */
+    threadsCollapsed: Boolean = false,
+    /** Folds or unfolds the Threads section; null, its label is plain text. */
+    onToggleThreads: (() -> Unit)? = null,
     /** Filters and the loading, error or empty notices, shown above the unpinned chats. */
     status: LazyListScope.() -> Unit = {},
     header: LazyListScope.() -> Unit = {},
@@ -1369,8 +1379,14 @@ private fun SessionList(
                         ThreadReorder(threads, { projectIndex.labelFor(it.session, shownProject) }, onDone = onReordered)
                     }
                 } else {
-                    item(key = "label-threads") { ListLabel("Threads") }
-                    items(threads, key = { "thread-${it.thread.id}" }) { row ->
+                    item(key = "label-threads") {
+                        if (onToggleThreads != null) {
+                            SectionToggle("Threads", threads.size, threadsCollapsed, "threads", onToggleThreads)
+                        } else {
+                            ListLabel("Threads")
+                        }
+                    }
+                    items(visibleThreads(threads, threadsCollapsed, selectedId, statuses, drafts), key = { "thread-${it.thread.id}" }) { row ->
                         SessionRow(
                             row.session.copy(title = row.thread.name),
                             selected = row.session.id == selectedId || row.thread.sessionId == selectedId,
@@ -1387,7 +1403,11 @@ private fun SessionList(
             }
             if (pinned.isNotEmpty()) {
                 item(key = "label-pinned") {
-                    if (onTogglePinned != null) PinnedLabel(pinned.size, pinnedCollapsed, onTogglePinned) else ListLabel("Pinned")
+                    if (onTogglePinned != null) {
+                        SectionToggle("Pinned", pinned.size, pinnedCollapsed, "pinned chats", onTogglePinned)
+                    } else {
+                        ListLabel("Pinned")
+                    }
                 }
                 items(visiblePinned(pinned, pinnedCollapsed, selectedId, statuses, drafts), key = { it.id }) { row(it) }
             }
@@ -1598,17 +1618,17 @@ private fun ListLabel(text: String) {
 }
 
 /**
- * The "PINNED · n" label as a toggle: a chevron points down while the section is open and right while
- * it is folded.
+ * A section's "[title] · n" label as a toggle: a chevron points down while the section is open and right
+ * while it is folded. [rows] names what it holds for the click label ("Show [rows]").
  */
 @Composable
-private fun PinnedLabel(count: Int, collapsed: Boolean, onToggle: () -> Unit) {
+private fun SectionToggle(title: String, count: Int, collapsed: Boolean, rows: String, onToggle: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
             .heightIn(min = MinTouchTarget)
             .clip(RoundedCornerShape(Theme[radii][radiusSmall]))
-            .clickable(onClickLabel = if (collapsed) "Show pinned chats" else "Hide pinned chats", role = Role.Button, onClick = onToggle)
+            .clickable(onClickLabel = if (collapsed) "Show $rows" else "Hide $rows", role = Role.Button, onClick = onToggle)
             .semantics(mergeDescendants = true) {
                 heading()
                 stateDescription = if (collapsed) "Collapsed" else "Expanded"
@@ -1618,7 +1638,7 @@ private fun PinnedLabel(count: Int, collapsed: Boolean, onToggle: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            "PINNED · $count",
+            "${title.uppercase()} · $count",
             style = Theme[typography][eyebrow],
             color = Theme[colors][textTertiary],
             maxLines = 1,
@@ -1647,6 +1667,20 @@ internal fun visiblePinned(
 ): List<SessionSummary> =
     if (!collapsed) pinned
     else pinned.filter { it.id == selectedId || rowTone(statuses[it.id], it.id in drafts) != RowTone.Idle }
+
+/** The [threads] the Threads section lists, folded the way [visiblePinned] folds Pinned. */
+internal fun visibleThreads(
+    threads: List<ThreadRow>,
+    collapsed: Boolean,
+    selectedId: String?,
+    statuses: Map<String, RowStatus>,
+    drafts: Set<String>,
+): List<ThreadRow> =
+    if (!collapsed) threads
+    else threads.filter {
+        it.session.id == selectedId || it.thread.sessionId == selectedId ||
+            rowTone(statuses[it.session.id], it.session.id in drafts) != RowTone.Idle
+    }
 
 /** Whether a row with [status] stays in the list under this filter. */
 internal fun AttentionFilter.keeps(status: RowStatus?): Boolean = when (this) {
