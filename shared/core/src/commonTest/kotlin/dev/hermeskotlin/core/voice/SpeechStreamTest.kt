@@ -4,6 +4,7 @@ import dev.hermeskotlin.core.gateway.GatewayUrl
 import io.ktor.websocket.Frame
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
@@ -143,6 +144,33 @@ class SpeechStreamTest {
         sending.join()
 
         assertFalse(after)
+    }
+
+    @Test
+    fun aCollectorCancelledWhileWaitingIsCancelledNotDone() = runTest {
+        val stream = KtorSpeechStream(Channel(), Channel()) {}
+        var done = false
+        val listening = launch {
+            stream.events.toList()
+            done = true
+        }
+        testScheduler.runCurrent()
+
+        listening.cancel()
+        listening.join()
+
+        assertFalse(done)
+    }
+
+    @Test
+    fun aCollectorThatStopsEarlyIsntSwallowed() = runTest {
+        val incoming = Channel<Frame>(Channel.UNLIMITED)
+        incoming.send(Frame.Text("""{"type":"start","sample_rate":24000}"""))
+        incoming.send(Frame.Binary(true, byteArrayOf(1, 0)))
+        val stream = KtorSpeechStream(incoming, Channel(Channel.UNLIMITED)) {}
+
+        // Taking one aborts the flow from downstream; swallowing that would break the flow's contract.
+        assertEquals(SpeechStreamEvent.Start(sampleRate = 24_000), stream.events.first())
     }
 
     @Test

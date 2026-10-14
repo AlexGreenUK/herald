@@ -289,7 +289,7 @@ class VoiceController(
                 // Not voiced after all (the prompt didn't go, or the chat ended first): the socket doesn't stay open.
                 if (!handedOver) withContext(NonCancellable) {
                     opening.cancel()
-                    runCatching { opening.await() }.getOrNull()?.close()
+                    runCatching { opening.await()?.close() }
                 }
             }
         } ?: return true

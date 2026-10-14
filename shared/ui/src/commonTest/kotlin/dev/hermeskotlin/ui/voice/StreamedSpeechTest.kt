@@ -330,6 +330,39 @@ class StreamedSpeechTest {
         setup.voice.stopChat()
     }
 
+    /** Events that end with a stray cancellation are the voice breaking off, not a skip: the reply is read out. */
+    @Test
+    fun eventsEndedByTheSocketsOwnCancellationReadTheReply() = runTest {
+        val stream = Stream()
+        val setup = chat(stream)
+
+        setup.socket.event("message.start")
+        setup.socket.event("message.delta", """{"text":"Fine. "}""")
+        stream.appended.first { it.isNotEmpty() }
+        stream.gateway.close(CancellationException("WebSocket session closed with code NORMAL."))
+        setup.socket.event("message.delta", """{"text":"And you?"}""")
+        setup.socket.event("message.complete", """{"text":"Fine. And you?","status":"complete"}""")
+
+        setup.voice.chat.first { it.phase == VoicePhase.Listening && setup.spoken.isNotEmpty() }
+        assertEquals(listOf("Fine. And you?"), setup.spoken)
+        setup.voice.stopChat()
+    }
+
+    /** Ended before the turn starts, on a socket whose close throws: nothing escapes the cleanup. */
+    @Test
+    fun endingEarlyOnASocketThatThrowsWhenClosed() = runTest {
+        val stream = Stream(closedByTheGateway = true)
+        var opened = false
+        val setup = chat(holdPrompts = true) { opened = true; stream }
+        while (!opened) yield()
+
+        setup.voice.stopChat()
+        testScheduler.runCurrent()
+
+        assertTrue(stream.closed)
+        assertEquals(VoicePhase.Off, setup.voice.chat.value.phase)
+    }
+
     /** A reply that was voiced to its end, on a socket that throws when it's closed afterwards, listens again. */
     @Test
     fun aVoicedReplyOnASocketTheGatewayClosedListensAgain() = runTest {
