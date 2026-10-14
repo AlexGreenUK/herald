@@ -28,11 +28,20 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.ui.graphics.ImageBitmap
+import kotlinx.coroutines.CoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -88,6 +97,9 @@ import dev.hermeskotlin.designsystem.components.ButtonSize
 import dev.hermeskotlin.designsystem.components.ButtonVariant
 import dev.hermeskotlin.designsystem.components.CodeView
 import dev.hermeskotlin.designsystem.components.IconButton
+import dev.hermeskotlin.designsystem.components.LocalFileLinks
+import dev.hermeskotlin.designsystem.components.LocalMarkdownPictures
+import dev.hermeskotlin.designsystem.components.MarkdownPicture
 import dev.hermeskotlin.designsystem.components.MarkdownText
 import dev.hermeskotlin.designsystem.components.SegmentedControl
 import dev.hermeskotlin.designsystem.components.Spinner
@@ -141,7 +153,9 @@ sealed interface FileDownload {
  * indented, CSV and TSV as a table, code and text with line numbers, scrolled both ways, a PDF's pages.
  * Save and Share fetch the whole file; a text preview only reads the start the gateway hands out, while
  * a PDF is fetched whole once and kept for them. A file with nothing to show (an archive, a file the
- * gateway calls binary) gets Save and Share buttons. Back closes it.
+ * gateway calls binary) gets Save and Share buttons. A link in a Markdown file to another file opens it
+ * here, relative ones against the file's folder; Back goes back to the file before, and closes the viewer
+ * from the first one.
  */
 @Composable
 internal fun FileViewer(
@@ -151,12 +165,55 @@ internal fun FileViewer(
     download: suspend (GatewayFile) -> FileDownload,
 ) {
     if (file == null) return
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
-        FileViewerPage(file, onDismiss, load, download)
+    // The files opened from links, the one from the reply first.
+    var stack by rememberSaveable(file, stateSaver = StackSaver) { mutableStateOf(listOf(file)) }
+    var picture by remember(file) { mutableStateOf<ViewerImage?>(null) }
+    // Each page's scroll position, kept while a file it linked to is open on top of it.
+    val pages = rememberSaveableStateHolder()
+    // What the files below the top one showed, so Back finds a page as tall as it was and its scroll fits.
+    val loaded = remember(file) { mutableMapOf<GatewayFile, FileLoad>() }
+    val scope = rememberCoroutineScope()
+    val pictures = remember(file) { LinkedPictures(scope) }
+    fun pageKey(index: Int) = "$index|${stack[index].path}"
+    fun back() {
+        if (stack.size > 1) {
+            pages.removeState(pageKey(stack.lastIndex))
+            stack = stack.dropLast(1)
+        } else {
+            onDismiss()
+        }
     }
+    Dialog(onDismissRequest = ::back, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+        val top = stack.last()
+        pages.SaveableStateProvider(pageKey(stack.lastIndex)) {
+            FileViewerPage(
+                top,
+                onDismiss = ::back,
+                load = { linked -> load(linked).also { if (it is FileLoad.Ready) loaded[linked] = it } },
+                download = download,
+                preset = loaded[top],
+                canGoBack = stack.size > 1,
+                onOpenFile = { linked ->
+                    when {
+                        // A link to a line of this same file: rendered Markdown has no lines to go to.
+                        linked.path == top.path -> Unit
+                        // A picture opens in the picture viewer, like one linked from a reply.
+                        linked.kind == GatewayFileKind.Image -> picture = ViewerImage(linked.name, fetch = { download(linked) })
+                        else -> stack = stack + linked
+                    }
+                },
+                onOpenPicture = { picture = it },
+                pictures = pictures,
+            )
+        }
+    }
+    picture?.let { ImageViewer(it, onDismiss = { picture = null }) }
 }
 
-/** The viewer's page, apart from its window, so previews can draw it; [preset] skips loading for screenshots. */
+/**
+ * The viewer's page, apart from its window, so previews can draw it; [preset] skips loading for screenshots.
+ * [onOpenFile] gets a gateway file a link in the text points at; [onOpenPicture] a picture shown in it.
+ */
 @Composable
 internal fun FileViewerPage(
     file: GatewayFile,
@@ -164,6 +221,10 @@ internal fun FileViewerPage(
     load: suspend (GatewayFile) -> FileLoad,
     download: suspend (GatewayFile) -> FileDownload,
     preset: FileLoad? = null,
+    canGoBack: Boolean = false,
+    onOpenFile: (GatewayFile) -> Unit = {},
+    onOpenPicture: (ViewerImage) -> Unit = {},
+    pictures: LinkedPictures? = null,
 ) {
     val kind = file.kind
     val openPdf = rememberPdfOpener()
@@ -231,7 +292,7 @@ internal fun FileViewerPage(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            IconButton(Lucide.ArrowLeft, contentDescription = "Close", onClick = onDismiss, tint = Theme[colors][textColor])
+            IconButton(Lucide.ArrowLeft, contentDescription = if (canGoBack) "Back" else "Close", onClick = onDismiss, tint = Theme[colors][textColor])
             KindTile(kind)
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
@@ -346,12 +407,94 @@ internal fun FileViewerPage(
                     ready == null -> Unavailable(file, kind, null, onSave = { withBytes { notice = Notice(actions.save(it, file.name)) } }, onShare = {
                         withBytes { actions.share(it, file.name) }
                     })
-                    else -> FileBody(file, kind, ready, raw = raw, wrap = wrap)
+                    else -> {
+                        val shown = rememberLinkedPictures(file, pictures, download, onOpenPicture)
+                        val onLink by rememberUpdatedState(onOpenFile)
+                        val links = remember(file) { { link: String -> file.resolve(link)?.let { onLink(it) }; Unit } }
+                        CompositionLocalProvider(
+                            LocalFileLinks provides links,
+                            LocalMarkdownPictures provides shown,
+                        ) {
+                            FileBody(file, kind, ready, raw = raw, wrap = wrap)
+                        }
+                    }
                 }
             }
         }
     }
 }
+
+/**
+ * The pictures a viewer's Markdown files show, fetched and decoded once while it's open: the library asks for
+ * a picture from more than one place (in the line, then as a block of its own once it's taller than one), and
+ * Back to a file shouldn't fetch its pictures again.
+ */
+internal class LinkedPictures(private val scope: CoroutineScope) {
+    sealed interface Entry {
+        data object Loading : Entry
+
+        class Ready(val bitmap: ImageBitmap, val bytes: ByteArray) : Entry
+
+        data object Failed : Entry
+    }
+
+    private val entries = mutableStateMapOf<GatewayFile, Entry>()
+
+    operator fun get(file: GatewayFile): Entry? = entries[file]
+
+    /** Starts fetching [file] unless it's already fetched or on its way. */
+    fun request(file: GatewayFile, download: suspend (GatewayFile) -> FileDownload) {
+        if (file in entries) return
+        entries[file] = Entry.Loading
+        scope.launch {
+            entries[file] = when (val result = download(file)) {
+                is FileDownload.Ready -> withContext(Dispatchers.Default) { decodeImageBitmap(result.bytes, PICTURE_EDGE) }
+                    ?.let { Entry.Ready(it, result.bytes) } ?: Entry.Failed
+                is FileDownload.Failed -> Entry.Failed
+            }
+        }
+    }
+}
+
+/** Shows the pictures a Markdown file links to (`![chart](chart.png)`, relative to its folder) from [cache]. */
+@Composable
+private fun rememberLinkedPictures(
+    file: GatewayFile,
+    cache: LinkedPictures?,
+    download: suspend (GatewayFile) -> FileDownload,
+    onOpen: (ViewerImage) -> Unit,
+): @Composable (String) -> MarkdownPicture? {
+    val scope = rememberCoroutineScope()
+    val pictures = cache ?: remember { LinkedPictures(scope) }
+    val fetch by rememberUpdatedState(download)
+    val open by rememberUpdatedState(onOpen)
+    return remember(file, pictures) {
+        { link ->
+            val target = remember(link) { file.resolve(link)?.takeIf { it.kind == GatewayFileKind.Image } }
+            if (target == null) {
+                null
+            } else {
+                LaunchedEffect(target) { pictures.request(target) { fetch(it) } }
+                when (val entry = pictures[target]) {
+                    null, LinkedPictures.Entry.Loading -> MarkdownPicture.Loading
+                    LinkedPictures.Entry.Failed -> MarkdownPicture.Failed
+                    is LinkedPictures.Entry.Ready -> remember(entry) {
+                        MarkdownPicture.Ready(entry.bitmap) { open(ViewerImage(target.name, bytes = entry.bytes)) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** The viewer's files as paths and lines, so the stack outlives a recreated activity. */
+private val StackSaver = listSaver<List<GatewayFile>, Any>(
+    save = { stack -> stack.flatMap { listOf(it.path, it.line ?: 0) } },
+    restore = { saved -> saved.chunked(2).map { (path, line) -> GatewayFile(path as String, (line as Int).takeIf { it > 0 }) } },
+)
+
+/** A picture in a Markdown file is decoded at most this many pixels on a side: wider than the screen, never a whole photo. */
+private const val PICTURE_EDGE = 1600
 
 @Composable
 private fun FileBody(file: GatewayFile, kind: GatewayFileKind, text: FileText, raw: Boolean, wrap: Boolean) {
