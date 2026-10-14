@@ -337,6 +337,23 @@ class PushSetupTest {
     }
 
     @Test
+    fun aBotCopyWhoseVersionDoesNotReadAsOneIsNeverReplaced() = runTest {
+        val s = setup(FakeKeys())
+        val gateway = FakeGateway(installed = true).apply {
+            profiles["dev"] = Copy("0.4.0-dev")
+            profiles["blank"] = Copy("")
+        }
+        connect(s, gateway)
+        s.setup.enable()
+
+        // Maybe newer than the reviewed one: nothing is offered, and an update elsewhere doesn't touch it.
+        assertNull(s.setup.status.value.update)
+        s.setup.updatePlugin()
+        assertEquals(Copy("0.4.0-dev"), gateway.profiles["dev"])
+        assertEquals(Copy(""), gateway.profiles["blank"])
+    }
+
+    @Test
     fun aBotUpdateFailureNamesTheProfileAndDoesNotPreventOtherUpdates() = runTest {
         val s = setup(FakeKeys())
         val gateway = FakeGateway(installed = true).apply {

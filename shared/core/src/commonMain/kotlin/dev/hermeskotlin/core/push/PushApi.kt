@@ -278,7 +278,8 @@ class PushApi(private val connection: GatewayConnection) {
         }
         return bots.mapNotNull { bot ->
             try {
-                botCopy(bot.name)?.takeUnless { PushPluginReply(version = it.version).versionAtLeast(PLUGIN_VERSION) }
+                // A version that doesn't read as one may be newer (a dev copy): never replaced.
+                botCopy(bot.name)?.takeIf { it.version.isVersion() && !PushPluginReply(version = it.version).versionAtLeast(PLUGIN_VERSION) }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -287,6 +288,8 @@ class PushApi(private val connection: GatewayConnection) {
             }
         }
     }
+
+    private fun String.isVersion(): Boolean = isNotEmpty() && split('.').all { it.toIntOrNull() != null }
 
     private suspend fun botCopy(profile: String): BotCopy? {
         val result = client().request("plugins.manage", buildJsonObject {
