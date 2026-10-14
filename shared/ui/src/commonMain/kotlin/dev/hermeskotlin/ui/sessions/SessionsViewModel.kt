@@ -460,6 +460,7 @@ class SessionsViewModel(
         _badge.value = SessionsBadge()
         _banner.value = null
         previewJob?.cancel()
+        recentJob?.cancel()
         recentRows.value = emptyList()
         // Bots are the gateway's, not the profile's: the roster doesn't change with the profile, so nothing would
         // hand them back after a profile switch. Another gateway's roster replaces them as it loads.
@@ -947,6 +948,28 @@ class SessionsViewModel(
                 }
             }
             if (result is ApiResult.Success) freshList.value = true
+        }
+        loadRecentForOthers(url, profile, filter)
+    }
+
+    private var recentJob: Job? = null
+
+    /**
+     * While the sidebar shows another list (the archive), the recent chats are read too, on the same triggers as
+     * the list (a change on the gateway, a reconnect, the chat coming back), so a reply in one still reaches the
+     * badge, the banner and Next. Only while the chat shows: nothing is read for this in the background. Only the
+     * plain recent list; a picked project's chats wait for Recent to show again. The sidebar's state is untouched.
+     */
+    private fun loadRecentForOthers(url: GatewayUrl, profile: String?, filter: SessionListFilter) {
+        recentJob?.cancel()
+        if (filter == SessionListFilter.Recent || !chatShown.value) return
+        recentJob = viewModelScope.launch {
+            val limit = recentRows.value.size.coerceIn(SessionsApi.PAGE_SIZE, 100)
+            val result = api.list(url, limit = limit, filter = SessionListFilter.Recent, profile = profile)
+            if (result !is ApiResult.Success || bound.value != url to profile) return@launch
+            // Recent may have come back meanwhile; then its own read speaks for the recent chats.
+            if (_state.value.filter == SessionListFilter.Recent) return@launch
+            recentRows.value = result.value.sessions
         }
     }
 
