@@ -292,34 +292,6 @@
                 android:name="android.app.shortcuts"
                 android:resource="@xml/shortcuts" />
         </activity-alias>
-        <activity-alias
-            android:name=".AppIconNous"
-            android:enabled="false"
-            android:exported="true"
-            android:icon="@mipmap/ic_launcher_nous"
-            android:targetActivity=".HeraldActivity">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-            <meta-data
-                android:name="android.app.shortcuts"
-                android:resource="@xml/shortcuts" />
-        </activity-alias>
-        <activity-alias
-            android:name=".AppIconNousDark"
-            android:enabled="false"
-            android:exported="true"
-            android:icon="@mipmap/ic_launcher_nous_dark"
-            android:targetActivity=".HeraldActivity">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-            <meta-data
-                android:name="android.app.shortcuts"
-                android:resource="@xml/shortcuts" />
-        </activity-alias>
 
         <!--
             Health Connect's "privacy policy" link for Herald: the README's Privacy section, in the browser. Invisible.

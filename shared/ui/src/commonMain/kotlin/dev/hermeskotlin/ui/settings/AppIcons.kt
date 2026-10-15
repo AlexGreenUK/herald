@@ -7,12 +7,11 @@ import androidx.compose.ui.graphics.ImageBitmap
 enum class AppIconGroup(val title: String) {
     Colors("Colors"),
     Patterns("Patterns"),
-    HermesAgent("Hermes Agent"),
 }
 
 /**
  * The launcher icons Herald comes with. [Blue] is the brand icon every install starts with; the colors are the
- * accents', the patterns put the outlined mark over a print, and the Nous Girl is Hermes Agent's own mark.
+ * accents', and the patterns put the outlined mark over a print.
  */
 enum class AppIcon(val label: String, val group: AppIconGroup) {
     Blue("Blue", AppIconGroup.Colors),
@@ -24,8 +23,6 @@ enum class AppIcon(val label: String, val group: AppIconGroup) {
     Hearts("Hearts", AppIconGroup.Patterns),
     Marks("Marks", AppIconGroup.Patterns),
     Bubbles("Bubbles", AppIconGroup.Patterns),
-    Nous("Nous Girl", AppIconGroup.HermesAgent),
-    NousDark("Nous Girl, dark", AppIconGroup.HermesAgent),
 }
 
 /** Which launcher icon Herald shows, and switching it. */
