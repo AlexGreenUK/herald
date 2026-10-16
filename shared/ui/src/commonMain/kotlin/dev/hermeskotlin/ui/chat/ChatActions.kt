@@ -53,6 +53,9 @@ interface ChatActions {
     /** The bytes behind a picture or file in the chat, or null when it can't be had. */
     suspend fun loadMedia(source: String): ByteArray?
 
+    /** Webpage metadata and thumbnail, or null when unavailable. */
+    suspend fun loadLinkPreview(url: String): dev.hermeskotlin.core.media.LinkPreview? = null
+
     fun stopSubagent(subagentId: String)
 
     /**

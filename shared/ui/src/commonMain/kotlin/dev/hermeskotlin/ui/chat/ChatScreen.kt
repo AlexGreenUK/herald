@@ -689,6 +689,7 @@ internal fun ChatView(
                     if (state.historyLoaded && state.messages.isNotEmpty()) {
                         CompositionLocalProvider(
                             LocalMediaLoader provides actions::loadMedia,
+                            LocalLinkPreviewLoader provides actions::loadLinkPreview,
                             LocalOpenImage provides onViewImage,
                             LocalFileLinks provides { link -> GatewayFile.fromLink(link)?.let(onOpenFile) },
                             LocalNotice provides onNotice,
@@ -2026,6 +2027,7 @@ private fun AssistantReply(
                 MarkdownText(remember(text) { linkFileUris(text) }, streaming = message.streaming)
             }
         }
+        if (!message.streaming) LinkPreviewCards(text)
         if (media.isNotEmpty()) ReplyMediaList(media)
         when (message.outcome) {
             TurnOutcome.Error -> Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {

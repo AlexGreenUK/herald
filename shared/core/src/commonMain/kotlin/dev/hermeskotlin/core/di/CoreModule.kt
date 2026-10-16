@@ -27,6 +27,7 @@ import dev.hermeskotlin.core.gateway.AccessTokens
 import dev.hermeskotlin.core.gateway.ConnectionCheck
 import dev.hermeskotlin.core.gateway.GatewayProbe
 import dev.hermeskotlin.core.gateway.GatewayRepository
+import dev.hermeskotlin.core.media.LinkPreviews
 import dev.hermeskotlin.core.media.MediaApi
 import dev.hermeskotlin.core.models.ModelsApi
 import dev.hermeskotlin.core.network.createHttpClient
@@ -133,6 +134,7 @@ val coreModule = module {
     // Outside requests (pictures from the web, GitHub) get a client without the gateway's cookies.
     single(named(OUTSIDE_CLIENT)) { createHttpClient() }
     single { MediaApi(get(), get(named(OUTSIDE_CLIENT))) }
+    single { LinkPreviews(get(named(OUTSIDE_CLIENT))) }
     single { UpdateChecker(get(named(OUTSIDE_CLIENT)), get()) }
     // ntfy is someone else's server: never send it the gateway's cookies.
     single { NtfyClient(get(named(OUTSIDE_CLIENT))) }
