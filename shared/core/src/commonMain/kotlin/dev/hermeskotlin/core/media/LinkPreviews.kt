@@ -33,9 +33,12 @@ private data class WebContent(val url: String, val bytes: ByteArray, val charset
 /** The first three distinct webpage destinations in rendered Markdown order, excluding images and code. */
 expect fun replyWebLinks(text: String): List<String>
 
-internal fun webUrl(value: String): Url? = runCatching { Url(value) }.getOrNull()?.takeIf {
-    it.protocol.name in setOf("https", "http") && it.host.isNotBlank() && it.user.isNullOrEmpty() && it.password.isNullOrEmpty()
-}
+private val ABSOLUTE_WEB_URL = Regex("""^https?://[^/?#\\\s:@]""", RegexOption.IGNORE_CASE)
+
+internal fun webUrl(value: String): Url? = value.takeIf { ABSOLUTE_WEB_URL.containsMatchIn(it) }
+    ?.let { runCatching { Url(it) }.getOrNull() }?.takeIf {
+        it.protocol.name in setOf("https", "http") && it.host.isNotBlank() && it.user.isNullOrEmpty() && it.password.isNullOrEmpty()
+    }
 
 /** Webpage cards use only the credential-free outside client, with bounded downloads and parallelism. */
 class LinkPreviews(private val web: HttpClient) {

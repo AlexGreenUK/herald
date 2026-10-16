@@ -22,6 +22,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class LinkPreviewsTest {
     private val html = headersOf(HttpHeaders.ContentType, "text/html; charset=utf-8")
@@ -166,6 +167,22 @@ class LinkPreviewsTest {
             }
         }))
         for (url in listOf("https://example.com/json", "https://example.com/redirect", "https://example.com/empty", "file:///private", "https://user:password@example.com")) assertNull(api.load(url))
+    }
+
+    @Test fun relativeLinksNeverBecomeLocalhostPreviewsOrConsumeSlots() = runBlocking {
+        assertEquals(listOf("https://example.com"), replyWebLinks(
+            "[relative](/docs) [anchor](#section) [implicit](//example.com/path) [web](https://example.com)",
+        ))
+        var requests = 0
+        val api = LinkPreviews(createHttpClient(MockEngine {
+            requests++
+            respond("<title>Unexpected</title>", headers = html)
+        }))
+        for (url in listOf("", "relative", "/relative", "#section", "//example.com/path", "http:relative",
+            "https://", "https://?x", "https://#x", "https:///relative", "https://\\example.com", "https://:80", "https://u:p@example.com")) assertNull(api.load(url), url)
+        assertEquals(0, requests)
+        assertTrue(webUrl("HTTPS://example.com") != null)
+        assertTrue(webUrl("https://[::1]/") != null)
     }
 
     @Test fun largePagesUseOnlyABoundedPrefix() = runBlocking {
