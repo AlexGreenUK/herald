@@ -462,6 +462,14 @@ internal fun SettingsView(
                         onCheckedChange = { on -> onUpdate { it.copy(showPet = on) } },
                         icon = Lucide.Cat,
                     )
+                    Divider()
+                    SwitchRow(
+                        title = "Show link previews",
+                        detail = "Show link previews for website links when able",
+                        checked = settings.showLinkPreviews,
+                        onCheckedChange = { on -> onUpdate { it.copy(showLinkPreviews = on) } },
+                        icon = Lucide.Globe,
+                    )
                 }
 
                 Section("Voice") {

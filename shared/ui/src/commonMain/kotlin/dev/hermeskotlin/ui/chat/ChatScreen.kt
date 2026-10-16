@@ -2027,7 +2027,7 @@ private fun AssistantReply(
                 MarkdownText(remember(text) { linkFileUris(text) }, streaming = message.streaming)
             }
         }
-        if (!message.streaming) LinkPreviewCards(text)
+        if (settings.showLinkPreviews && !message.streaming) LinkPreviewCards(text)
         if (media.isNotEmpty()) ReplyMediaList(media)
         when (message.outcome) {
             TurnOutcome.Error -> Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
