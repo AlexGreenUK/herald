@@ -49,6 +49,7 @@ uses. The protocol itself is described in [hermes-protocol-research.md](hermes-p
 - [ ] Chat bubble, tool card, approval card as design-system components (they live in `shared/ui` for now)
 - [x] Theme picker (system / light / dark) and pure black
 - [x] Accent color presets (Settings → Appearance → Accent): blue, violet, green, orange, pink and teal, each tuned for light, dark and pure black
+- [x] App icon (Settings → Appearance → App icon): the mark on each accent color, or over hearts, marks or chat bubbles
 - [x] Glow switch (Settings → Appearance): off, the colored glows go (the halo behind each screen, and the light under prompts, the app mark, Send, New chat, main buttons, live subagent cards, the voice screen, and the assistant edge's halo, which keeps its crisp line) and everything sits flat
 
 ---
@@ -302,5 +303,6 @@ Agent tools that run on the phone: a gateway plugin registers them, Herald answe
 - [ ] Desktop (JVM) app
 - [x] Wear OS companion (`wearApp`, `shared/wearlink`): talk to Hermes from the watch through Herald on the phone (Data Layer relay, its own side chat); the watch's speech recognizer, or a recording the gateway transcribes; live progress, the reply and the chat's title; the gateway's voice played on the watch, the watch's own voice when there is none; pick, start or continue a chat; an "Ask Hermes" tile and complication
 - [x] Wear OS live voice: with GPT-Live on the gateway, the watch holds the voice call itself (WebRTC, its microphone and speaker, over Wi-Fi or mobile data when it has them) while Herald on the phone gets the model's answer and runs each request as a Hermes turn in the watch's chat; captions, Hermes at work, mute and hang up on the watch; "Talk live" in the watch's settings
+- [x] watch follows phone accent colors
 - [ ] Wear OS direct mode: the watch talks to the gateway itself, without the phone
 - [ ] Localization (`i18n.catalog`)

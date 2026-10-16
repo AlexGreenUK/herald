@@ -48,6 +48,56 @@ class GatewayFileTest {
     }
 
     @Test
+    fun relativeLinksJoinTheFilesFolder() {
+        val file = GatewayFile("/opt/data/docs/index.md")
+        assertEquals(GatewayFile("/opt/data/docs/part2.md"), file.resolve("part2.md"))
+        assertEquals(GatewayFile("/opt/data/docs/part2.md"), file.resolve("./part2.md"))
+        assertEquals(GatewayFile("/opt/data/docs/img/chart.png"), file.resolve("img/./chart.png"))
+        assertEquals(GatewayFile("/opt/data/out.csv"), file.resolve("../out.csv"))
+        assertEquals(GatewayFile("/opt/data/data/out.csv"), file.resolve("../data//out.csv"))
+        assertEquals(GatewayFile("/opt/data/docs/My Notes.md"), file.resolve("My%20Notes.md"))
+        assertEquals(GatewayFile("/x.md"), GatewayFile("/index.md").resolve("x.md"))
+        assertEquals(GatewayFile("C:/work/notes/b.md"), GatewayFile("C:/work/docs/a.md").resolve("../notes/b.md"))
+        assertEquals(GatewayFile("C:/work/notes/b.md"), GatewayFile("C:/work/docs/a.md").resolve("..\\notes\\b.md"))
+        assertEquals(GatewayFile("C:/b.md"), GatewayFile("C:/work/docs/a.md").resolve("/b.md"))
+        assertEquals(GatewayFile("/opt/data/docs/my chart.png"), file.resolve("<my chart.png>"))
+    }
+
+    @Test
+    fun dotDotPastTheRootStaysAtTheRootButNotPastHome() {
+        assertEquals(GatewayFile("/b.md"), GatewayFile("/a/index.md").resolve("../../../b.md"))
+        assertEquals(GatewayFile("C:/b.md"), GatewayFile("C:/a.md").resolve("../b.md"))
+        assertEquals(GatewayFile("~/notes/b.md"), GatewayFile("~/notes/a.md").resolve("b.md"))
+        assertEquals(GatewayFile("~/b.md"), GatewayFile("~/notes/a.md").resolve("../b.md"))
+        assertEquals(GatewayFile("~/../shared/b.md"), GatewayFile("~/a.md").resolve("../shared/b.md"))
+        assertEquals(GatewayFile("~/../c.md"), GatewayFile("~/../shared/b.md").resolve("../c.md"))
+    }
+
+    @Test
+    fun anchorsAndLinesOnRelativeLinks() {
+        val file = GatewayFile("/repo/docs/guide.md", line = 3)
+        assertEquals(GatewayFile("/repo/src/App.kt", line = 12), file.resolve("../src/App.kt#L12"))
+        assertEquals(GatewayFile("/repo/src/App.kt", line = 12), file.resolve("../src/App.kt#L12-L20"))
+        assertEquals(GatewayFile("/repo/src/App.kt", line = 42), file.resolve("../src/App.kt:42"))
+        assertEquals(GatewayFile("/repo/docs/Makefile", line = 12), file.resolve("Makefile:12"))
+        assertEquals(GatewayFile("/repo/docs/setup.md"), file.resolve("setup.md#install"))
+        assertEquals(GatewayFile("/repo/docs/guide.md", line = 12), file.resolve("#L12"))
+        assertNull(file.resolve("#install"))
+    }
+
+    @Test
+    fun absoluteLinksReadAsInAReplyAndTheRestAreNotFiles() {
+        val file = GatewayFile("/repo/docs/guide.md")
+        assertEquals(GatewayFile("/etc/hosts"), file.resolve("/etc/hosts"))
+        assertEquals(GatewayFile("/tmp/a.md", line = 2), file.resolve("file:///tmp/a.md#L2"))
+        assertEquals(GatewayFile("~/x.txt"), file.resolve("~/x.txt"))
+        listOf(
+            "https://example.com/a.md", "mailto:me@example.com", "tel:12345", "//cdn.example.com/x.js", "javascript:alert(1)",
+            "", " ", ".", "..", "./", "../", "sub/", "../../..",
+        ).forEach { assertNull(file.resolve(it), it) }
+    }
+
+    @Test
     fun nameFolderAndKind() {
         val file = GatewayFile("/opt/data/out/report.MD")
         assertEquals("report.MD", file.name)
@@ -69,7 +119,7 @@ class GatewayFileTest {
         assertEquals(GatewayFileKind.Text, GatewayFileKind.of("README"))
         assertEquals(GatewayFileKind.Text, GatewayFileKind.of("notes.weird"))
         assertEquals(GatewayFileKind.Image, GatewayFileKind.of("cat.PNG"))
-        assertEquals(GatewayFileKind.Other, GatewayFileKind.of("report.pdf"))
+        assertEquals(GatewayFileKind.Other, GatewayFileKind.of("backup.zip"))
         listOf("photo.HEIC", "photo.heif", "photo.avif", "favicon.ico", "old.bmp", "scan.tiff", "scan.TIF").forEach {
             assertEquals(GatewayFileKind.Image, GatewayFileKind.of(it), it)
         }
@@ -78,5 +128,17 @@ class GatewayFileTest {
         assertTrue(GatewayFileKind.Code.previewable)
         assertFalse(GatewayFileKind.Other.previewable)
         assertFalse(GatewayFileKind.Image.previewable)
+    }
+
+    @Test
+    fun pdfsArePreviewedAsPages() {
+        assertEquals(GatewayFileKind.Pdf, GatewayFileKind.of("report.pdf"))
+        assertEquals(GatewayFileKind.Pdf, GatewayFileKind.of("Q3 Summary.PDF"))
+        assertEquals(GatewayFileKind.Pdf, GatewayFile.fromLink("/opt/data/out/report.pdf")?.kind)
+        assertEquals(GatewayFileKind.Pdf, GatewayFile.fromLink("file:///opt/data/out/My%20Report.pdf#page=2")?.kind)
+        // Only the extension counts: a name that merely mentions pdf is not one.
+        assertEquals(GatewayFileKind.Text, GatewayFileKind.of("pdf-notes.txt"))
+        assertEquals(GatewayFileKind.Other, GatewayFileKind.of("report.pdf.zip"))
+        assertTrue(GatewayFileKind.Pdf.previewable)
     }
 }

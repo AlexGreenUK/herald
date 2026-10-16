@@ -5,11 +5,14 @@ import com.google.android.gms.wearable.MessageEvent
 import com.google.android.gms.wearable.Wearable
 import com.google.android.gms.wearable.WearableListenerService
 import dev.hermeskotlin.android.notify.ChatNotifier
+import dev.hermeskotlin.core.settings.SettingsStore
 import dev.hermeskotlin.core.wear.WatchRelay
 import dev.hermeskotlin.ui.voice.WatchCalls
+import dev.hermeskotlin.ui.voice.watchAccent
 import dev.hermeskotlin.wearlink.CallEnd
 import dev.hermeskotlin.wearlink.CallEvents
 import dev.hermeskotlin.wearlink.CallStart
+import dev.hermeskotlin.wearlink.PhoneStatusRequest
 import dev.hermeskotlin.wearlink.RecordedAsk
 import dev.hermeskotlin.wearlink.WatchAsk
 import dev.hermeskotlin.wearlink.WatchStop
@@ -17,6 +20,8 @@ import dev.hermeskotlin.wearlink.WearJson
 import dev.hermeskotlin.wearlink.WearPaths
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.tasks.await
@@ -31,6 +36,7 @@ import java.io.ByteArrayOutputStream
  */
 class WearBridgeService : WearableListenerService() {
 
+    private val settings: SettingsStore by inject()
     private val relay: WatchRelay by inject()
     private val calls: WatchCalls by inject()
     private val scope: CoroutineScope by inject()
@@ -51,7 +57,14 @@ class WearBridgeService : WearableListenerService() {
             WearPaths.CALL_EVENTS -> WearJson.decode<CallEvents>(event.data)?.let { calls.events(node, it) }
             WearPaths.CALL_END -> WearJson.decode<CallEnd>(event.data)?.let(calls::end)
             WearPaths.CHATS -> relay.chats(node)
-            WearPaths.STATUS -> relay.status(node)
+            WearPaths.STATUS -> {
+                val cached = WearJson.decode<PhoneStatusRequest>(event.data)?.accentRevision
+                scope.launch {
+                    // Waited for: a watch's ask often starts Herald, and the stored settings are still being read then.
+                    val accent = watchAccent(settings.settings.filterNotNull().first().accent)
+                    relay.status(node, accent = accent.updateFor(cached))
+                }
+            }
         }
     }
 

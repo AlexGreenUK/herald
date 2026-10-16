@@ -21,7 +21,7 @@ object WearPaths {
     /** Watch → phone, empty: asks for the recent chats. Phone → watch: a [ChatList]. */
     const val CHATS = "/herald/chats"
 
-    /** Watch → phone, empty: asks how the phone stands. Phone → watch: a [PhoneStatus]. */
+    /** Watch → phone: a [PhoneStatusRequest] (empty on older watches). Phone → watch: a [PhoneStatus]. */
     const val STATUS = "/herald/status"
 
     /** Phone → watch: a [ReplyUpdate], again each time the turn moves on. */
@@ -205,6 +205,22 @@ data class WatchChat(val id: String, val title: String, val activityAt: Double? 
 @Serializable
 data class ChatList(val chats: List<WatchChat> = emptyList(), val error: String? = null)
 
+/** The accent already cached on the watch; absent on older watches. */
+@Serializable
+data class PhoneStatusRequest(val accentRevision: String? = null)
+
+/** The phone's dark accent colors, stored with their revision so the watch can ask only for changes. */
+@Serializable
+data class WatchAccent(val revision: String, val fill: Int, val text: Int, val onFill: Int, val dim: Int) {
+    fun updateFor(cachedRevision: String?): WatchAccent? = takeUnless { revision == cachedRevision }
+
+    companion object {
+        /** Its revision is the colors themselves, so any change to them reaches a watch that kept the old ones. */
+        fun of(fill: Int, text: Int, onFill: Int, dim: Int): WatchAccent =
+            WatchAccent(listOf(fill, text, onFill, dim).joinToString("-") { it.toUInt().toString(16) }, fill, text, onFill, dim)
+    }
+}
+
 /**
  * Whether Herald on the phone is signed in to a gateway, and [connected]: connected to it, or ready to connect
  * when asked; false while it's (re)connecting or failing to. [failed]: it gave up, and won't connect on its own.
@@ -219,6 +235,7 @@ data class PhoneStatus(
      * when the phone hasn't asked the gateway yet (or is older): the watch keeps what it was last told.
      */
     val liveVoice: Boolean? = null,
+    val accent: WatchAccent? = null,
 )
 
 /*
