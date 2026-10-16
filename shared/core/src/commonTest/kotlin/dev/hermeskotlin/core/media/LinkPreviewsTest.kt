@@ -92,13 +92,25 @@ class LinkPreviewsTest {
         for (url in listOf("https://example.com/json", "https://example.com/redirect", "https://example.com/empty", "file:///private", "https://user:password@example.com")) assertNull(api.load(url))
     }
 
-    @Test fun boundsBodiesWithoutRelyingOnContentLength() = runBlocking {
+    @Test fun largePagesUseOnlyABoundedPrefix() = runBlocking {
+        val padding = " ".repeat(262_144)
         val api = LinkPreviews(createHttpClient(MockEngine { request ->
-            if (request.url.encodedPath == "/huge") respond("<title>Huge</title>" + "x".repeat(262_144), headers = html)
-            else if (request.url.encodedPath == "/image") respond("x".repeat(2_097_153), headers = headersOf(HttpHeaders.ContentType, "image/png"))
+            val body = if (request.url.encodedPath == "/late") padding + "<title>Too late</title>"
+                else "<title>Large page</title>" + padding
+            val headers = if (request.url.encodedPath == "/declared")
+                headersOf(HttpHeaders.ContentType to listOf("text/html"), HttpHeaders.ContentLength to listOf(body.length.toString())) else html
+            respond(body, headers = headers)
+        }))
+        assertEquals("Large page", api.load("https://example.com/chunked")?.title)
+        assertEquals("Large page", api.load("https://example.com/declared")?.title)
+        assertNull(api.load("https://example.com/late"))
+    }
+
+    @Test fun boundsThumbnailBodiesWithoutRelyingOnContentLength() = runBlocking {
+        val api = LinkPreviews(createHttpClient(MockEngine { request ->
+            if (request.url.encodedPath == "/image") respond("x".repeat(2_097_153), headers = headersOf(HttpHeaders.ContentType, "image/png"))
             else respond("""<title>Small</title><meta property='og:image' content='/image'>""", headers = html)
         }))
-        assertNull(api.load("https://example.com/huge"))
         assertNull(assertNotNull(api.load("https://example.com/small")).image)
     }
 

@@ -42,7 +42,7 @@ class LinkPreviews(private val web: HttpClient) {
     suspend fun load(url: String): LinkPreview? = permits.withPermit {
         cacheLock.withLock { if (cache.containsKey(url)) return@withPermit cache[url] }
         val card = try {
-            val page = withTimeoutOrNull(6_000) { fetch(url, 256 * 1024, "text/html", "application/xhtml+xml") }
+            val page = withTimeoutOrNull(6_000) { fetch(url, 256 * 1024, "text/html", "application/xhtml+xml", prefix = true) }
             page?.let { (pageUrl, bytes) ->
                 val meta = withContext(Dispatchers.Default) { linkMetadata(bytes, pageUrl) } ?: return@let null
                 val image = try {
@@ -66,7 +66,7 @@ class LinkPreviews(private val web: HttpClient) {
         card
     }
 
-    private suspend fun fetch(source: String, limit: Int, vararg types: String): Pair<String, ByteArray>? {
+    private suspend fun fetch(source: String, limit: Int, vararg types: String, prefix: Boolean = false): Pair<String, ByteArray>? {
         var url = webUrl(source) ?: return null
         repeat(4) {
             var redirect: Url? = null
@@ -79,8 +79,8 @@ class LinkPreviews(private val web: HttpClient) {
                 }
                 val type = response.headers[HttpHeaders.ContentType].orEmpty().substringBefore(';').lowercase()
                 if (response.status.value !in 200..299 || types.none { if (it.endsWith('/')) type.startsWith(it) else type == it } ||
-                    (response.contentLength() ?: 0) > limit) return@execute null
-                val bytes = response.bodyAsChannel().readRemaining(limit.toLong() + 1).readByteArray()
+                    (!prefix && (response.contentLength() ?: 0) > limit)) return@execute null
+                val bytes = response.bodyAsChannel().readRemaining(limit.toLong() + if (prefix) 0 else 1).readByteArray()
                 if (bytes.size > limit) null else url.toString() to bytes
             }
             if (result != null) return result
