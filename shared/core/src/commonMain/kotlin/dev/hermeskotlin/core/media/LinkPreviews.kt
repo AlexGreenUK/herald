@@ -1,6 +1,7 @@
 package dev.hermeskotlin.core.media
 
 import io.ktor.client.HttpClient
+import io.ktor.client.request.header
 import io.ktor.client.request.prepareGet
 import io.ktor.client.statement.bodyAsChannel
 import io.ktor.http.HttpHeaders
@@ -70,7 +71,9 @@ class LinkPreviews(private val web: HttpClient) {
         var url = webUrl(source) ?: return null
         repeat(4) {
             var redirect: Url? = null
-            val result = web.prepareGet(url).execute { response ->
+            val result = web.prepareGet(url) {
+                header(HttpHeaders.Accept, types.joinToString(", ") { if (it.endsWith('/')) "${it}*" else it })
+            }.execute { response ->
                 if (response.status.value in setOf(301, 302, 303, 307, 308)) {
                     redirect = response.headers[HttpHeaders.Location]?.let { location ->
                         webUrl(URLBuilder(url).apply { takeFrom(location) }.buildString())

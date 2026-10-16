@@ -62,6 +62,22 @@ class LinkPreviewsTest {
         assertEquals("https://example.com/start", card.url)
     }
 
+    @Test fun requestsHtmlAndImagesFromContentNegotiatingSites() = runBlocking {
+        val api = LinkPreviews(createHttpClient(MockEngine { request ->
+            val accept = request.headers[HttpHeaders.Accept].orEmpty()
+            when {
+                request.url.encodedPath == "/image" && accept.startsWith("image/*") ->
+                    respond("thumbnail", headers = headersOf(HttpHeaders.ContentType, "image/png"))
+                request.url.encodedPath != "/image" && accept.startsWith("text/html") ->
+                    respond("""<title>Repository</title><meta property='og:image' content='/image'>""", headers = html)
+                else -> respond("{}", headers = headersOf(HttpHeaders.ContentType, "application/json"))
+            }
+        }))
+        val card = assertNotNull(api.load("https://example.com/repo"))
+        assertEquals("Repository", card.title)
+        assertEquals("thumbnail", card.image?.decodeToString())
+    }
+
     @Test fun failedImageKeepsTitleAndDescription() = runBlocking {
         val api = LinkPreviews(createHttpClient(MockEngine { request ->
             if (request.url.encodedPath == "/bad") respond("missing", HttpStatusCode.NotFound)
