@@ -62,6 +62,22 @@ class LinkPreviewsTest {
         assertEquals("https://example.com/start", card.url)
     }
 
+    @Test fun fallsBackToStructuredPageImageAndKeepsOpenGraphPreferred() {
+        val structured = """<title>Search</title><meta itemprop='image' content='/logo.png'>"""
+        assertEquals("https://example.com/logo.png", linkMetadata(structured.encodeToByteArray(), "https://example.com/")?.image)
+        val withTwitter = structured + """<meta name='twitter:image' content='/twitter.png'>"""
+        assertEquals("https://example.com/twitter.png", linkMetadata(withTwitter.encodeToByteArray(), "https://example.com/")?.image)
+        val withOpenGraph = withTwitter + """<meta property='og:image' content='/preview.png'>"""
+        assertEquals("https://example.com/preview.png", linkMetadata(withOpenGraph.encodeToByteArray(), "https://example.com/")?.image)
+    }
+
+    @Test fun fallsBackToDeclaredSiteIconAfterPageImages() {
+        val icons = """<title>News</title><link rel='icon' href='/small.png'><link rel='apple-touch-icon' href='/large.png'>"""
+        assertEquals("https://example.com/large.png", linkMetadata(icons.encodeToByteArray(), "https://example.com/")?.image)
+        val preview = icons + """<meta itemprop='image' content='/preview.png'>"""
+        assertEquals("https://example.com/preview.png", linkMetadata(preview.encodeToByteArray(), "https://example.com/")?.image)
+    }
+
     @Test fun requestsHtmlAndImagesFromContentNegotiatingSites() = runBlocking {
         val api = LinkPreviews(createHttpClient(MockEngine { request ->
             val accept = request.headers[HttpHeaders.Accept].orEmpty()

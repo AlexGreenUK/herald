@@ -17,7 +17,11 @@ internal actual fun linkMetadata(bytes: ByteArray, url: String): LinkMetadata? {
     }.orEmpty()
     val title = meta("og:title", "twitter:title").ifBlank { doc.title() }.trim().take(200)
     if (title.isBlank()) return null
-    val image = doc.selectFirst("meta[property=og:image], meta[name=twitter:image]")?.absUrl("content")?.takeIf { it.isNotBlank() }
+    val image = listOf("meta[property=og:image]", "meta[name=twitter:image]", "meta[itemprop=image]").firstNotNullOfOrNull { selector ->
+        doc.selectFirst(selector)?.absUrl("content")?.takeIf { it.isNotBlank() }
+    } ?: listOf("link[rel=apple-touch-icon]", "link[rel=icon]").firstNotNullOfOrNull { selector ->
+        doc.selectFirst(selector)?.absUrl("href")?.takeIf { it.isNotBlank() }
+    }
     return LinkMetadata(title, meta("og:description", "description", "twitter:description").take(400), image)
 }
 
