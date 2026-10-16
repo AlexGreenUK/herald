@@ -134,10 +134,16 @@ class ChatSession(
     private val streamMutex = Mutex()
 
     /** The running turn's reply so far as the last `session.resume` had it, for when the gap can't be filled. */
-    private var inflightText: String? = null
+    @kotlin.concurrent.Volatile private var inflightText: String? = null
 
     /** When the turn running at the last `session.resume` started (gateway clock); null when none ran or it's unknown. */
-    private var turnStartedAt: Double? = null
+    @kotlin.concurrent.Volatile private var turnStartedAt: Double? = null
+
+    /**
+     * The running turn's live reply, as the gateway's copy named it at the last `session.resume`. It stays the turn's
+     * once text streams on past that copy, so the saved steps still fold into it when the list is rebuilt.
+     */
+    @kotlin.concurrent.Volatile private var turnReplyKey: String? = null
 
     fun start() {
         if (jobs.isNotEmpty()) return
@@ -1576,7 +1582,7 @@ class ChatSession(
                 lastSeq = null
                 val streamed = inflightText
                 if (streamed != null && _state.value.running) {
-                    _state.update { it.withInflight(streamed) }
+                    _state.update { it.withInflight(streamed).also { state -> turnReplyKey = state.messages.inflightReplyKey(streamed) } }
                 } else if (!_state.value.running) {
                     _state.update { it.withoutStaleReply().withoutAgentNotices() }
                 }
@@ -1614,6 +1620,7 @@ class ChatSession(
             // Swap the live copy for the stored rows, which now hold the other client's prompt for sure.
             "message.complete" -> {
                 turnStartedAt = null
+                turnReplyKey = null
                 // Nothing can still wait on a person once the turn is over; this also clears a
                 // clarify answered on another client, which gets no request.cancel.
                 _state.update { it.copy(inputRequests = emptyList()) }
@@ -1790,7 +1797,7 @@ class ChatSession(
                     state.copy(
                         // The live reply took in the turn's saved steps, which this page brings again.
                         messages = (historyToMessages(rows, rowsSessionId).withRisks(flagged) + state.messages.drop(stored))
-                            .withSavedStepsInLiveReply(turnStartedAt, inflightText),
+                            .withSavedStepsFolded(),
                         olderMessages = full,
                     )
                 }
@@ -1822,7 +1829,7 @@ class ChatSession(
             live.filterNot { it is ChatMessage.User && it.check != null && storedPrompts.any { p -> p.contains(it.text) } }
         }
         // Steps of the running turn are saved as it goes, and the live copy repeats them: show them once.
-        val messages = (stored + unsettled).withSavedStepsInLiveReply(turnStartedAt, inflightText)
+        val messages = (stored + unsettled).withSavedStepsFolded()
         state.copy(messages = messages, historyLoaded = true, historyError = null, savedCopyAt = savedCopyAt, olderMessages = older)
     }
 
@@ -1887,7 +1894,11 @@ class ChatSession(
             inflightText = streamed
             // Seqs count per runtime session and per gateway run, so only the same of both can be picked up.
             val resumable = reconnected && lastSeq != null && runtimeId == seqRuntime && epoch != null && epoch == seqEpoch
-            if (!resumable) lastSeq = null
+            if (!resumable) {
+                lastSeq = null
+                // The turn may have changed while away: the gateway's copy names its reply again below.
+                turnReplyKey = null
+            }
             seqRuntime = runtimeId
             seqEpoch = epoch
             // Held from before the state names the runtime, so no live event slips in ahead of the missed ones.
@@ -1904,7 +1915,10 @@ class ChatSession(
                 // or, when the turn ended while away, as the transcript just read has it.
                 messages = when {
                     resumable -> state.messages
-                    running -> state.withInflight(streamed).messages.withSavedStepsInLiveReply(turnStartedAt, inflightText)
+                    // Set on each try of the update, so the one that lands names the reply in it.
+                    running -> state.withInflight(streamed).messages
+                        .also { turnReplyKey = it.inflightReplyKey(streamed) }
+                        .withSavedStepsFolded()
                     reconnected -> state.withoutStaleReply().messages
                     else -> state.messages
                 },
@@ -1922,6 +1936,10 @@ class ChatSession(
         }
         runtimeId
     }
+
+    /** [withSavedStepsInLiveReply] for the running turn. */
+    private fun List<ChatMessage>.withSavedStepsFolded(): List<ChatMessage> =
+        withSavedStepsInLiveReply(turnStartedAt, inflightText, turnReplyKey)
 
     /** The gateway run's `replay_epoch` from [client]'s `gateway.ready`, when it is the connected one. */
     private fun readyEpoch(client: JsonRpcClient): String? =
@@ -2112,30 +2130,57 @@ internal fun ChatState.withInflight(streamed: String): ChatState {
  * when all of it holds: the saved one was written after the turn began ([turnStartedAt], the gateway's clock; without
  * it nothing folds), the live one is this turn's (it agrees with the gateway's copy, [inflightText]), and the live text
  * carries on from the saved text. Then the live one stays (deltas keep landing on it), with the saved tool calls.
+ * [turnReplyKey] is the reply the gateway's copy named when it was read ([inflightReplyKey]): it stays this turn's once
+ * text streams on past that copy (onto a reply that had none), and each rebuild brings the saved steps again.
  */
-internal fun List<ChatMessage>.withSavedStepsInLiveReply(turnStartedAt: Double?, inflightText: String?): List<ChatMessage> {
+internal fun List<ChatMessage>.withSavedStepsInLiveReply(
+    turnStartedAt: Double?,
+    inflightText: String?,
+    turnReplyKey: String? = null,
+): List<ChatMessage> {
     if (turnStartedAt == null || inflightText == null) return this
     val liveAt = indexOfLast { it is ChatMessage.Assistant && it.streaming }
     if (liveAt < 1) return this
     val live = this[liveAt] as ChatMessage.Assistant
-    val saved = this[liveAt - 1] as? ChatMessage.Assistant ?: return this
+    // A rebuild puts this device's own lines (notices, commands) after the stored rows; they don't part the two.
+    val savedAt = (liveAt - 1 downTo 0).firstOrNull { !this[it].isLocalLine } ?: return this
+    val saved = this[savedAt] as? ChatMessage.Assistant ?: return this
     if (saved.streaming || saved.error != null || saved.warning != null) return this
     if (saved.timestamp == null || saved.timestamp < turnStartedAt) return this
+    // A reply left streaming from an earlier turn isn't this one's, whatever was saved before it.
+    if (live.key != turnReplyKey && live.key != inflightReplyKey(inflightText)) return this
     // Steps are saved apart and joined with blank lines; the stream runs them together. Spacing aside, the same.
-    val savedText = saved.text.withoutSpaces()
-    val liveText = live.text.withoutSpaces()
-    val gatewayText = inflightText.withoutSpaces()
-    // A reply left streaming from an earlier turn isn't this one's, whatever was saved before it: this turn's
-    // carries on from the gateway's copy, and has nothing yet while that copy is still empty.
-    if (!liveText.startsWith(gatewayText) || (gatewayText.isEmpty() && liveText.isNotEmpty())) return this
-    if (!liveText.startsWith(savedText)) return this
+    if (!live.text.withoutSpaces().startsWith(saved.text.withoutSpaces())) return this
     val folded = live.copy(
-        reasoning = listOf(saved.reasoning, live.reasoning).filter { it.isNotEmpty() }.distinct().joinToString("\n\n"),
-        tools = saved.tools + live.tools.filter { tool -> saved.tools.none { it.id == tool.id } },
+        // Folded before, the live reply leads with the saved reasoning and has streamed on from there.
+        reasoning = if (live.reasoning.withoutSpaces().startsWith(saved.reasoning.withoutSpaces())) live.reasoning
+            else listOf(saved.reasoning, live.reasoning).filter { it.isNotEmpty() }.joinToString("\n\n"),
+        // A call still running in the live copy (folded before) has its events since; once the saved one has its
+        // result, that is newer (an end missed while the link was down).
+        tools = saved.tools.map { tool -> live.tools.firstOrNull { it.id == tool.id }?.takeUnless { it.running && tool.output != null } ?: tool } +
+            live.tools.filter { tool -> saved.tools.none { it.id == tool.id } },
         repliedTo = live.repliedTo ?: saved.repliedTo,
     )
-    return take(liveAt - 1) + folded + drop(liveAt + 1)
+    return toMutableList().apply {
+        set(liveAt, folded)
+        removeAt(savedAt)
+    }
 }
+
+/**
+ * The streaming reply that is the running turn's: it carries on from the gateway's copy ([inflightText]), and has
+ * nothing yet while that copy is still empty. Null when the reply open isn't (an earlier turn's, left streaming).
+ */
+internal fun List<ChatMessage>.inflightReplyKey(inflightText: String): String? {
+    val live = lastOrNull { it is ChatMessage.Assistant && it.streaming } ?: return null
+    val liveText = (live as ChatMessage.Assistant).text.withoutSpaces()
+    val gatewayText = inflightText.withoutSpaces()
+    return live.key.takeIf { liveText.startsWith(gatewayText) && (gatewayText.isNotEmpty() || liveText.isEmpty()) }
+}
+
+/** A line only this device shows (a notice, a command) and no reply or prompt: it sits after the stored rows. */
+private val ChatMessage.isLocalLine: Boolean
+    get() = isLocalOnly && this !is ChatMessage.Assistant && this !is ChatMessage.User
 
 private fun String.withoutSpaces(): String = filterNot { it.isWhitespace() }
 

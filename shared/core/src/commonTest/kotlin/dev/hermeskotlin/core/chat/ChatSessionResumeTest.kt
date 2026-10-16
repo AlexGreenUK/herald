@@ -244,6 +244,97 @@ class ChatSessionResumeTest {
     }
 
     @Test
+    fun textStreamedOntoAToolOnlyStepStaysOneReplyWhenScrollingUp() = runTest {
+        // Opened while the turn's first step, a tool call with reasoning and no text yet, runs: the gateway's copy is
+        // empty. Text and more reasoning stream on after that, and then older rows load.
+        transcript = rowsUpTo(HISTORY_PAGE + 21) + listOf(
+            """{"id":${HISTORY_PAGE + 22},"role":"assistant","content":"","reasoning":"Look it up.","timestamp":105,""" +
+                """"tool_calls":[{"id":"t1","type":"function","function":{"name":"terminal","arguments":"{}"}}]}""",
+        )
+        val (chat, socket) = openMidTurn(backgroundScope, midTurn(""))
+        socket.push(delta(1, "Found it."))
+        socket.push(event("reasoning.delta", 2, """{"text":" Then check it."}"""))
+        chat.state.first { it.messages.any { m -> m is ChatMessage.Assistant && "Then check it" in m.reasoning } }
+
+        chat.loadOlder()
+
+        val replies = chat.state.value.messages.filterIsInstance<ChatMessage.Assistant>().filter { it.tools.any { t -> t.id == "t1" } }
+        val reply = replies.single()
+        assertTrue(reply.streaming)
+        assertEquals("Found it.", reply.text)
+        assertEquals(1, Regex("Look it up").findAll(reply.reasoning).count(), "the saved reasoning came again: ${reply.reasoning}")
+        assertTrue("Then check it" in reply.reasoning)
+    }
+
+    @Test
+    fun aNoteOfThisDeviceBetweenTheSavedStepAndTheLiveReplyDoesntPartThem() {
+        val rows = savedFirstStep().map { lenient.decodeFromString<SessionMessage>(it) }
+        val merged = (historyToMessages(rows) + ChatMessage.Notice("n1", "Reconnected") +
+            ChatMessage.Assistant("live-0", text = "Running it. First I need the address.", streaming = true))
+            .withSavedStepsInLiveReply(turnStartedAt = 100.0, inflightText = "Running it. First I need the address.")
+
+        val reply = merged.filterIsInstance<ChatMessage.Assistant>().single { "First I need the address" in it.text }
+        assertTrue(reply.streaming)
+        assertEquals(listOf("t1"), reply.tools.map { it.id })
+        assertTrue(merged.any { it is ChatMessage.Notice && it.key == "n1" })
+    }
+
+    @Test
+    fun aFoldAgainKeepsTheLiveCopyOfARunningTool() {
+        // Folded once; the saved row came again while its tool still ran, which only the live copy knows.
+        val rows = savedFirstStep().dropLast(1).map { lenient.decodeFromString<SessionMessage>(it) }
+        val saved = historyToMessages(rows)
+        val savedTool = (saved.last() as ChatMessage.Assistant).tools.single()
+        val live = ChatMessage.Assistant(
+            "live-0",
+            text = "Running it. First I need the address.",
+            tools = listOf(savedTool.copy(running = true)),
+            streaming = true,
+        )
+        val merged = (saved + live).withSavedStepsInLiveReply(100.0, "Running it.", turnReplyKey = "live-0")
+
+        assertTrue((merged.last() as ChatMessage.Assistant).tools.single().running)
+    }
+
+    @Test
+    fun aSavedResultEndsALiveCopyStillRunning() {
+        // The call's end went while the link was down and wasn't replayed; the saved row has its result.
+        val saved = historyToMessages(savedFirstStep().map { lenient.decodeFromString<SessionMessage>(it) })
+        val savedTool = (saved.last() as ChatMessage.Assistant).tools.single()
+        val live = ChatMessage.Assistant(
+            "live-0",
+            text = "Running it. First I need the address.",
+            tools = listOf(savedTool.copy(running = true, output = null)),
+            streaming = true,
+        )
+        val tool = ((saved + live).withSavedStepsInLiveReply(100.0, "Running it.", turnReplyKey = "live-0").last() as ChatMessage.Assistant)
+            .tools.single()
+
+        assertFalse(tool.running)
+        assertEquals(savedTool.output, tool.output)
+    }
+
+    @Test
+    fun aStepSavedAfterTextStreamedOnStillFoldsIn() = runTest {
+        // Opened while the turn's first step, a tool call with no text, ran and wasn't saved yet; text streams on,
+        // then the step's row is saved and read.
+        transcript = rowsUpTo(3)
+        val (chat, socket) = openMidTurn(backgroundScope, midTurn(""))
+        socket.push(delta(1, "Found it."))
+        chat.state.first { it.replies("Found it").isNotEmpty() }
+        transcript = rowsUpTo(3) + listOf(
+            """{"id":4,"role":"assistant","content":"","timestamp":105,"tool_calls":[{"id":"t1","type":"function","function":{"name":"terminal","arguments":"{}"}}]}""",
+        )
+        // Another client's turn starting reads the transcript again.
+        socket.push(event("message.start", 2))
+
+        val state = chat.state.first { s -> s.messages.any { it is ChatMessage.Assistant && it.tools.any { t -> t.id == "t1" } } }
+        val reply = state.messages.filterIsInstance<ChatMessage.Assistant>().single { it.tools.any { t -> t.id == "t1" } }
+        assertTrue(reply.streaming)
+        assertEquals("Found it.", reply.text)
+    }
+
+    @Test
     fun aDropMidTurnPicksUpFromTheLastEventWithoutDuplicates() = runTest {
         answer = { transport, method, _ ->
             when (method) {
