@@ -78,9 +78,8 @@ fun BottomSheet(
     }
     // The sheet reports a dismiss once per showing and forgets that it did only when a new showing comes to rest,
     // so a tap outside while it is still sliding in after an earlier dismiss hides it without calling onDismiss:
-    // [visible] stays true and the sheet can never be shown again. Taps outside wait until it has come to rest,
-    // and a sheet that ends up hidden while still meant to be visible reports the dismiss here.
-    val opened = state.isIdle && state.currentDetent != SheetDetent.Hidden
+    // [visible] stays true and the sheet can never be shown again. A sheet that ends up hidden while still meant
+    // to be visible reports that dismiss here, which puts [visible] and the sheet back in step.
     val stillVisible by rememberUpdatedState(visible)
     val dismiss by rememberUpdatedState(onDismiss)
     LaunchedEffect(state) {
@@ -99,7 +98,12 @@ fun BottomSheet(
 
     UnstyledModalBottomSheet(
         state = state,
-        properties = ModalBottomSheetProperties(dismissOnClickOutside = opened),
+        // Constant on purpose, never derived from the sheet's state: the library adds or drops a pointer input
+        // as this value changes, and a drag-down stops being idle the moment it starts, so a state-derived value
+        // rebuilt the sheet's pointer input mid-gesture and every drag was cancelled instead of dismissing.
+        // A tap outside while the sheet is still sliding in now closes it as well; the report above keeps
+        // [visible] in step when the library cannot report that dismiss itself.
+        properties = ModalBottomSheetProperties(dismissOnClickOutside = true),
         onDismiss = onDismiss,
         overlay = { Scrim(scrimColor = Color.Black.copy(alpha = 0.45f), enter = fadeIn(), exit = fadeOut()) },
     ) {
