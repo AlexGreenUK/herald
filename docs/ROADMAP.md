@@ -49,6 +49,7 @@ uses. The protocol itself is described in [hermes-protocol-research.md](hermes-p
 - [ ] Chat bubble, tool card, approval card as design-system components (they live in `shared/ui` for now)
 - [x] Theme picker (system / light / dark) and pure black
 - [x] Accent color presets (Settings → Appearance → Accent): blue, violet, green, orange, pink and teal, each tuned for light, dark and pure black
+- [x] App icon (Settings → Appearance → App icon): the mark on each accent color, or over hearts, marks or chat bubbles
 - [x] Glow switch (Settings → Appearance): off, the colored glows go (the halo behind each screen, and the light under prompts, the app mark, Send, New chat, main buttons, live subagent cards, the voice screen, and the assistant edge's halo, which keeps its crisp line) and everything sits flat
 
 ---
@@ -88,10 +89,11 @@ uses. The protocol itself is described in [hermes-protocol-research.md](hermes-p
 - [x] Long chats load a page at a time: the newest 60 rows on opening, older pages as you scroll to the top (`order=latest` + `offset`), each starting at a prompt so no turn is cut in two; the list keeps its place. Branching loads the rest first so it counts from the first row
 - [x] Resume a session live and reply in it (`session.resume {omit_messages}` + REST history, like Desktop)
 - [x] The app opens on a chat: the one you had open last on this gateway, or a fresh one if you left on a new chat (remembered per gateway)
-- [x] Sessions live in a left sidebar: a swipe-in drawer on phones (swipe right or the panel button; swipe left, tap outside or Back to close), docked and collapsible on wide screens; the open chat is highlighted
+- [x] Sessions live in a left sidebar: a swipe-in drawer on phones (swipe right or the panel button; swipe left off the chat rows, tap outside or Back to close), docked and collapsible on wide screens; the open chat is highlighted
 - [x] Sidebar layout: title with a round search button, Scheduled / Archived rows, title-only chat rows with a live dot for running sessions, floating "New chat" pill and an initials avatar (with a connection warning dot) that opens the account sheet
 - [x] Refetch the list whenever the sidebar opens
 - [x] Rename, pin, archive and delete (`PATCH`/`DELETE /api/sessions/{id}`), with optimistic updates that roll back on error
+- [x] Swipe a chat row: right pins or unpins, left archives (with Undo); in Archived, right unarchives and left deletes (after asking). A row's swipe wins over the drawer's swipe-left close; screen readers get the same actions
 - [x] Chat options (⋮ beside new chat) for the open chat: rename, pin, export as Markdown, copy session ID, archive, delete
 - [x] Floating see-through composer over the conversation
 - [x] Reading back stays put while a reply streams below; the jump arrow then reads "New reply"
