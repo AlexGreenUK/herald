@@ -5,11 +5,15 @@ import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
+import io.ktor.utils.io.ByteChannel
+import io.ktor.utils.io.writeFully
 import io.ktor.http.headersOf
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -136,6 +140,52 @@ class LinkPreviewsTest {
         assertEquals("Large page", api.load("https://example.com/chunked")?.title)
         assertEquals("Large page", api.load("https://example.com/declared")?.title)
         assertNull(api.load("https://example.com/late"))
+    }
+
+    @Test fun findsLateImageMetadataWithinTwoMebibytesWithoutRefetching() = runBlocking {
+        var pages = 0
+        val api = LinkPreviews(createHttpClient(MockEngine { request ->
+            if (request.url.encodedPath == "/image") respond("thumbnail", headers = headersOf(HttpHeaders.ContentType, "image/png"))
+            else {
+                pages++
+                respond("<title>Large page</title>" + " ".repeat(262_144) + """<meta property='og:image' content='/image'>""", headers = html)
+            }
+        }))
+        assertEquals("thumbnail", assertNotNull(api.load("https://example.com/late-image")).image?.decodeToString())
+        assertEquals(1, pages)
+    }
+
+    @Test fun expandedPagesStayBoundedAndSkipExpansionWhenAnImageIsKnown() = runBlocking {
+        val api = LinkPreviews(createHttpClient(MockEngine { request ->
+            val early = if (request.url.encodedPath == "/early") """<meta property='og:image' content='/missing'>""" else ""
+            respond("<title>Keep title</title>" + early + " ".repeat(262_144) +
+                """<meta name='description' content='Late description'>""" + " ".repeat(2_097_152) +
+                """<meta property='og:image' content='/too-late'>""", headers = html)
+        }))
+        val expanded = assertNotNull(api.load("https://example.com/bounded"))
+        assertEquals("Keep title", expanded.title)
+        assertEquals("Late description", expanded.description)
+        assertNull(expanded.image)
+        assertEquals("", assertNotNull(api.load("https://example.com/early")).description)
+    }
+
+    @Test fun failedOrStalledExpansionPreservesTheInitialTextCard() = runBlocking {
+        for (fail in listOf(true, false)) {
+            val channel = ByteChannel(autoFlush = true)
+            val writer = launch {
+                channel.writeFully(("<title>Keep me</title>" + " ".repeat(262_144)).encodeToByteArray())
+                if (fail) {
+                    delay(100)
+                    channel.cancel(IllegalStateException("connection reset"))
+                } else awaitCancellation()
+            }
+            try {
+                val api = LinkPreviews(createHttpClient(MockEngine { respond(channel, headers = html) }))
+                val card = assertNotNull(api.load("https://example.com/stalled"))
+                assertEquals("Keep me", card.title)
+                assertNull(card.image)
+            } finally { writer.cancel() }
+        }
     }
 
     @Test fun boundsThumbnailBodiesWithoutRelyingOnContentLength() = runBlocking {

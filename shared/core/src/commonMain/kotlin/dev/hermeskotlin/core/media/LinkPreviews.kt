@@ -43,7 +43,7 @@ class LinkPreviews(private val web: HttpClient) {
     suspend fun load(url: String): LinkPreview? = permits.withPermit {
         cacheLock.withLock { if (cache.containsKey(url)) return@withPermit cache[url] }
         val card = try {
-            val page = withTimeoutOrNull(6_000) { fetch(url, 256 * 1024, "text/html", "application/xhtml+xml", prefix = true) }
+            val page = fetch(url, 256 * 1024, "text/html", "application/xhtml+xml", prefix = true)
             page?.let { (pageUrl, bytes) ->
                 val meta = withContext(Dispatchers.Default) { linkMetadata(bytes, pageUrl) } ?: return@let null
                 val image = try {
@@ -69,26 +69,43 @@ class LinkPreviews(private val web: HttpClient) {
 
     private suspend fun fetch(source: String, limit: Int, vararg types: String, prefix: Boolean = false): Pair<String, ByteArray>? {
         var url = webUrl(source) ?: return null
-        repeat(4) {
-            var redirect: Url? = null
-            val result = web.prepareGet(url) {
-                header(HttpHeaders.Accept, types.joinToString(", ") { if (it.endsWith('/')) "${it}*" else it })
-            }.execute { response ->
-                if (response.status.value in setOf(301, 302, 303, 307, 308)) {
-                    redirect = response.headers[HttpHeaders.Location]?.let { location ->
-                        webUrl(URLBuilder(url).apply { takeFrom(location) }.buildString())
+        var partial: Pair<String, ByteArray>? = null
+        return try {
+            withTimeoutOrNull(6_000) {
+                repeat(4) {
+                    var redirect: Url? = null
+                    val result = web.prepareGet(url) {
+                        header(HttpHeaders.Accept, types.joinToString(", ") { if (it.endsWith('/')) "${it}*" else it })
+                    }.execute { response ->
+                        if (response.status.value in setOf(301, 302, 303, 307, 308)) {
+                            redirect = response.headers[HttpHeaders.Location]?.let { location ->
+                                webUrl(URLBuilder(url).apply { takeFrom(location) }.buildString())
+                            }
+                            return@execute null
+                        }
+                        val type = response.headers[HttpHeaders.ContentType].orEmpty().substringBefore(';').lowercase()
+                        if (response.status.value !in 200..299 || types.none { if (it.endsWith('/')) type.startsWith(it) else type == it } ||
+                            (!prefix && (response.contentLength() ?: 0) > limit)) return@execute null
+                        val channel = response.bodyAsChannel()
+                        var bytes = channel.readRemaining(limit.toLong() + if (prefix) 0 else 1).readByteArray()
+                        if (prefix && bytes.size == limit) {
+                            partial = url.toString() to bytes
+                            val meta = withContext(Dispatchers.Default) { linkMetadata(bytes, url.toString()) }
+                            if (meta != null && meta.image == null) {
+                                bytes += channel.readRemaining((2 * 1024 * 1024 - bytes.size).toLong()).readByteArray()
+                            }
+                        }
+                        if (bytes.size > limit && !prefix) null else url.toString() to bytes
                     }
-                    return@execute null
+                    if (result != null) return@withTimeoutOrNull result
+                    url = redirect ?: return@withTimeoutOrNull null
                 }
-                val type = response.headers[HttpHeaders.ContentType].orEmpty().substringBefore(';').lowercase()
-                if (response.status.value !in 200..299 || types.none { if (it.endsWith('/')) type.startsWith(it) else type == it } ||
-                    (!prefix && (response.contentLength() ?: 0) > limit)) return@execute null
-                val bytes = response.bodyAsChannel().readRemaining(limit.toLong() + if (prefix) 0 else 1).readByteArray()
-                if (bytes.size > limit) null else url.toString() to bytes
-            }
-            if (result != null) return result
-            url = redirect ?: return null
+                null
+            } ?: partial
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            partial ?: throw e
         }
-        return null
     }
 }
