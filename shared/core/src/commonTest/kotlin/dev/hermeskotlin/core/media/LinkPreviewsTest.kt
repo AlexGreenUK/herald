@@ -50,6 +50,26 @@ class LinkPreviewsTest {
         ))
     }
 
+    @Test fun formattedBareLinksKeepTheirActualDestination() {
+        for (text in listOf("**https://example.com**", "*https://example.com*", "~~https://example.com~~", "https://example.com**bold**")) {
+            assertEquals(listOf("https://example.com"), replyWebLinks(text), text)
+        }
+        assertEquals(listOf("https://example.com/?x=one&y=two"), replyWebLinks("**https://example.com/?x=one&y=two**"))
+        assertEquals(listOf("https://example.com/path~part*part"), replyWebLinks("https://example.com/path~part*part"))
+    }
+
+    @Test fun honorsHttpDeclaredHtmlCharset() = runBlocking {
+        val content = "<title>Caf\u00e9</title><meta name='description' content='Cr\u00e8me'>"
+        val bytes = content.map { it.code.toByte() }.toByteArray()
+        val api = LinkPreviews(createHttpClient(MockEngine {
+            respond(bytes, headers = headersOf(HttpHeaders.ContentType, "text/html; charset=ISO-8859-1"))
+        }))
+        val card = assertNotNull(api.load("https://example.com/latin1"))
+        assertEquals("Caf\u00e9", card.title)
+        assertEquals("Cr\u00e8me", card.description)
+        assertEquals("UTF-8", linkMetadata("<title>UTF-8</title>".encodeToByteArray(), "https://example.com", "invalid@charset")?.title)
+    }
+
     @Test fun redirectsAndParsesMetadataWithRelativeThumbnail() = runBlocking {
         val api = LinkPreviews(createHttpClient(MockEngine { request ->
             when (request.url.encodedPath) {

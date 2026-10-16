@@ -1,7 +1,9 @@
 package dev.hermeskotlin.core.media
 
+import java.nio.charset.Charset
 import org.jsoup.Jsoup
 import org.jsoup.parser.Parser
+import org.intellij.markdown.MarkdownTokenTypes
 import org.intellij.markdown.MarkdownElementTypes
 import org.intellij.markdown.ast.getTextInNode
 import org.intellij.markdown.html.entities.EntityConverter
@@ -10,8 +12,9 @@ import org.intellij.markdown.flavours.gfm.GFMTokenTypes
 import org.intellij.markdown.html.HtmlGenerator
 import org.intellij.markdown.parser.MarkdownParser
 
-internal actual fun linkMetadata(bytes: ByteArray, url: String): LinkMetadata? {
-    val doc = Jsoup.parse(bytes.inputStream(), null, url)
+internal actual fun linkMetadata(bytes: ByteArray, url: String, charset: String?): LinkMetadata? {
+    val supported = charset?.takeIf { runCatching { Charset.isSupported(it) }.getOrDefault(false) }
+    val doc = Jsoup.parse(bytes.inputStream(), supported, url)
     fun meta(vararg names: String): String = names.firstNotNullOfOrNull { name ->
         doc.selectFirst("meta[property=$name], meta[name=$name]")?.attr("content")?.trim()?.takeIf { it.isNotEmpty() }
     }.orEmpty()
@@ -41,8 +44,11 @@ actual fun replyWebLinks(text: String): List<String> {
                 ?: Jsoup.parse("<a ${attributes.joinToString(" ")}>").selectFirst("a")?.attr("href")
             val bare = node.type == GFMTokenTypes.GFM_AUTOLINK
             var href = if (bare) {
+                val end = node.parent?.children?.firstOrNull {
+                    it.startOffset >= node.endOffset && it.type != MarkdownTokenTypes.TEXT
+                }?.startOffset ?: node.parent?.endOffset ?: node.endOffset
                 BARE_WEB_URL.find(source, node.startOffset)?.takeIf { it.range.first == node.startOffset }?.value
-                    ?.trimEnd('.', ',', ';', ':', '!', '?', '"', '\'') ?: rendered
+                    ?.take(end - node.startOffset)?.trimEnd('.', ',', ';', ':', '!', '?', '"', '\'') ?: rendered
             } else rendered
             while (bare && href != null && href.endsWith(')') && href.count { it == ')' } > href.count { it == '(' }) href = href.dropLast(1)
             if (href != null && webUrl(href) != null) links += href

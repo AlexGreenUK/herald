@@ -7,6 +7,7 @@ import io.ktor.client.statement.bodyAsChannel
 import io.ktor.http.HttpHeaders
 import io.ktor.http.URLBuilder
 import io.ktor.http.Url
+import io.ktor.http.contentType
 import io.ktor.http.contentLength
 import io.ktor.http.takeFrom
 import io.ktor.utils.io.readRemaining
@@ -25,7 +26,9 @@ class LinkPreview(val url: String, val title: String, val description: String, v
 }
 
 internal class LinkMetadata(val title: String, val description: String, val image: String?)
-internal expect fun linkMetadata(bytes: ByteArray, url: String): LinkMetadata?
+internal expect fun linkMetadata(bytes: ByteArray, url: String, charset: String? = null): LinkMetadata?
+
+private data class WebContent(val url: String, val bytes: ByteArray, val charset: String?)
 
 /** The first three distinct webpage destinations in rendered Markdown order, excluding images and code. */
 expect fun replyWebLinks(text: String): List<String>
@@ -44,10 +47,10 @@ class LinkPreviews(private val web: HttpClient) {
         cacheLock.withLock { if (cache.containsKey(url)) return@withPermit cache[url] }
         val card = try {
             val page = fetch(url, 256 * 1024, "text/html", "application/xhtml+xml", prefix = true)
-            page?.let { (pageUrl, bytes) ->
-                val meta = withContext(Dispatchers.Default) { linkMetadata(bytes, pageUrl) } ?: return@let null
+            page?.let { (pageUrl, bytes, charset) ->
+                val meta = withContext(Dispatchers.Default) { linkMetadata(bytes, pageUrl, charset) } ?: return@let null
                 val image = try {
-                    withTimeoutOrNull(4_000) { meta.image?.let { fetch(it, 2 * 1024 * 1024, "image/")?.second } }
+                    withTimeoutOrNull(4_000) { meta.image?.let { fetch(it, 2 * 1024 * 1024, "image/")?.bytes } }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (_: Exception) {
@@ -67,9 +70,9 @@ class LinkPreviews(private val web: HttpClient) {
         card
     }
 
-    private suspend fun fetch(source: String, limit: Int, vararg types: String, prefix: Boolean = false): Pair<String, ByteArray>? {
+    private suspend fun fetch(source: String, limit: Int, vararg types: String, prefix: Boolean = false): WebContent? {
         var url = webUrl(source) ?: return null
-        var partial: Pair<String, ByteArray>? = null
+        var partial: WebContent? = null
         return try {
             withTimeoutOrNull(6_000) {
                 repeat(4) {
@@ -86,16 +89,17 @@ class LinkPreviews(private val web: HttpClient) {
                         val type = response.headers[HttpHeaders.ContentType].orEmpty().substringBefore(';').lowercase()
                         if (response.status.value !in 200..299 || types.none { if (it.endsWith('/')) type.startsWith(it) else type == it } ||
                             (!prefix && (response.contentLength() ?: 0) > limit)) return@execute null
+                        val charset = runCatching { response.contentType()?.parameter("charset") }.getOrNull()
                         val channel = response.bodyAsChannel()
                         var bytes = channel.readRemaining(limit.toLong() + if (prefix) 0 else 1).readByteArray()
                         if (prefix && bytes.size == limit) {
-                            partial = url.toString() to bytes
-                            val meta = withContext(Dispatchers.Default) { linkMetadata(bytes, url.toString()) }
+                            partial = WebContent(url.toString(), bytes, charset)
+                            val meta = withContext(Dispatchers.Default) { linkMetadata(bytes, url.toString(), charset) }
                             if (meta != null && meta.image == null) {
                                 bytes += channel.readRemaining((2 * 1024 * 1024 - bytes.size).toLong()).readByteArray()
                             }
                         }
-                        if (bytes.size > limit && !prefix) null else url.toString() to bytes
+                        if (bytes.size > limit && !prefix) null else WebContent(url.toString(), bytes, charset)
                     }
                     if (result != null) return@withTimeoutOrNull result
                     url = redirect ?: return@withTimeoutOrNull null
