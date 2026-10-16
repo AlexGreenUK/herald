@@ -438,6 +438,7 @@ fun ChatScreen(
         placeholder = remember(target) { (if (target.storedSessionId == null) NEW_CHAT_PROMPTS else FOLLOW_UP_PROMPTS).random() },
         notice = notice,
         actions = viewModel,
+        widgetFiles = remember(target) { WidgetFiles(target, { viewModel.previewFile(it, target) }, { viewModel.downloadFile(it, target) }) },
         editing = viewModel.editing.collectAsStateWithLifecycle().value,
         // Only for the chat it was taken for, not one the screen moved on to (a branch, a fresh start).
         readUpTo = target.readUpTo?.takeIf { state.storedSessionId == target.storedSessionId },
@@ -578,6 +579,7 @@ internal fun ChatView(
     placeholder: String,
     notice: String?,
     actions: ChatActions,
+    widgetFiles: WidgetFiles? = null,
     /** The prompt being edited in the composer, whose send replaces it. */
     editing: String? = null,
     /** How far this chat had been read when it was opened (epoch seconds); later messages are marked new. */
@@ -689,6 +691,7 @@ internal fun ChatView(
                     if (state.historyLoaded && state.messages.isNotEmpty()) {
                         CompositionLocalProvider(
                             LocalMediaLoader provides actions::loadMedia,
+                            LocalWidgetFiles provides widgetFiles,
                             LocalOpenImage provides onViewImage,
                             LocalFileLinks provides { link -> GatewayFile.fromLink(link)?.let(onOpenFile) },
                             LocalNotice provides onNotice,

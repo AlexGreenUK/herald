@@ -669,9 +669,11 @@ class ChatViewModel(
      * The start of a gateway file a reply linked to, for its viewer; the reason in plain words
      * when the gateway won't hand it over.
      */
-    suspend fun previewFile(file: GatewayFile): FileLoad {
-        val gateway = target?.gateway?.gatewayUrl ?: return FileLoad.Failed("Not connected to a gateway.")
-        return when (val result = media.readText(gateway, file.path, target?.profile)) {
+    suspend fun previewFile(file: GatewayFile): FileLoad = previewFile(file, target)
+
+    internal suspend fun previewFile(file: GatewayFile, owner: ChatTarget?): FileLoad {
+        val gateway = owner?.gateway?.gatewayUrl ?: return FileLoad.Failed("Not connected to a gateway.")
+        return when (val result = media.readText(gateway, file.path, owner.profile)) {
             is ApiResult.Success -> FileLoad.Ready(result.value)
             else -> FileLoad.Failed(fileError(result))
         }
@@ -681,9 +683,11 @@ class ChatViewModel(
      * A whole gateway file a reply linked to, through the chat's profile: for Save and Share, and for a
      * linked picture. Fetched each time, so a file the agent has since rewritten comes back as it is now.
      */
-    suspend fun downloadFile(file: GatewayFile): FileDownload {
-        val gateway = target?.gateway?.gatewayUrl ?: return FileDownload.Failed("Not connected to a gateway.")
-        return when (val result = media.download(gateway, file.path, target?.profile)) {
+    suspend fun downloadFile(file: GatewayFile): FileDownload = downloadFile(file, target)
+
+    internal suspend fun downloadFile(file: GatewayFile, owner: ChatTarget?): FileDownload {
+        val gateway = owner?.gateway?.gatewayUrl ?: return FileDownload.Failed("Not connected to a gateway.")
+        return when (val result = media.download(gateway, file.path, owner.profile)) {
             is ApiResult.Success -> FileDownload.Ready(result.value)
             else -> FileDownload.Failed(fileError(result, whole = true))
         }
