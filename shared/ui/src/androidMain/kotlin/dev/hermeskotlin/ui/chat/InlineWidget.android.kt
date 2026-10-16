@@ -3,6 +3,7 @@ package dev.hermeskotlin.ui.chat
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Color
+import android.view.MotionEvent
 import android.view.ViewGroup
 import android.webkit.PermissionRequest
 import android.webkit.RenderProcessGoneDetail
@@ -52,13 +53,18 @@ internal actual fun WidgetWebView(html: String, theme: WidgetTheme, name: String
 private const val WIDGET_URL = "https://herald-widget.invalid/"
 
 /** The same restricted host for each widget; its document always arrives as app-supplied text. */
-@SuppressLint("SetJavaScriptEnabled")
+@SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
 internal fun createWidgetWebView(context: Context, name: String, document: () -> String, onFailure: () -> Unit): WebView =
     WebView(context).apply {
         // A wrap-content WebView gives percentage-height frames a zero-height document.
         layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         setBackgroundColor(Color.TRANSPARENT)
         contentDescription = name
+        // Keep iframe scrolling and controls out of the transcript's drag gesture. WebView owns clicks.
+        setOnTouchListener { view, event ->
+            view.parent?.requestDisallowInterceptTouchEvent(event.actionMasked != MotionEvent.ACTION_UP && event.actionMasked != MotionEvent.ACTION_CANCEL)
+            false
+        }
         settings.apply {
             javaScriptEnabled = true
             allowFileAccess = false
