@@ -86,6 +86,26 @@ class LinkPreviewsTest {
         assertEquals("https://example.com/start", card.url)
     }
 
+    @Test fun redirectsReplaceQueriesWithoutLeakingThemToAnotherHost() = runBlocking {
+        val start = "https://source.example/dir/start?private=secret"
+        for ((location, expected) in listOf(
+            "https://other.example/target" to "https://other.example/target",
+            "//other.example/target" to "https://other.example/target",
+            "child" to "https://source.example/dir/child",
+            "?new=1" to "https://source.example/dir/start?new=1",
+            "#section" to "$start#section",
+        )) {
+            val requests = mutableListOf<String>()
+            val api = LinkPreviews(createHttpClient(MockEngine { request ->
+                requests += request.url.toString()
+                if (requests.size == 1) respond("", HttpStatusCode.Found, headersOf(HttpHeaders.Location, location))
+                else respond("<title>Destination</title>", headers = html)
+            }))
+            assertNotNull(api.load(start))
+            assertEquals(listOf(start, expected), requests, location)
+        }
+    }
+
     @Test fun fallsBackToStructuredPageImageAndKeepsOpenGraphPreferred() {
         val structured = """<title>Search</title><meta itemprop='image' content='/logo.png'>"""
         assertEquals("https://example.com/logo.png", linkMetadata(structured.encodeToByteArray(), "https://example.com/")?.image)

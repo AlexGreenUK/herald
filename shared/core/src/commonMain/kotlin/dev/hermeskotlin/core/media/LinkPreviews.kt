@@ -82,7 +82,11 @@ class LinkPreviews(private val web: HttpClient) {
                     }.execute { response ->
                         if (response.status.value in setOf(301, 302, 303, 307, 308)) {
                             redirect = response.headers[HttpHeaders.Location]?.let { location ->
-                                webUrl(URLBuilder(url).apply { takeFrom(location) }.buildString())
+                                webUrl(URLBuilder(url).apply {
+                                    // takeFrom otherwise carries the old query even to a different host.
+                                    if (location.isNotEmpty() && !location.startsWith('#')) parameters.clear()
+                                    takeFrom(location)
+                                }.buildString())
                             }
                             return@execute null
                         }
