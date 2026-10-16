@@ -200,7 +200,7 @@ class ChatViewModel(
     private val linkPreviews: LinkPreviews? = null,
 ) : ViewModel(), ChatActions {
 
-    /** Dictation and voice chat for the open chat. */
+    /** Dictation, voice chat and Read aloud for the open chat. */
     val voice = VoiceController(
         audioApi, recorder, player, viewModelScope, appScope, voiceKeepAlive, deviceDictation,
         speechStreams = speechStreams,
@@ -1230,6 +1230,15 @@ class ChatViewModel(
     override fun dismissVoiceChatError() = voice.dismissChatError()
 
     override fun dismissDictationError() = voice.dismissDictationError()
+
+    override fun readAloud(key: String, text: String) {
+        val target = target ?: return
+        voice.readAloud(key, text, target.gateway.gatewayUrl, target.profile)
+    }
+
+    override fun stopReading() = voice.stopReading()
+
+    override fun dismissReadAloudError() = voice.dismissReadAloudError()
 
     fun showTitle(title: String?) = session.value?.showTitle(title)
 
