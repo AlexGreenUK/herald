@@ -159,6 +159,9 @@ data class ChatTarget(
  */
 data class BotIdentity(val name: String, val label: String, val chatsProfile: String? = null)
 
+/** A transcript and its file callbacks travel together while the selected route changes. */
+internal data class ChatTranscript(val state: ChatState = ChatState(), val widgetFiles: WidgetFiles? = null)
+
 /**
  * Shows the [ChatSession] the app-wide [ChatHost] has open; opening another target replaces it.
  * Remembers the open chat in [LastChatStore] so the next launch returns to it: a stored session once
@@ -228,12 +231,23 @@ class ChatViewModel(
 
     private var target: ChatTarget? = null
     private val session = MutableStateFlow<ChatSession?>(null)
+    private val widgetSession = MutableStateFlow<Pair<ChatSession, ChatTarget>?>(null)
 
     init {
         // A chat opened under the checkpoints sheet shows its own checkpoints, not the last chat's.
         viewModelScope.launch { session.collect { checkpoints.follow(it) } }
         viewModelScope.launch { session.collect { control.follow(it) } }
     }
+
+    internal val transcript: StateFlow<ChatTranscript> = widgetSession
+        .flatMapLatest { bound ->
+            if (bound == null) flowOf(ChatTranscript()) else {
+                val (chat, owner) = bound
+                val files = WidgetFiles(owner, { previewFile(it, owner) }, { downloadFile(it, owner) })
+                chat.state.map { ChatTranscript(it, files) }
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, ChatTranscript())
 
     val state: StateFlow<ChatState> = session
         .flatMapLatest { it?.state ?: flowOf(ChatState()) }
@@ -419,6 +433,7 @@ class ChatViewModel(
             // back in needs a fresh session, not the stopped one this view model still holds.
             if (session.value !== host.session.value) {
                 session.value = host.open(target.gateway.gatewayUrl, target.storedSessionId, target.title, target.profile, target.cwd)
+                widgetSession.value = session.value?.let { it to target }
             }
             return
         }
@@ -437,6 +452,7 @@ class ChatViewModel(
         target.draft?.let(::takeDraft)
         if (target.storedSessionId == null) viewModelScope.launch { lastChats.set(target.gateway.gatewayUrl, null, target.profile) }
         session.value = host.open(target.gateway.gatewayUrl, target.storedSessionId, target.title, target.profile, target.cwd)
+        widgetSession.value = session.value?.let { it to target }
         // The catalog marks the previous chat's model; a new chat must show the profile default instead.
         _picker.update { it.copy(catalog = null, confirm = null) }
         if (connectionState.value is ConnectionState.Connected) {

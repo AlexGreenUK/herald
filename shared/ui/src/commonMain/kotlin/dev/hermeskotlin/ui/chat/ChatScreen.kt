@@ -333,7 +333,8 @@ fun ChatScreen(
     onNextChat: (() -> Boolean)? = null,
 ) {
     LaunchedEffect(target) { viewModel.open(target) }
-    val state = viewModel.state.collectAsStateWithLifecycle().value
+    val transcript = viewModel.transcript.collectAsStateWithLifecycle().value
+    val state = transcript.state
     val picker = viewModel.picker.collectAsStateWithLifecycle().value
     val connection = viewModel.connectionState.collectAsStateWithLifecycle().value
     val connected = connection is ConnectionState.Connected
@@ -438,7 +439,7 @@ fun ChatScreen(
         placeholder = remember(target) { (if (target.storedSessionId == null) NEW_CHAT_PROMPTS else FOLLOW_UP_PROMPTS).random() },
         notice = notice,
         actions = viewModel,
-        widgetFiles = remember(target) { WidgetFiles(target, { viewModel.previewFile(it, target) }, { viewModel.downloadFile(it, target) }) },
+        widgetFiles = transcript.widgetFiles,
         editing = viewModel.editing.collectAsStateWithLifecycle().value,
         // Only for the chat it was taken for, not one the screen moved on to (a branch, a fresh start).
         readUpTo = target.readUpTo?.takeIf { state.storedSessionId == target.storedSessionId },
