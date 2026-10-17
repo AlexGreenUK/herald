@@ -147,6 +147,72 @@ class RoomsViewModelTest {
     }
 
     @Test
+    fun aLogConfirmedFileSendCannotBeRelockedByItsLostReply() = runTest(dispatcher) {
+        val held = CompletableDeferred<Unit>()
+        var posted: JsonObject? = null
+        val socket = RoomsGateway(CoroutineScope(dispatcher)) { m, p ->
+            when {
+                m == "groups.send" -> { posted = p["payload"]!!.jsonObject; held.await(); attachmentReply(m, p)!! }
+                m == "groups.state" && posted != null -> """{"room":{"room_id":"a","name":"A","latest_seq":1}}"""
+                m == "groups.log" && posted != null -> """{"events":[{"room_id":"a","seq":1,"event_id":"accepted","kind":"message.user","actor":{"kind":"user","id":"u"},"payload":$posted}],"cursor":1,"latest_seq":1}"""
+                else -> attachmentReply(m, p) ?: "{}"
+            }
+        }
+        val vm = attachmentRoom(socket)
+        try {
+            vm.addAttachments(listOf(picked("report")), vm.opened.value!!.draftKey); vm.send()
+            advanceTimeBy(60_001); runCurrent()
+            assertTrue(vm.opened.value!!.attachments.isEmpty())
+            assertFalse(vm.opened.value!!.attachmentRetry)
+            assertEquals(null, vm.opened.value!!.notice)
+            vm.addAttachments(listOf(picked("next")), vm.opened.value!!.draftKey)
+            assertEquals("next", vm.opened.value!!.attachments.single().id)
+        } finally { vm.close(); vm.setVisible(false); held.complete(Unit) }
+    }
+
+    @Test
+    fun sendingInAnotherRoomPreservesTheFirstRoomsUnknownFileSend() = runTest(dispatcher) {
+        val held = CompletableDeferred<Unit>()
+        var attempts = 0
+        val socket = RoomsGateway(CoroutineScope(dispatcher)) { m, p ->
+            if (m == "groups.send" && p["room_id"]!!.jsonPrimitive.content == "a" && attempts++ == 0) held.await()
+            (attachmentReply(m, p) ?: "{}").let { reply ->
+                if (m == "groups.send" && p["room_id"]!!.jsonPrimitive.content == "b") reply.replace("\"room_id\":\"a\"", "\"room_id\":\"b\"") else reply
+            }
+        }
+        val vm = attachmentRoom(socket)
+        try {
+            vm.addAttachments(listOf(picked("report")), vm.opened.value!!.draftKey); vm.send()
+            advanceTimeBy(60_001); runCurrent()
+            vm.open(roomB); vm.composer.setTextAndPlaceCursorAtEnd("for B"); vm.send(); runCurrent()
+            vm.open(roomA)
+            assertEquals("report", vm.opened.value!!.attachments.single().id)
+            vm.send(); runCurrent()
+            val sends = socket.sent("groups.send").filter { it["room_id"]!!.jsonPrimitive.content == "a" }
+            assertEquals(2, sends.size)
+            assertEquals(sends[0], sends[1])
+        } finally { vm.close(); vm.setVisible(false); held.complete(Unit) }
+    }
+
+    @Test
+    fun deletingARoomRetiresItsUnansweredFileSend() = runTest(dispatcher) {
+        val held = CompletableDeferred<Unit>()
+        val socket = RoomsGateway(CoroutineScope(dispatcher)) { m, p ->
+            if (m == "groups.send") held.await()
+            attachmentReply(m, p) ?: "{}"
+        }
+        val vm = attachmentRoom(socket)
+        try {
+            vm.addAttachments(listOf(picked("report")), vm.opened.value!!.draftKey); vm.send()
+            advanceTimeBy(60_001); runCurrent()
+            vm.deleteRoom(roomA); runCurrent()
+            vm.open(roomA)
+            assertTrue(vm.opened.value!!.attachments.isEmpty())
+            assertFalse(vm.opened.value!!.attachmentRetry)
+        } finally { vm.close(); vm.setVisible(false); held.complete(Unit) }
+    }
+
+    @Test
     fun leavingAndReopeningAnUnansweredFileSendKeepsTheRetryIdentity() = runTest(dispatcher) {
         val held = CompletableDeferred<Unit>()
         var sends = 0

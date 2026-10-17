@@ -31,6 +31,7 @@ import androidx.compose.foundation.text.selection.LocalTextSelectionColors
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.runtime.key
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -73,7 +74,6 @@ import dev.hermeskotlin.core.chat.OutgoingAttachment
 import dev.hermeskotlin.core.chat.ShownAttachment
 import dev.hermeskotlin.core.chat.AttachmentKind
 import dev.hermeskotlin.core.rooms.RoomAttachment
-import dev.hermeskotlin.ui.chat.AttachmentPicker
 import dev.hermeskotlin.ui.chat.rememberAttachmentPicker
 import dev.hermeskotlin.ui.chat.AttachSheet
 import dev.hermeskotlin.ui.chat.ComposerTray
@@ -431,18 +431,15 @@ private fun PendingActions(room: OpenRoom, onApprove: (RoomPendingAction, String
 private fun RoomComposer(room: OpenRoom, viewModel: RoomActions) {
     val hasText = viewModel.composer.text.isNotBlank() || room.attachments.isNotEmpty()
     var attachOpen by remember(room.draftKey) { mutableStateOf(false) }
-    // Capture when a picker launches: its result can return after the room changes.
-    var pickedFor by remember { mutableStateOf(room.draftKey) }
-    val picker = rememberAttachmentPicker(
-        onPicked = { viewModel.addAttachments(it, pickedFor) },
-        onError = { viewModel.attachmentError(it, pickedFor) },
-    )
-    val roomPicker = object : AttachmentPicker {
-        override fun pickPhotos() { pickedFor = room.draftKey; picker.pickPhotos() }
-        override fun takePhoto() { pickedFor = room.draftKey; picker.takePhoto() }
-        override fun pickFiles() { pickedFor = room.draftKey; picker.pickFiles() }
+    // A file read belongs to this opening, even if another room opens while it finishes.
+    val picker = key(viewModel, room.draftKey) {
+        val draftKey = room.draftKey
+        rememberAttachmentPicker(
+            onPicked = { viewModel.addAttachments(it, draftKey) },
+            onError = { viewModel.attachmentError(it, draftKey) },
+        )
     }
-    AttachSheet(attachOpen, onDismiss = { attachOpen = false }, picker = roomPicker,
+    AttachSheet(attachOpen, onDismiss = { attachOpen = false }, picker = picker,
         subtitle = "Up to 8 files, 15 MB each, 25 MB per message")
     val shape = RoundedCornerShape(Theme[radii][radiusLarge])
     var focused by remember { mutableStateOf(false) }
@@ -497,7 +494,7 @@ private fun RoomComposer(room: OpenRoom, viewModel: RoomActions) {
                     // Over a selection, the cursor goes after the @ rather than selecting it.
                     placeCursorBeforeCharAt(at.start + before.length)
                 }
-            })
+            }, enabled = !room.attachmentRetry)
             Text(
                 if (recipients.size == members.size) members.joinToString(" · ") { it.label }
                 else "To ${recipients.joinToString(", ") { it.label }}",
@@ -534,11 +531,12 @@ private fun RoomMentions(room: OpenRoom, viewModel: RoomActions, faces: BotFaces
             member.handle?.let { MentionChoice(member.label, it, faces.roomBot(member.profile ?: member.memberId)) }
         }
     }
-    AnimatedVisibility(visible = choices.isNotEmpty(), enter = fadeIn(), exit = fadeOut()) {
+    AnimatedVisibility(visible = !room.attachmentRetry && choices.isNotEmpty(), enter = fadeIn(), exit = fadeOut()) {
         // Kept through the fade-out, so the list doesn't empty before it leaves.
         var shown by remember { mutableStateOf(choices) }
         if (choices.isNotEmpty()) shown = choices
         MentionSuggestions(shown, hazeState = null) { choice ->
+            if (room.attachmentRetry) return@MentionSuggestions
             val typed = mention ?: return@MentionSuggestions
             viewModel.composer.edit { replace(typed.start, typed.end, "@${choice.handle} ") }
         }

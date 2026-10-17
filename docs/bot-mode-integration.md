@@ -244,8 +244,8 @@ we need.
   `groups.attachment.upload {room_id, upload_id, kind, name, mime, data_base64}` returns a manifest: send only
   `attachment_id`, `kind`, `name`, `mime` and `size` in `payload.attachments`, never receipt storage metadata.
   Limits are 8 files, 15,000,000 bytes each and 25,000,000 bytes per message. Files alone are valid messages.
-  Selection stays local until Send. An in-process retry keeps upload receipts and IDs; an unknown send retries
-  its original event/payload. There is no background outbox or recovery after app-process death. Room history
+  Selection stays local until Send. While bound to the same gateway, an in-process retry keeps upload receipts and IDs; an unknown send retries
+  its original event/payload. Other room sends preserve that unknown file intent. There is no background outbox or recovery after a gateway switch or app-process death. Room history
   shows attachment names/kinds; opening room-manifest attachments is separate from gateway filesystem links.
   Contract verified against `NousResearch/hermes-agent` `868b9f24` (`gateway/session_group_controls.py`,
   `gateway/session_hosted_attachments.py`, `gateway/hosted_room_attachments.py`).
