@@ -182,7 +182,119 @@ class LinkPreviewsTest {
             "https://", "https://?x", "https://#x", "https:///relative", "https://\\example.com", "https://:80", "https://u:p@example.com")) assertNull(api.load(url), url)
         assertEquals(0, requests)
         assertTrue(webUrl("HTTPS://example.com") != null)
-        assertTrue(webUrl("https://[::1]/") != null)
+        assertTrue(webUrl("https://[2606:4700::1111]/") != null)
+    }
+
+    @Test fun addressesOnTheUsersOwnNetworksAreNeverPreviewed() = runBlocking {
+        for (host in listOf("localhost", "router", "printer.local", "nas.lan", "box.home.arpa", "app.localhost", "svc.internal",
+            "127.0.0.1", "10.0.0.8", "172.20.1.1", "192.168.1.1", "169.254.169.254", "100.101.102.103", "0.0.0.0", "224.0.0.1",
+            "[::1]", "[::]", "[fd7a:115c:a1e0::1]", "[fe80::1]", "[::ffff:192.168.1.1]",
+            // Lenient address forms a connection reads as 127.0.0.1, 10.0.0.1, 192.168.1.1 and so on.
+            "127.1", "10.1", "192.168.257", "0177.0.0.1", "010.0.0.1", "2130706433",
+            "１９２。１６８。１.１")) {
+            assertNull(webUrl("http://$host/admin"), host)
+        }
+        for (host in listOf("example.com", "8.8.8.8", "100.128.0.1", "172.32.0.1", "[2606:4700::1111]")) assertNotNull(webUrl("http://$host/"), host)
+        assertEquals(listOf("https://example.com"), replyWebLinks("http://192.168.1.1/reboot http://localhost:9119 https://example.com"))
+        assertTrue(publicAddress(byteArrayOf(93, 184.toByte(), 216.toByte(), 34)))
+        assertTrue(!publicAddress(byteArrayOf(100, 100, 1, 1)))
+        assertTrue(!publicAddress(ByteArray(16).also { it[15] = 1 }))
+        assertTrue(!publicAddress(ByteArray(16).also { it[0] = 0xfd.toByte() }))
+        assertTrue(publicAddress(ByteArray(16).also { it[0] = 0x26 }))
+        val nat64 = byteArrayOf(0, 0x64, 0xff.toByte(), 0x9b.toByte(), 0, 0, 0, 0, 0, 0, 0, 0)
+        assertTrue(publicAddress(nat64 + byteArrayOf(93, 184.toByte(), 216.toByte(), 34)))
+        assertTrue(!publicAddress(nat64 + byteArrayOf(192.toByte(), 168.toByte(), 1, 1)))
+
+        val requests = mutableListOf<String>()
+        val api = LinkPreviews(createHttpClient(MockEngine { request ->
+            requests += request.url.toString()
+            when (request.url.encodedPath) {
+                "/to-router" -> respond("", HttpStatusCode.Found, headersOf(HttpHeaders.Location, "http://192.168.1.1/reboot"))
+                else -> respond("""<title>Page</title><meta property='og:image' content='http://127.0.0.1:8080/x.png'>""", headers = html)
+            }
+        }))
+        assertNull(api.load("https://example.com/to-router"))
+        assertNull(assertNotNull(api.load("https://example.com/page")).image)
+        assertEquals(listOf("https://example.com/to-router", "https://example.com/page"), requests)
+    }
+
+    @Test fun droppedConnectionsAndBusyServersAreTriedAgain() = runBlocking {
+        var calls = 0
+        var failure: String? = "reset"
+        val api = LinkPreviews(createHttpClient(MockEngine {
+            calls++
+            when (failure) {
+                "reset" -> error("connection reset")
+                "busy" -> respond("", HttpStatusCode.ServiceUnavailable)
+                else -> respond("<title>Back online</title>", headers = html)
+            }
+        }))
+        assertNull(api.load("https://example.com"))
+        failure = "busy"
+        assertNull(api.load("https://example.com"))
+        failure = null
+        assertEquals("Back online", api.load("https://example.com")?.title)
+        assertEquals("Back online", api.load("https://example.com")?.title)
+        assertEquals(3, calls)
+    }
+
+    @Test fun aNameThatLeadsHomeStaysRefused() = runBlocking {
+        var calls = 0
+        val api = LinkPreviews(createHttpClient(MockEngine {
+            calls++
+            throw NotPublicAddress("127.0.0.1.nip.io")
+        }))
+        assertNull(api.load("https://127.0.0.1.nip.io/"))
+        assertNull(api.load("https://127.0.0.1.nip.io/"))
+        assertEquals(1, calls)
+    }
+
+    @Test fun aCardWhoseThumbnailFailedIsLoadedAgain() = runBlocking {
+        var imageFails = true
+        val api = LinkPreviews(createHttpClient(MockEngine { request ->
+            if (request.url.encodedPath == "/image") {
+                if (imageFails) error("connection reset")
+                respond("thumbnail", headers = headersOf(HttpHeaders.ContentType, "image/png"))
+            } else respond("""<title>Page</title><meta property='og:image' content='/image'>""", headers = html)
+        }))
+        assertNull(assertNotNull(api.load("https://example.com")).image)
+        imageFails = false
+        assertEquals("thumbnail", api.load("https://example.com")?.image?.decodeToString())
+    }
+
+    @Test fun cachedThumbnailsStayWithinAByteBudget() = runBlocking {
+        val pages = mutableMapOf<String, Int>()
+        val api = LinkPreviews(createHttpClient(MockEngine { request ->
+            val path = request.url.encodedPath
+            if (path.endsWith(".png")) respond(ByteArray(2 * 1024 * 1024), headers = headersOf(HttpHeaders.ContentType, "image/png"))
+            else {
+                pages[path] = (pages[path] ?: 0) + 1
+                respond("""<title>Page</title><meta property='og:image' content='$path.png'>""", headers = html)
+            }
+        }))
+        for (i in 1..5) assertNotNull(api.load("https://example.com/$i")?.image)
+        api.load("https://example.com/5")
+        api.load("https://example.com/1")
+        assertEquals(1, pages["/5"])
+        assertEquals(2, pages["/1"])
+    }
+
+    @Test fun listedAndNonSvgSiteIconsAreUsed() {
+        val shortcut = """<title>Shop</title><link rel='shortcut icon' href='/favicon.png'>"""
+        assertEquals("https://example.com/favicon.png", linkMetadata(shortcut.encodeToByteArray(), "https://example.com/")?.image)
+        val svgFirst = """<title>Docs</title><link rel='icon' type='image/svg+xml' href='/logo.svg'><link rel='icon' href='/logo.png'>"""
+        assertEquals("https://example.com/logo.png", linkMetadata(svgFirst.encodeToByteArray(), "https://example.com/")?.image)
+        val svgOnly = """<title>Docs</title><link rel='icon' href='/logo.svg?v=2'>"""
+        assertNull(linkMetadata(svgOnly.encodeToByteArray(), "https://example.com/")?.image)
+        assertNull(linkMetadata("""<title>Mask</title><link rel='mask-icon' href='/m.png'>""".encodeToByteArray(), "https://example.com/")?.image)
+    }
+
+    @Test fun svgThumbnailsAreNotDownloaded() = runBlocking {
+        val api = LinkPreviews(createHttpClient(MockEngine { request ->
+            if (request.url.encodedPath == "/image") respond("<svg/>", headers = headersOf(HttpHeaders.ContentType, "image/svg+xml"))
+            else respond("""<title>Vector</title><meta property='og:image' content='/image'>""", headers = html)
+        }))
+        assertNull(assertNotNull(api.load("https://example.com")).image)
     }
 
     @Test fun largePagesUseOnlyABoundedPrefix() = runBlocking {

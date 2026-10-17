@@ -20,10 +20,15 @@ internal actual fun linkMetadata(bytes: ByteArray, url: String, charset: String?
     }.orEmpty()
     val title = meta("og:title", "twitter:title").ifBlank { doc.title() }.trim().take(200)
     if (title.isBlank()) return null
+    // SVG is skipped, as the picture decoder can't draw it.
+    fun drawable(url: String) = url.isNotBlank() && !url.substringBefore('?').substringBefore('#').endsWith(".svg", ignoreCase = true)
     val image = listOf("meta[property=og:image]", "meta[name=twitter:image]", "meta[itemprop=image]").firstNotNullOfOrNull { selector ->
-        doc.selectFirst(selector)?.absUrl("content")?.takeIf { it.isNotBlank() }
-    } ?: listOf("link[rel=apple-touch-icon]", "link[rel=icon]").firstNotNullOfOrNull { selector ->
-        doc.selectFirst(selector)?.absUrl("href")?.takeIf { it.isNotBlank() }
+        doc.select(selector).firstNotNullOfOrNull { meta -> meta.absUrl("content").takeIf(::drawable) }
+    } ?: listOf("apple-touch-icon", "apple-touch-icon-precomposed", "icon").firstNotNullOfOrNull { rel ->
+        // rel is a list ("shortcut icon").
+        doc.select("link[rel~=(?i)(^|\\s)$rel(\\s|$)]").firstNotNullOfOrNull { link ->
+            link.absUrl("href").takeIf { drawable(it) && !link.attr("type").contains("svg", ignoreCase = true) }
+        }
     }
     return LinkMetadata(title, meta("og:description", "description", "twitter:description").take(400), image)
 }
