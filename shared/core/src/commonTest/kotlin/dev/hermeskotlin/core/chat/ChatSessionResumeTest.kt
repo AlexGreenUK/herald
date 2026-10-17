@@ -326,9 +326,9 @@ class ChatSessionResumeTest {
 
     @Test
     fun aFoldAgainKeepsTheLiveCopyOfARunningTool() {
-        // Folded once; the saved row came again while its tool still ran, which only the live copy knows.
+        // Folded once; the saved row came again while its tool still ran, with no result row yet.
         val rows = savedFirstStep().dropLast(1).map { lenient.decodeFromString<SessionMessage>(it) }
-        val saved = historyToMessages(rows)
+        val saved = historyToMessages(rows, turnStartedAt = 100.0)
         val savedTool = (saved.last() as ChatMessage.Assistant).tools.single()
         val live = ChatMessage.Assistant(
             "live-0",
@@ -357,6 +357,43 @@ class ChatSessionResumeTest {
 
         assertFalse(tool.running)
         assertEquals(savedTool.output, tool.output)
+    }
+
+    @Test
+    fun aSavedEmptyResultEndsALiveCopyStillRunning() {
+        // As above, with a call that printed nothing: its result row is there, its output empty.
+        val rows = savedFirstStep().dropLast(1) + """{"id":5,"role":"tool","tool_call_id":"t1","content":"","timestamp":105}"""
+        val saved = historyToMessages(rows.map { lenient.decodeFromString<SessionMessage>(it) }, turnStartedAt = 100.0)
+        val savedTool = (saved.last() as ChatMessage.Assistant).tools.single()
+        val live = ChatMessage.Assistant(
+            "live-0",
+            text = "Running it. First I need the address.",
+            tools = listOf(savedTool.copy(running = true)),
+            streaming = true,
+        )
+        val tool = ((saved + live).withSavedStepsInLiveReply(100.0, "Running it.", turnReplyKey = "live-0").last() as ChatMessage.Assistant)
+            .tools.single()
+
+        assertFalse(tool.running, "a call that ended with nothing to say kept running")
+    }
+
+    @Test
+    fun anEndTheLiveCopyGotStaysOverAnOlderSavedRow() {
+        // The rows were read before the call's result was saved; the live copy got the end itself since.
+        val saved = historyToMessages(savedFirstStep().dropLast(1).map { lenient.decodeFromString<SessionMessage>(it) }, turnStartedAt = 100.0)
+        val savedTool = (saved.last() as ChatMessage.Assistant).tools.single()
+        assertTrue(savedTool.running)
+        val live = ChatMessage.Assistant(
+            "live-0",
+            text = "Running it. First I need the address.",
+            tools = listOf(savedTool.copy(running = false, durationSeconds = 1.5)),
+            streaming = true,
+        )
+        val tool = ((saved + live).withSavedStepsInLiveReply(100.0, "Running it.", turnReplyKey = "live-0").last() as ChatMessage.Assistant)
+            .tools.single()
+
+        assertFalse(tool.running, "a call that ended ran again")
+        assertEquals(1.5, tool.durationSeconds)
     }
 
     @Test

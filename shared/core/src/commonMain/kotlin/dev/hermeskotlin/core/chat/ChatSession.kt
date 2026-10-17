@@ -1608,6 +1608,11 @@ class ChatSession(
         event.seq?.let { lastSeq = it }
         val now = nowSeconds()
         val noticesBefore = _state.value.notices
+        // Cleared before the turn's end lands, so no rows laid out meanwhile still take it as running.
+        if (event.type == "message.complete") {
+            turnStartedAt = null
+            turnReplyKey = null
+        }
         _state.update { it.reduce(event, now) }
         when (event.type) {
             // Timed here, not on screen, so it ends on time even while the chat isn't showing. A notice that
@@ -1630,8 +1635,6 @@ class ChatSession(
             }
             // Swap the live copy for the stored rows, which now hold the other client's prompt for sure.
             "message.complete" -> {
-                turnStartedAt = null
-                turnReplyKey = null
                 // Nothing can still wait on a person once the turn is over; this also clears a
                 // clarify answered on another client, which gets no request.cancel.
                 _state.update { it.copy(inputRequests = emptyList()) }
@@ -2195,8 +2198,10 @@ internal fun List<ChatMessage>.withSavedStepsInLiveReply(
             val shown = live.tools.firstOrNull { it.id == tool.id }
             when {
                 shown == null -> tool
-                shown.running && tool.output != null -> tool
-                tool.running && !shown.running && shown.output == null -> tool
+                // The saved call has its result row (empty ones included): its end, missed while the link was down.
+                shown.running && !tool.running -> tool
+                // An end the live copy got itself carries its time or summary; one folded from older rows has neither.
+                tool.running && !shown.running && shown.output == null && shown.durationSeconds == null && shown.summary == null -> tool
                 else -> shown
             }
         } +
