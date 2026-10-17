@@ -2167,10 +2167,10 @@ internal fun List<ChatMessage>.withSavedStepsInLiveReply(
     // A reply left streaming from an earlier turn isn't this one's, whatever was saved before it.
     if (live.key != turnReplyKey && live.key != inflightReplyKey(inflightText)) return this
     // Steps are saved apart and joined with blank lines; the stream runs them together. Spacing aside, the same.
-    if (!live.text.withoutSpaces().startsWith(saved.text.withoutSpaces())) return this
+    if (!live.text.startsWithIgnoringSpaces(saved.text)) return this
     val folded = live.copy(
         // Folded before, the live reply leads with the saved reasoning and has streamed on from there.
-        reasoning = if (live.reasoning.withoutSpaces().startsWith(saved.reasoning.withoutSpaces())) live.reasoning
+        reasoning = if (live.reasoning.startsWithIgnoringSpaces(saved.reasoning)) live.reasoning
             else listOf(saved.reasoning, live.reasoning).filter { it.isNotEmpty() }.joinToString("\n\n"),
         // A call still running in the live copy (folded before) has its events since; once the saved one has its
         // result, that is newer (an end missed while the link was down).
@@ -2190,16 +2190,27 @@ internal fun List<ChatMessage>.withSavedStepsInLiveReply(
  */
 internal fun List<ChatMessage>.inflightReplyKey(inflightText: String): String? {
     val live = lastOrNull { it is ChatMessage.Assistant && it.streaming } ?: return null
-    val liveText = (live as ChatMessage.Assistant).text.withoutSpaces()
-    val gatewayText = inflightText.withoutSpaces()
-    return live.key.takeIf { liveText.startsWith(gatewayText) && (gatewayText.isNotEmpty() || liveText.isEmpty()) }
+    val liveText = (live as ChatMessage.Assistant).text
+    return live.key.takeIf { liveText.startsWithIgnoringSpaces(inflightText) && (inflightText.isNotBlank() || liveText.isBlank()) }
 }
 
 /** A line only this device shows (a notice, a command) and no reply or prompt: it sits after the stored rows. */
 private val ChatMessage.isLocalLine: Boolean
     get() = isLocalOnly && this !is ChatMessage.Assistant && this !is ChatMessage.User
 
-private fun String.withoutSpaces(): String = filterNot { it.isWhitespace() }
+/** Whether this starts with [prefix], whitespace aside in both. Walks the two in place: replies run long. */
+private fun String.startsWithIgnoringSpaces(prefix: String): Boolean {
+    var i = 0
+    var j = 0
+    while (true) {
+        while (j < prefix.length && prefix[j].isWhitespace()) j++
+        if (j == prefix.length) return true
+        while (i < length && this[i].isWhitespace()) i++
+        if (i == length || this[i] != prefix[j]) return false
+        i++
+        j++
+    }
+}
 
 /**
  * The reply still marked streaming from a turn that ended while the link was down and couldn't be replayed. The
