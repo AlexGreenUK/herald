@@ -120,4 +120,20 @@ class UnreadDividerTest {
 
         assertEquals(UnreadLineStep.Above("r2"), unreadLineStep(messages, readUpTo = 150.0, olderMessages = true, pagesLoaded = 0))
     }
+
+    @Test
+    fun theLineStaysWhereItWasPlaced() {
+        // Reading on doesn't move it, though another message is now the first new one by time.
+        val messages = listOf(prompt("p1", 100.0), reply("r1", 110.0), reply("r2", 300.0))
+
+        assertEquals("r2", unreadLineKey(messages, unreadFrom = "r2", readUpTo = 50.0))
+    }
+
+    @Test
+    fun aSavedStepFoldedIntoTheLiveReplyPassesTheLineOn() {
+        // The line went above the running turn's saved step, which then folded into the live reply repeating it.
+        val messages = listOf(prompt("p1", 100.0), reply("r1", 110.0), prompt("p2", 140.0), reply("live-3", at = null, streaming = true))
+
+        assertEquals("live-3", unreadLineKey(messages, unreadFrom = "row-4", readUpTo = 150.0))
+    }
 }

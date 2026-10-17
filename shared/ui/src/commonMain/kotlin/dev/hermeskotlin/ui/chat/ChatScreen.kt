@@ -1345,6 +1345,7 @@ private fun Messages(
         }
     }
     val unservable = remember(messages) { unservableEchoes(messages) }
+    val unreadLine = remember(messages, unreadFrom, readUpTo) { unreadLineKey(messages, unreadFrom, readUpTo) }
     Box(Modifier.fillMaxSize()) {
         LazyColumn(
             state = listState,
@@ -1356,10 +1357,10 @@ private fun Messages(
                 // Rows of one exchange with another bot are tied together by a line in that bot's colour.
                 val partner = partners.getOrNull(index)
                 // The "New messages" line breaks the tie: it never runs through it.
-                val divided = message.key == unreadFrom
+                val divided = message.key == unreadLine
                 val linkedAbove = partner != null && !divided && partners.getOrNull(index - 1) == partner
                 val linkedBelow = partner != null && partners.getOrNull(index + 1) == partner &&
-                    messages.getOrNull(index + 1)?.key != unreadFrom
+                    messages.getOrNull(index + 1)?.key != unreadLine
                 val rail = partner?.let { name -> faces.find(name)?.let { Color(0xFF000000 or botLook(it).color.toLong()) } }
                 Column {
                     // The line marking where the new messages start sits on top of the first of them.
@@ -2130,6 +2131,15 @@ private fun UnreadDivider(modifier: Modifier = Modifier) {
  */
 internal fun firstUnreadKey(messages: List<ChatMessage>, readUpTo: Double): String? =
     messages.firstOrNull { it.isNewerThan(readUpTo) }?.key
+
+/**
+ * The message the "New messages" line sits on: the one placed for this visit ([unreadFrom]), or, once that one is
+ * gone (a running turn's saved step, folded into the live reply that repeats it), the first new message now.
+ */
+internal fun unreadLineKey(messages: List<ChatMessage>, unreadFrom: String?, readUpTo: Double?): String? {
+    if (unreadFrom == null || messages.any { it.key == unreadFrom }) return unreadFrom
+    return readUpTo?.let { firstUnreadKey(messages, it) }
+}
 
 /** What to do next about the "New messages" line, given what is loaded so far. */
 internal sealed interface UnreadLineStep {
