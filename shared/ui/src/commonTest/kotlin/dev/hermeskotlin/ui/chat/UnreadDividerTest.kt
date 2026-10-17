@@ -136,4 +136,13 @@ class UnreadDividerTest {
 
         assertEquals("live-3", unreadLineKey(messages, unreadFrom = "row-4", readUpTo = 150.0))
     }
+
+    @Test
+    fun anAnswerLeftOldBySplittingOffTheSavedStepPassesTheLineOn() {
+        // Merged with the running turn's step, the read answer r1 was dated by the step and got the line; split off
+        // once the turn's start was known, it's the old answer again.
+        val messages = listOf(prompt("p1", 100.0), reply("r1", 110.0), reply("live-3", at = null, streaming = true))
+
+        assertEquals("live-3", unreadLineKey(messages, unreadFrom = "r1", readUpTo = 150.0))
+    }
 }

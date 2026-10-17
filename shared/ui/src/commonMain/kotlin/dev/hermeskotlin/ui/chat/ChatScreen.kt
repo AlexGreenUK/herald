@@ -2133,12 +2133,14 @@ internal fun firstUnreadKey(messages: List<ChatMessage>, readUpTo: Double): Stri
     messages.firstOrNull { it.isNewerThan(readUpTo) }?.key
 
 /**
- * The message the "New messages" line sits on: the one placed for this visit ([unreadFrom]), or, once that one is
- * gone (a running turn's saved step, folded into the live reply that repeats it), the first new message now.
+ * The message the "New messages" line sits on: the one placed for this visit ([unreadFrom]), or the first new message
+ * now once that one is gone or no longer new. A running turn's saved step folds into the live reply that repeats it,
+ * and splits off the answer before it when its prompt doesn't show, which leaves that answer's key and time.
  */
 internal fun unreadLineKey(messages: List<ChatMessage>, unreadFrom: String?, readUpTo: Double?): String? {
-    if (unreadFrom == null || messages.any { it.key == unreadFrom }) return unreadFrom
-    return readUpTo?.let { firstUnreadKey(messages, it) }
+    if (unreadFrom == null || readUpTo == null) return unreadFrom
+    if (messages.firstOrNull { it.key == unreadFrom }?.isNewerThan(readUpTo) == true) return unreadFrom
+    return firstUnreadKey(messages, readUpTo)
 }
 
 /** What to do next about the "New messages" line, given what is loaded so far. */
