@@ -465,7 +465,7 @@ internal fun SettingsView(
                     Divider()
                     SwitchRow(
                         title = "Show link previews",
-                        detail = "Show link previews for website links when able",
+                        detail = "A card for each web link in a finished reply. Herald opens the linked pages and their pictures itself, without your gateway's cookies.",
                         checked = settings.showLinkPreviews,
                         onCheckedChange = { on -> onUpdate { it.copy(showLinkPreviews = on) } },
                         icon = Lucide.Globe,

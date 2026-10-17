@@ -5,6 +5,7 @@ import dev.hermeskotlin.core.chat.ChatMessage
 import dev.hermeskotlin.core.chat.ChatState
 import dev.hermeskotlin.core.chat.ControlAction
 import dev.hermeskotlin.core.chat.InputRequest
+import dev.hermeskotlin.core.media.LinkPreview
 import dev.hermeskotlin.core.settings.RunningSend
 import dev.hermeskotlin.core.slash.SlashSuggestion
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -54,7 +55,7 @@ interface ChatActions {
     suspend fun loadMedia(source: String): ByteArray?
 
     /** Webpage metadata and thumbnail, or null when unavailable. */
-    suspend fun loadLinkPreview(url: String): dev.hermeskotlin.core.media.LinkPreview? = null
+    suspend fun loadLinkPreview(url: String): LinkPreview? = null
 
     fun stopSubagent(subagentId: String)
 

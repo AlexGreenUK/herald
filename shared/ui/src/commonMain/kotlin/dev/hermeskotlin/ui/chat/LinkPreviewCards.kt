@@ -54,7 +54,8 @@ internal fun LinkPreviewCards(text: String) {
     val load = LocalLinkPreviewLoader.current
     urls.forEach { url ->
         key(url) {
-            val card by produceState<LinkPreview?>(null, url, load) { value = load(url) }
+            // A card already shown stays if a later try fails.
+            val card by produceState<LinkPreview?>(null, url, load) { value = load(url) ?: value }
             card?.let { LinkPreviewCard(it) }
         }
     }
