@@ -176,6 +176,37 @@ class ChatSessionResumeTest {
     }
 
     @Test
+    fun aTurnWhosePromptDoesntShowFoldsItsSavedStepsToo() = runTest {
+        // A turn started by a hidden prompt (a goal going on, say): its saved step follows the last turn's answer
+        // with no prompt between them.
+        transcript = rowsUpTo(1) + listOf(
+            """{"id":2,"role":"assistant","content":"The last answer.","timestamp":90}""",
+            """{"id":3,"role":"user","content":"Keep going.","display_kind":"hidden","timestamp":100}""",
+            """{"id":4,"role":"assistant","content":"Checking the goal.","timestamp":105,""" +
+                """"tool_calls":[{"id":"t1","type":"function","function":{"name":"terminal","arguments":"{}"}}]}""",
+        )
+        val (chat, _) = openMidTurn(backgroundScope, midTurn("Checking the goal."))
+
+        val state = chat.state.first { it.replies("Checking the goal").size == 1 }
+        val reply = state.replies("Checking the goal").single()
+        assertTrue(reply.streaming)
+        assertEquals(listOf("t1"), reply.tools.map { it.id }, "the saved step's tool call was lost")
+        assertFalse(state.replies("The last answer").single().streaming)
+    }
+
+    @Test
+    fun theRunningTurnsSavedStepsStartAReplyOfTheirOwn() {
+        val rows = listOf(
+            """{"id":1,"role":"assistant","content":"The last answer.","timestamp":90}""",
+            """{"id":2,"role":"user","content":"[System: the goal goes on]","timestamp":100}""",
+            """{"id":3,"role":"assistant","content":"Checking the goal.","timestamp":105}""",
+        ).map { lenient.decodeFromString<SessionMessage>(it) }
+
+        assertEquals(1, historyToMessages(rows).size, "without a running turn the steps stay one reply")
+        assertEquals(listOf("The last answer.", "Checking the goal."), historyToMessages(rows, turnStartedAt = 100.0).map { (it as ChatMessage.Assistant).text })
+    }
+
+    @Test
     fun aGatewayWithoutTheTurnsStartFoldsNothing() = runTest {
         // Nothing says the saved reply is this turn's, so both stay rather than risk hiding one.
         transcript = savedFirstStep()

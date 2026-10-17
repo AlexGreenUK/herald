@@ -1796,7 +1796,8 @@ class ChatSession(
                 val fresh = (if (full) page.fromFirstTurn() else page).filter { it.id == null || it.id !in known }
                 // Past only those: rows before the page's first prompt that aren't loaded yet come with the next page.
                 if (fresh.isEmpty() && full) olderSkew += page.count { it.id != null && it.id in known }
-                val shownBefore = historyToMessages(rows, rowsSessionId).mapTo(HashSet()) { it.key }
+                val startedAt = turnStartedAt
+                val shownBefore = historyToMessages(rows, rowsSessionId, startedAt).mapTo(HashSet()) { it.key }
                 rows = fresh + rows
                 val flagged = risks?.all().orEmpty()
                 _state.update { state ->
@@ -1804,7 +1805,7 @@ class ChatSession(
                     val stored = state.messages.takeWhile { it.key in shownBefore }.size
                     state.copy(
                         // The live reply took in the turn's saved steps, which this page brings again.
-                        messages = (historyToMessages(rows, rowsSessionId).withRisks(flagged) + state.messages.drop(stored))
+                        messages = (historyToMessages(rows, rowsSessionId, startedAt).withRisks(flagged) + state.messages.drop(stored))
                             .withSavedStepsFolded(),
                         olderMessages = full,
                     )
@@ -1829,7 +1830,8 @@ class ChatSession(
         } else {
             state.messages.filter { it.isLocalOnly }
         }
-        val stored = historyToMessages(rows, rowsSessionId).withRisks(flagged)
+        // The running turn's saved steps apart from the reply before them, to fold into its live reply below.
+        val stored = historyToMessages(rows, rowsSessionId, turnStartedAt).withRisks(flagged)
         // A prompt sent without a reply that the transcript now has arrived after all.
         val storedPrompts = stored.mapNotNullTo(HashSet()) { (it as? ChatMessage.User)?.text }
         // Only the gateway's transcript says a prompt arrived; the saved copy is from before it.
@@ -1938,6 +1940,11 @@ class ChatSession(
         }
         // Named by the try of the update that landed, not by one that lost to another change.
         if (running && !resumable) turnReplyKey = replyKey
+        // Read before the turn's start was known, the rows merged its saved steps into the reply before them when its
+        // prompt doesn't show: lay them out again, now apart, so they fold into the live reply.
+        if (running && !resumable && turnStartedAt != null && _state.value.historyLoaded) {
+            historyMutex.withLock { if (rows.isNotEmpty()) showRows(risks?.all().orEmpty(), _state.value.olderMessages, _state.value.savedCopyAt) }
+        }
         // session.resume doesn't carry the goal/loop/heartbeat; read them once, events take it from there.
         // After the catch-up: a missed update it replays is older than the read, so it mustn't land after it.
         scope.launch {
