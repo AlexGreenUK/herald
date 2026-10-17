@@ -9,6 +9,7 @@ import android.media.AudioTrack
 import android.media.MediaPlayer
 import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
+import android.media.audiofx.AudioEffect
 import android.media.audiofx.NoiseSuppressor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -123,10 +124,7 @@ class AndroidVoiceRecorder : VoiceRecorder {
                 record.release()
                 return@withContext null
             }
-            val effects = listOfNotNull(
-                if (AcousticEchoCanceler.isAvailable()) AcousticEchoCanceler.create(record.audioSessionId)?.apply { enabled = true } else null,
-                if (NoiseSuppressor.isAvailable()) NoiseSuppressor.create(record.audioSessionId)?.apply { enabled = true } else null,
-            )
+            val effects = ArrayList<AudioEffect>(2)
             val frame = ShortArray(FRAME_SAMPLES)
             val preRoll = ArrayDeque<ByteArray>()
             val preRollFrames = (BargeIn.PRE_ROLL_MS / FRAME_MS).toInt()
@@ -134,6 +132,10 @@ class AndroidVoiceRecorder : VoiceRecorder {
             var elapsed = 0L
             var tripped = false
             try {
+                // Inside the try, so the recorder is let go whatever they do; one that won't switch on is done without.
+                if (AcousticEchoCanceler.isAvailable()) runCatching { AcousticEchoCanceler.create(record.audioSessionId) }.getOrNull()?.let(effects::add)
+                if (NoiseSuppressor.isAvailable()) runCatching { NoiseSuppressor.create(record.audioSessionId) }.getOrNull()?.let(effects::add)
+                effects.forEach { runCatching { it.enabled = true } }
                 record.startRecording()
                 if (record.recordingState != AudioRecord.RECORDSTATE_RECORDING) return@withContext null
                 while (true) {

@@ -43,6 +43,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
@@ -358,9 +359,10 @@ class VoiceController(
             Heard.Unclear -> return Turn.Failed
             is Heard.Words -> heard.text
         }
-        // The phone heard its own voice over the speaker, not someone cutting in: nobody spoke.
-        if (cutIn != null && isTtsEcho(transcript, cutIn.overVoice)) return Turn.Quiet
         if (isVoiceStopCommand(transcript)) return Turn.End
+        // The phone heard its own voice over the speaker, not someone cutting in: nobody spoke. Off the main thread,
+        // since it compares against every stretch of a long reply.
+        if (cutIn != null && withContext(Dispatchers.Default) { isTtsEcho(transcript, cutIn.overVoice) }) return Turn.Quiet
 
         _chat.update { it.copy(phase = VoicePhase.Thinking, caption = transcript.trim(), captionIsVoice = false) }
         val sentAt = session.state.value.messages.size
@@ -443,7 +445,8 @@ class VoiceController(
     private suspend fun listenOver(activity: VoiceActivity, tripped: CompletableDeferred<Unit>): Recording? {
         val settings = bargeIn?.await() ?: return null
         if (!settings.enabled) return null
-        return try {
+        _chat.update { it.copy(bargeIn = true) }
+        val heard = try {
             recorder.listenOver(
                 BargeIn(settings, activity.silenceMs),
                 playing = { playing.value },
@@ -453,9 +456,11 @@ class VoiceController(
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
-            // The microphone wouldn't listen over the voice; the reply goes on as without barge-in.
             null
         }
+        // The microphone wouldn't listen over the voice: the reply goes on as without barge-in, and doesn't offer it.
+        if (heard == null) _chat.update { it.copy(bargeIn = false) }
+        return heard
     }
 
     /**

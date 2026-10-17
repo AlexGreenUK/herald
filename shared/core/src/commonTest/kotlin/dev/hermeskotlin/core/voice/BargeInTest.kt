@@ -94,20 +94,50 @@ class BargeInTest {
             assertNull(mic.feed(0.35f, 200, playing = true))
             assertNull(mic.feed(0.15f, 200, playing = true))
         }
-        assertTrue(bargeIn.trigger(playing = true) > 0.35f)
+        assertTrue(bargeIn.trigger(playing = true) in 0.25f..BargeIn.ECHO_CEILING_LEVEL)
         // Someone talking clearly over it still cuts in.
         assertNotNull(mic.feed(0.9f, 1_000, playing = true))
+    }
+
+    /** Their voice in the voice's first moment is learnt as its echo, but mustn't lift the bar over itself. */
+    @Test
+    fun someoneAlreadyTalkingAsTheVoiceStartsStillCutsIn() {
+        val fromTheStart = Mic()
+        assertNull(fromTheStart.feed(0.01f, 1_000))
+        val (at, _) = assertNotNull(fromTheStart.feed(0.3f, 4_000, playing = true))
+        // Once the grace is over and the speech has held.
+        assertTrue(at - 1_000 <= 1_000, "tripped ${at - 1_000} ms in")
+
+        val justBefore = Mic()
+        assertNull(justBefore.feed(0.01f, 1_000))
+        assertNull(justBefore.feed(0.3f, 100))
+        assertNotNull(justBefore.feed(0.3f, 4_000, playing = true))
     }
 
     @Test
     fun aLowerMultiplierCutsInSooner() {
         val sensitive = Mic(BargeIn(BargeInSettings(multiplier = 1.5)))
         assertNull(sensitive.feed(0.01f, 1_000))
-        assertNotNull(sensitive.feed(0.07f, 2_000, playing = true))
+        assertNull(sensitive.feed(0.02f, 1_000, playing = true))
+        assertNotNull(sensitive.feed(0.04f, 2_000, playing = true))
 
         val stock = Mic(BargeIn(BargeInSettings(multiplier = BargeIn.DEFAULT_MULTIPLIER)))
         assertNull(stock.feed(0.01f, 1_000))
-        assertNull(stock.feed(0.07f, 2_000, playing = true))
+        assertNull(stock.feed(0.02f, 1_000, playing = true))
+        assertNull(stock.feed(0.04f, 2_000, playing = true))
+    }
+
+    /** Set for a quiet headset microphone, it still mustn't cut in on the voice's own echo. */
+    @Test
+    fun aLowerMultiplierStaysAboveTheVoicesEcho() {
+        for (multiplier in listOf(1.5, 1.0, 0.5)) {
+            val mic = Mic(BargeIn(BargeInSettings(multiplier = multiplier)))
+            assertNull(mic.feed(0.01f, 1_000))
+            repeat(10) {
+                assertNull(mic.feed(0.2f, 200, playing = true), "cut in on its echo at $multiplier")
+                assertNull(mic.feed(0.1f, 200, playing = true), "cut in on its echo at $multiplier")
+            }
+        }
     }
 
     @Test

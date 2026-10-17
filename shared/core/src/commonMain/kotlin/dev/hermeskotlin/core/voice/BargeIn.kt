@@ -26,7 +26,9 @@ data class BargeInSettings(
  *   the speaker, its bleed would sit in the floor and the bar would be out of reach.
  * - While the voice plays, the bar is raised so its bleed alone can't trip it, and capped so speech still can.
  * - Unlike Desktop, it also learns how loud the voice actually comes back (its louder syllables) and keeps the bar
- *   clearly above that, so a loudspeaker the phone can't cancel doesn't cut in on itself.
+ *   clearly above that, so a loudspeaker the phone can't cancel doesn't cut in on itself. That bar has a ceiling
+ *   of its own, [ECHO_CEILING_LEVEL]: someone already talking as the voice starts is learnt as its echo too, and
+ *   without the ceiling would raise the bar over their own voice and never get through.
  * - The voice's first moment after a real gap can't trip it ([BargeInSettings.graceMs]).
  * - Speech has to hold: most of the last [SUSTAINED_MS] above the bar, so dips inside a word don't start it over.
  *
@@ -39,7 +41,8 @@ class BargeIn(private val settings: BargeInSettings = BargeInSettings(), private
     private val scale = settings.multiplier?.takeIf { it.isFinite() && it > 0 }?.let { it / DEFAULT_MULTIPLIER } ?: 1.0
     private val floorMultiplier = (FLOOR_MULTIPLIER * scale).toFloat()
     private val playbackMin = (PLAYBACK_MIN_LEVEL * scale).toFloat()
-    private val bleedMultiplier = (BLEED_MULTIPLIER * scale).toFloat()
+    // A lower sensitivity setting still keeps the bar over the voice's own echo.
+    private val bleedMultiplier = max(BLEED_MULTIPLIER * scale, MIN_BLEED_MARGIN).toFloat()
 
     var tripped = false
         private set
@@ -100,8 +103,8 @@ class BargeIn(private val settings: BargeInSettings = BargeInSettings(), private
     internal fun trigger(playing: Boolean): Float {
         val quiet = max(MIN_TRIGGER_LEVEL, floor * floorMultiplier)
         if (!playing) return quiet
-        // Over the voice: never under its own echo, however loud the speaker. Speech has to stand clearly above it.
-        return max(min(max(quiet, playbackMin), TRIGGER_CEILING_LEVEL), bleed * bleedMultiplier)
+        // Over the voice: not under its own echo, up to a level that speech close to the phone still clears.
+        return max(min(max(quiet, playbackMin), TRIGGER_CEILING_LEVEL), min(bleed * bleedMultiplier, ECHO_CEILING_LEVEL))
     }
 
     /** After the trip the voice is already cut, so a plain pause ends the utterance. */
@@ -146,8 +149,12 @@ class BargeIn(private val settings: BargeInSettings = BargeInSettings(), private
         const val FLOOR_MULTIPLIER = 3.5
         const val PLAYBACK_MIN_LEVEL = 0.05
         const val BLEED_MULTIPLIER = 1.8
+        /** However sensitive it's set, the bar stays this far over the voice's echo. */
+        const val MIN_BLEED_MARGIN = 1.2
         const val BLEED_PERCENTILE = 0.8f
         const val TRIGGER_CEILING_LEVEL = 0.25f
+        /** The most the voice's echo can raise the bar: speech close to the phone clears it. */
+        const val ECHO_CEILING_LEVEL = 0.3f
         const val PLAYBACK_GAP_FOR_GRACE_MS = 1_000L
         /** Three seconds of 20 ms frames. */
         const val FLOOR_SAMPLES = 150
