@@ -359,11 +359,14 @@ fun historyToMessages(rows: List<SessionMessage>, liveSessionId: String? = null,
                 row.storedToolCalls.filter { it.name == MESSAGE_AGENT_TOOL }.forEach { call ->
                     messageTarget(call.arguments)?.let { messagedSinceUser += it.lowercase() }
                 }
+                // A step of the running turn is saved before its calls end: one with no result row yet still runs.
+                val runningTurn = turnStartedAt != null && row.timestamp != null && row.timestamp >= turnStartedAt
                 val tools = row.storedToolCalls.mapIndexed { i, call ->
                     val result = call.id?.let(results::get)?.content
                     ToolActivity(
                         id = call.id ?: "$key-$i",
                         name = call.name,
+                        running = runningTurn && call.id != null && call.id !in results,
                         input = ToolDetails.input(call.arguments),
                         output = ToolDetails.output(result),
                         failed = ToolDetails.failed(result),

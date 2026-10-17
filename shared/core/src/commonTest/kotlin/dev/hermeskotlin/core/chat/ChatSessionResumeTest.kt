@@ -195,6 +195,20 @@ class ChatSessionResumeTest {
     }
 
     @Test
+    fun aSavedCallWithNoResultYetStillRunsUntilItEnds() = runTest {
+        // Opened while the step's call runs: its row is saved, its result isn't yet.
+        transcript = savedFirstStep().dropLast(1)
+        val (chat, socket) = openMidTurn(backgroundScope, midTurn("Running it. First I need the address."))
+
+        // The rows are laid out again once session.resume names the turn's start; then the call shows running.
+        chat.state.first { it.replies("First I need the address").singleOrNull()?.tools?.singleOrNull()?.running == true }
+
+        socket.push(event("tool.complete", 1, """{"tool_id":"t1","result":"ok"}"""))
+        val done = chat.state.first { s -> s.replies("First I need the address").single().tools.single().let { !it.running } }
+        assertEquals("ok", done.replies("First I need the address").single().tools.single().output)
+    }
+
+    @Test
     fun theRunningTurnsSavedStepsStartAReplyOfTheirOwn() {
         val rows = listOf(
             """{"id":1,"role":"assistant","content":"The last answer.","timestamp":90}""",
