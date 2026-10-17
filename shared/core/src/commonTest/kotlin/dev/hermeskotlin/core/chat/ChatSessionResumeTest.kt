@@ -420,6 +420,26 @@ class ChatSessionResumeTest {
     }
 
     @Test
+    fun aStepSavedWhileTheReplayCantBeHadShowsOnce() = runTest {
+        // The turn saved a step past what streamed here ("Hel") while the link was down, and the gap can't be replayed.
+        transcript = rowsUpTo(3) + listOf(
+            """{"id":4,"role":"assistant","content":"Hello","timestamp":105,""" +
+                """"tool_calls":[{"id":"t1","type":"function","function":{"name":"terminal","arguments":"{}"}}]}""",
+        )
+        answer = { _, method, _ -> if (method == "session.events.since") "error:-32601" else "{}" }
+        val (chat, _) = droppedMidTurn(
+            backgroundScope,
+            resume = """{"session_id":"rt1","running":true,"turn_started_at":100,"inflight":{"assistant":"Hello wor"}}""",
+        )
+
+        val caught = chat.state.first { it.reply()?.text == "Hello wor" }
+
+        val reply = caught.messages.filterIsInstance<ChatMessage.Assistant>().single { it.text.startsWith("Hello") }
+        assertTrue(reply.streaming)
+        assertEquals(listOf("t1"), reply.tools.map { it.id }, "the saved step's tool call was lost")
+    }
+
+    @Test
     fun aRestartedGatewayIsNotAskedForEventsItNeverSent() = runTest {
         val (chat, transports) = droppedMidTurn(
             backgroundScope,

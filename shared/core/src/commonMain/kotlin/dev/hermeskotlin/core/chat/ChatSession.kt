@@ -1582,7 +1582,15 @@ class ChatSession(
                 lastSeq = null
                 val streamed = inflightText
                 if (streamed != null && _state.value.running) {
-                    _state.update { it.withInflight(streamed).also { state -> turnReplyKey = state.messages.inflightReplyKey(streamed) } }
+                    var replyKey: String? = null
+                    _state.update { state ->
+                        val shown = state.withInflight(streamed)
+                        replyKey = shown.messages.inflightReplyKey(streamed)
+                        // The transcript just read has the steps saved while away, which the gateway's copy now repeats.
+                        shown.copy(messages = shown.messages.withSavedStepsFolded())
+                    }
+                    // Named by the try of the update that landed, not by one that lost to another change.
+                    turnReplyKey = replyKey
                 } else if (!_state.value.running) {
                     _state.update { it.withoutStaleReply().withoutAgentNotices() }
                 }
@@ -1907,6 +1915,7 @@ class ChatSession(
             resumable to catchingUp
         }
         if (reconnected && (!resumable || (!_state.value.historyRead && !historyMutex.isLocked))) loadHistory()
+        var replyKey: String? = null
         _state.update { state ->
             state.copy(
                 attachment = Attachment.Attached(runtimeId),
@@ -1915,9 +1924,8 @@ class ChatSession(
                 // or, when the turn ended while away, as the transcript just read has it.
                 messages = when {
                     resumable -> state.messages
-                    // Set on each try of the update, so the one that lands names the reply in it.
                     running -> state.withInflight(streamed).messages
-                        .also { turnReplyKey = it.inflightReplyKey(streamed) }
+                        .also { replyKey = it.inflightReplyKey(streamed) }
                         .withSavedStepsFolded()
                     reconnected -> state.withoutStaleReply().messages
                     else -> state.messages
@@ -1928,6 +1936,8 @@ class ChatSession(
                 // Nothing runs, so the agent is built; its clear may have gone while this phone was away.
                 .let { if (running || resumable) it else it.withoutAgentNotices() }
         }
+        // Named by the try of the update that landed, not by one that lost to another change.
+        if (running && !resumable) turnReplyKey = replyKey
         // session.resume doesn't carry the goal/loop/heartbeat; read them once, events take it from there.
         // After the catch-up: a missed update it replays is older than the read, so it mustn't land after it.
         scope.launch {
