@@ -39,6 +39,10 @@ class SpeechTest {
         assertEquals("", readAloudText("```kotlin\nfun main() = println(\"hi\")\n```"))
         assertEquals("", readAloudText("![plot](/tmp/plot.png)"))
         assertEquals("Done.", readAloudText("Done.\n```\nls\n```"))
+        // Punctuation alone gives the gateway no words to say.
+        assertEquals("", readAloudText("…"))
+        assertEquals("", readAloudText("?! 😅"))
+        assertEquals("3.", readAloudText("3."))
     }
 
     @Test

@@ -218,9 +218,11 @@ fun speakableText(markdown: String): String = markdown
 
 /**
  * A finished reply as its Read aloud action says it: [speakableText] once the pictures and files it delivered
- * are taken out, since they show as themselves. Empty when there's nothing to say, a reply of only code, say.
+ * are taken out, since they show as themselves. Empty when there's nothing to say: a reply of only code, say,
+ * or only punctuation, which the gateway would have no words for.
  */
-fun readAloudText(reply: String): String = speakableText(extractReplyMedia(reply).first)
+fun readAloudText(reply: String): String =
+    speakableText(extractReplyMedia(reply).first).takeIf { text -> text.any { it.isLetterOrDigit() } }.orEmpty()
 
 /**
  * Cuts [text] into pieces of at most about [maxChars], at sentence ends where possible, so the first

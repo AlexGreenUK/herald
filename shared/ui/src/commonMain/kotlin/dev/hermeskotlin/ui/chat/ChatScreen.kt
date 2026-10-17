@@ -304,6 +304,7 @@ import dev.hermeskotlin.designsystem.display
 import dev.hermeskotlin.designsystem.typography
 import dev.hermeskotlin.designsystem.warning
 import dev.hermeskotlin.ui.LocalAppSettings
+import dev.hermeskotlin.ui.KeepScreenOn
 import dev.hermeskotlin.ui.components.EmptyState
 import dev.hermeskotlin.ui.components.messageTime
 import dev.hermeskotlin.ui.components.uses24HourClock
@@ -637,6 +638,13 @@ internal fun ChatView(
         val voiceOn = voiceChat.phase != VoicePhase.Off
         val voiceFull = voiceOn && !voiceFolded
         LaunchedEffect(voiceOn) { if (!voiceOn) voiceFolded = false }
+        // A reply read aloud plays to its end with the phone put down, and stops if it leaves the chat
+        // (regenerated, or a reload that keys it anew), so its Stop is never gone while it plays.
+        KeepScreenOn(readAloud.key != null)
+        LaunchedEffect(readAloud.key, state.messages) {
+            val key = readAloud.key ?: return@LaunchedEffect
+            if (state.messages.none { it.key == key }) actions.stopReading()
+        }
         Column(
             Modifier
                 .widthIn(max = 760.dp)
