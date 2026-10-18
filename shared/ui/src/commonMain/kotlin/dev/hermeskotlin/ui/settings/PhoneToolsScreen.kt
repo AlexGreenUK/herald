@@ -42,6 +42,7 @@ import com.composables.icons.lucide.Hourglass
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.MapPin
 import com.composables.icons.lucide.MapPinned
+import com.composables.icons.lucide.Moon
 import com.composables.icons.lucide.PhoneCall
 import com.composables.icons.lucide.PhoneIncoming
 import com.composables.icons.lucide.AudioLines
@@ -61,6 +62,8 @@ import dev.hermeskotlin.core.phone.PhoneToolsStatus
 import dev.hermeskotlin.core.phone.PhoneToolsStatus.State
 import dev.hermeskotlin.core.phone.WatchedPlace
 import androidx.compose.ui.text.style.TextOverflow
+import dev.hermeskotlin.core.phone.MINUTES_A_DAY
+import dev.hermeskotlin.core.phone.clockTime
 import dev.hermeskotlin.core.phone.enabledPhoneTools
 import dev.hermeskotlin.core.push.KnownPhone
 import dev.hermeskotlin.core.settings.AppSettings
@@ -74,7 +77,9 @@ import dev.hermeskotlin.designsystem.components.ButtonVariant
 import dev.hermeskotlin.designsystem.components.Dialog
 import dev.hermeskotlin.designsystem.components.IconButton
 import dev.hermeskotlin.designsystem.components.halo
+import dev.hermeskotlin.designsystem.accentText
 import dev.hermeskotlin.designsystem.danger
+import dev.hermeskotlin.designsystem.display
 import dev.hermeskotlin.designsystem.text
 import dev.hermeskotlin.designsystem.textTertiary
 import dev.hermeskotlin.designsystem.typography
@@ -128,8 +133,31 @@ fun PhoneToolsScreen(onBack: () -> Unit, viewModel: PhoneToolsViewModel = koinVi
         onAllowRings = access::requestRings,
         onRingsTalk = viewModel::setRingsTalk,
         onWatchRings = viewModel::setWatchRings,
+        onQuietHours = viewModel::setQuietHours,
+        onQuietFrom = viewModel::setQuietFrom,
+        onQuietUntil = viewModel::setQuietUntil,
     )
 }
+
+/** Under the switch: what quiet hours stop, and what Do Not Disturb does to the calls without them. */
+internal fun quietHoursDetail(settings: AppSettings): String {
+    val window = if (settings.quietHours) {
+        "Nothing rings from ${clockTime(settings.quietFrom)} to ${clockTime(settings.quietUntil)}."
+    } else {
+        "Nothing rings between the times you pick."
+    }
+    return "$window The agent is told to reach you another way; approvals and questions come as notifications. " +
+        DND_DETAIL
+}
+
+/**
+ * What Do Not Disturb does to the calls, which ring with no contact behind them: Android holds them back unless
+ * Herald's calls may interrupt or anyone may call, but lets one through as a repeat caller (the same chat's name
+ * again within 15 minutes).
+ */
+internal const val DND_DETAIL =
+    "Do Not Disturb silences them too, unless you let Herald interrupt it. A second call from one chat within 15 " +
+        "minutes gets through, like a repeat caller."
 
 /** Under the switch: what answering a call does. */
 internal const val RINGS_TALK_DETAIL =
@@ -171,9 +199,23 @@ internal fun PhoneToolsView(
     onAllowRings: () -> Unit = {},
     onRingsTalk: (Boolean) -> Unit = {},
     onWatchRings: (Boolean) -> Unit = {},
+    onQuietHours: (Boolean) -> Unit = {},
+    onQuietFrom: (Int) -> Unit = {},
+    onQuietUntil: (Int) -> Unit = {},
     nowMillis: Long = Clock.System.now().toEpochMilliseconds(),
 ) {
     var removing by remember { mutableStateOf<KnownPhone?>(null) }
+    // Which end of quiet hours is being picked: true for the start.
+    var picking by remember { mutableStateOf<Boolean?>(null) }
+    QuietTimeDialog(
+        start = picking,
+        from = settings.quietFrom,
+        until = settings.quietUntil,
+        onDismiss = { picking = null },
+    ) { start, minute ->
+        if (start) onQuietFrom(minute) else onQuietUntil(minute)
+        picking = null
+    }
     var installAsked by remember { mutableStateOf(false) }
     PluginInstallDialog(
         visible = installAsked,
@@ -303,6 +345,20 @@ internal fun PhoneToolsView(
                                 onCheckedChange = onWatchRings,
                                 icon = Lucide.Watch,
                             )
+                            Divider()
+                            SwitchRow(
+                                title = "Quiet hours",
+                                detail = quietHoursDetail(settings),
+                                checked = settings.quietHours,
+                                onCheckedChange = onQuietHours,
+                                icon = Lucide.Moon,
+                            )
+                            if (settings.quietHours) {
+                                Divider()
+                                TimeRow("Starts", settings.quietFrom) { picking = true }
+                                Divider()
+                                TimeRow("Ends", settings.quietUntil) { picking = false }
+                            }
                         }
                     }
                     // Only once the gateway knows this phone: the list is the gateway's.
@@ -476,6 +532,57 @@ private fun RemovePhoneDialog(phone: KnownPhone?, onDismiss: () -> Unit, onRemov
             Button("Remove", onClick = { onRemove(p) }, variant = ButtonVariant.Danger, size = ButtonSize.Small)
         },
     )
+}
+
+/** One end of quiet hours: tapping it opens [QuietTimeDialog]. Lined up with the titles of the rows above. */
+@Composable
+private fun TimeRow(title: String, minuteOfDay: Int, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 52.dp).clickable(onClick = onClick).padding(start = 60.dp, end = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(title, style = Theme[typography][body], color = Theme[colors][text], modifier = Modifier.weight(1f))
+        Text(clockTime(minuteOfDay), style = Theme[typography][body], color = Theme[colors][accentText])
+    }
+}
+
+/**
+ * Picks the [start] (true) or end of quiet hours, now [from] and [until]: hours by one, minutes by five, both
+ * wrapping.
+ */
+@Composable
+private fun QuietTimeDialog(start: Boolean?, from: Int, until: Int, onDismiss: () -> Unit, onSet: (Boolean, Int) -> Unit) {
+    // Kept while the dialog fades out, so its title and time don't change first.
+    var shown by remember { mutableStateOf(start) }
+    if (start != null) shown = start
+    val s = shown ?: return
+    // Fresh each time it opens, not as it closes.
+    var minute by remember(start != null, s) { mutableStateOf(if (s) from else until) }
+    Dialog(
+        visible = start != null,
+        onDismissRequest = onDismiss,
+        title = if (s) "Quiet hours start" else "Quiet hours end",
+        actions = {
+            Button("Cancel", onClick = onDismiss, variant = ButtonVariant.Ghost, size = ButtonSize.Small)
+            // A second tap while it fades out sets nothing.
+            Button("Set", onClick = { if (start != null) onSet(s, minute) }, size = ButtonSize.Small)
+        },
+    ) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+            TimeStepper(minute / 60, "hour") { by -> minute = (minute + by * 60).mod(MINUTES_A_DAY) }
+            Text(":", style = Theme[typography][display], color = Theme[colors][textTertiary], modifier = Modifier.padding(horizontal = 8.dp))
+            TimeStepper(minute % 60, "minutes") { by -> minute = minute / 60 * 60 + (minute % 60 + by * 5).mod(60) }
+        }
+    }
+}
+
+@Composable
+private fun TimeStepper(value: Int, what: String, onStep: (Int) -> Unit) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        IconButton(Lucide.ChevronUp, "Later $what", onClick = { onStep(1) })
+        Text(value.toString().padStart(2, '0'), style = Theme[typography][display], color = Theme[colors][text])
+        IconButton(Lucide.ChevronDown, "Earlier $what", onClick = { onStep(-1) })
+    }
 }
 
 @Composable

@@ -52,6 +52,12 @@ class PhoneToolsViewModel(
 
     fun setWatchRings(on: Boolean) = store.update { it.copy(watchRings = on) }
 
+    fun setQuietHours(on: Boolean) = store.update { it.copy(quietHours = on) }
+
+    fun setQuietFrom(minuteOfDay: Int) = store.update { it.copy(quietFrom = minuteOfDay) }
+
+    fun setQuietUntil(minuteOfDay: Int) = store.update { it.copy(quietUntil = minuteOfDay) }
+
     fun setUp() = bridge.setUp()
 
     /** The user asked for the newer plugin the page offers. */
