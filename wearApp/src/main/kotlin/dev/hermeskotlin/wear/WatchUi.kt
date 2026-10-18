@@ -355,7 +355,7 @@ private fun CallScreen(call: WatchCallState, mood: OrbMood, onMute: () -> Unit, 
  * decline and answer either side. It never shows the question itself: that's asked on the call.
  */
 @Composable
-fun RingScreen(title: String, approval: Boolean, onDecline: () -> Unit, onAnswer: () -> Unit) {
+fun RingScreen(title: String, approval: Boolean, onDecline: () -> Unit, onAnswer: () -> Unit, agent: Boolean = false) {
     MaterialTheme(colorScheme = HeraldColors) {
         BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
             val w = maxWidth
@@ -390,7 +390,7 @@ fun RingScreen(title: String, approval: Boolean, onDecline: () -> Unit, onAnswer
                 modifier = Modifier.size(side).align(Alignment.Center).offset(x = w * 0.354f),
             )
             Text(
-                ringReason(approval),
+                ringReason(approval, agent),
                 style = geist(14, FontWeight.Medium, color = Muted),
                 textAlign = TextAlign.Center,
                 maxLines = 2,
@@ -400,8 +400,12 @@ fun RingScreen(title: String, approval: Boolean, onDecline: () -> Unit, onAnswer
     }
 }
 
-/** Why Hermes calls, never what it asks. */
-internal fun ringReason(approval: Boolean): String = if (approval) "Needs your approval" else "Has a question for you"
+/** Why Hermes calls, never what it asks: [agent], it called on its own, and says why on the call. */
+internal fun ringReason(approval: Boolean, agent: Boolean = false): String = when {
+    agent -> "Calling you"
+    approval -> "Needs your approval"
+    else -> "Has a question for you"
+}
 
 /** The time on the call, counting: only this redraws each second, and only while it shows. */
 @Composable

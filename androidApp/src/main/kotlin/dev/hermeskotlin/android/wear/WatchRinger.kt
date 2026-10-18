@@ -98,17 +98,23 @@ class WatchRinger(
         // Fresh for the next one, should the gateway have changed.
         relay.checkLiveVoice()
         if (!live) return false
-        val request = call.request
-        rung[request.id] = to
-        val ring = WatchRing(request.id, chat, call.title?.takeIf { it.isNotBlank() } ?: "Hermes", request is InputRequest.Approval)
+        val id = call.id
+        rung[id] = to
+        val ring = WatchRing(
+            id,
+            chat,
+            call.title?.takeIf { it.isNotBlank() } ?: "Hermes",
+            approval = call.request is InputRequest.Approval,
+            agent = call.agent != null,
+        )
         scope.launch {
             to.forEach { send(it, WearPaths.RING, WearJson.encode(ring)) }
             // No watch said it rings (no Herald there any more, its notifications off, on a call): the phone's call
             // shows there instead.
             delay(RING_ON_MS)
-            if (rung.containsKey(request.id) && request.id !in ringingOn && phoneCallShown.add(request.id)) {
+            if (rung.containsKey(id) && id !in ringingOn && phoneCallShown.add(id)) {
                 // Said just now, in between: it rings there after all.
-                if (request.id in ringingOn) phoneCallShown -= request.id else notifications.showOnWatch(request.id, show = true)
+                if (id in ringingOn) phoneCallShown -= id else notifications.showOnWatch(id, show = true)
             }
         }
         return true

@@ -14,6 +14,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import dev.hermeskotlin.core.phone.CallOutcome
 import dev.hermeskotlin.ui.calls.InCallScreen
 import dev.hermeskotlin.ui.calls.PhoneCallModel
 import dev.hermeskotlin.ui.calls.PickedUpCall
@@ -55,7 +56,7 @@ class PhoneCallActivity : ComponentActivity() {
             val ended = model.state.filterNotNull().first { it.ended }
             ended.error?.let { Toast.makeText(this@PhoneCallActivity, it, Toast.LENGTH_LONG).show() }
             // Never on the line: the question waits in the shade, without a sound, as the toast just said why.
-            ended.notAsked?.let { notifications.postRequest(it.storedSessionId, it.caller, it.request, quiet = true) }
+            ended.notAsked?.let { call -> call.request?.let { notifications.postRequest(call.storedSessionId, call.caller, it, quiet = true) } }
             finish()
         }
         // A rotation keeps the model: a call on the line, or one being picked up, carries on there.
@@ -64,8 +65,9 @@ class PhoneCallActivity : ComponentActivity() {
         val requestId = intent.getStringExtra(NotificationActionReceiver.EXTRA_REQUEST_ID)
         val ringing = requestId?.let { notifications.ringing.value[it] }
         val chat = ringing?.storedSessionId
-        if (requestId == null || chat == null) return finish()
-        model.pickUp(PickedUpCall(chat, ringing.title?.takeIf { it.isNotBlank() } ?: "Hermes", ringing.request))
+        // A call from the agent may have no chat on this gateway (Desktop's, say): it talks in a new one.
+        if (requestId == null || ringing == null || (chat == null && ringing.agent == null)) return finish()
+        model.pickUp(PickedUpCall(requestId, chat, ringing.title?.takeIf { it.isNotBlank() } ?: "Hermes", ringing.request, ringing.agent))
         // Picked up: it stops ringing at once, whatever comes next.
         notifications.answered(requestId)
         unlockThenTalk()
@@ -75,7 +77,7 @@ class PhoneCallActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         val requestId = intent.getStringExtra(NotificationActionReceiver.EXTRA_REQUEST_ID) ?: return
-        if (requestId != model.pickingUp?.request?.id) notifications.decline(requestId)
+        if (requestId != model.pickingUp?.id) notifications.decline(requestId)
     }
 
     private fun unlockThenTalk() {
@@ -102,7 +104,10 @@ class PhoneCallActivity : ComponentActivity() {
     private fun leave(why: String?) {
         // An answer for a screen already gone (rotated): the one in its place picks up.
         if (isFinishing || isDestroyed) return
-        model.pickingUp?.let { notifications.postRequest(it.storedSessionId, it.caller, it.request) }
+        model.pickingUp?.let { call ->
+            call.request?.let { notifications.postRequest(call.storedSessionId, call.caller, it) }
+            call.agent?.end(CallOutcome.Declined)
+        }
         why?.let { Toast.makeText(this, it, Toast.LENGTH_LONG).show() }
         finish()
     }

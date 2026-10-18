@@ -13,6 +13,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import dev.hermeskotlin.core.chat.InputRequest
 import dev.hermeskotlin.ui.calls.IncomingCallScreen
+import dev.hermeskotlin.ui.calls.agentCallReason
 import dev.hermeskotlin.ui.calls.callReason
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -40,7 +41,8 @@ class IncomingCallActivity : ComponentActivity(), OutOfSight {
         setContent {
             IncomingCallScreen(
                 caller = call.title?.takeIf { it.isNotBlank() } ?: "Hermes",
-                why = callReason(call.request is InputRequest.Approval),
+                // Over the lock screen: who's calling, never what about.
+                why = if (call.agent != null) agentCallReason() else callReason(call.request is InputRequest.Approval),
                 onAnswer = { answer(requestId) },
                 onDecline = {
                     notifications.decline(requestId)

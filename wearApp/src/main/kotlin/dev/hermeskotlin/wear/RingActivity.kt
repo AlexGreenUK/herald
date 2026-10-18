@@ -46,6 +46,7 @@ class RingActivity : ComponentActivity() {
                         finish()
                     },
                     onAnswer = ::answer,
+                    agent = it.agent,
                 )
             }
         }

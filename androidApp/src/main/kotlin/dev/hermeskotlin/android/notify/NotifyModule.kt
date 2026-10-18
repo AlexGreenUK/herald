@@ -4,6 +4,7 @@ import android.os.Build
 import dev.hermeskotlin.android.phone.AndroidPhoneTools
 import dev.hermeskotlin.android.phone.ChatTargets
 import dev.hermeskotlin.android.phone.Geofences
+import dev.hermeskotlin.core.phone.CallOpeners
 import dev.hermeskotlin.core.phone.WatchedPlaces
 import dev.hermeskotlin.android.phone.PhoneConfirmations
 import dev.hermeskotlin.android.push.PushListener
@@ -25,10 +26,12 @@ val notifyModule = module {
         val koin = getKoin()
         // A voice chat or a call already on, here or from the watch, has you: a question there is asked on it, and
         // one elsewhere waits as a notification, not rung over it.
-        ChatNotifications(androidContext()).apply {
+        ChatNotifications(androidContext(), get()).apply {
             voiceOn = { koin.get<VoiceCallKeeper>().holding || koin.get<WatchRelay>().onCall }
         }
     }
+    // Why the agent called, from the call picked up on the watch to the call the watch starts.
+    single { CallOpeners() }
     single { VoiceCallKeeper(androidContext()) } bind VoiceKeepAlive::class
     single { ChatNotifier(androidContext(), get(), get(), get(), get(), get(), get(), get<WatchRelay>().busy) }
     single { WatchNotifier(get(), get(), get(), get(), get(), get(), get(), get()) }
@@ -40,6 +43,6 @@ val notifyModule = module {
     single { PhoneConfirmations(androidContext()) }
     single { Geofences(androidContext(), get(), get()) } bind WatchedPlaces::class
     single { ChatTargets(get(), get(), get(), get()) }
-    single { AndroidPhoneTools(androidContext(), get(), get(), get()) } bind PhoneToolRunner::class
+    single { AndroidPhoneTools(androidContext(), get(), get(), get(), get()) } bind PhoneToolRunner::class
     single { PhoneToolsBridge(get(), get(), get(), get(), get(), get(), get(), get(), deviceName = { Build.MODEL ?: "Android phone" }) }
 }

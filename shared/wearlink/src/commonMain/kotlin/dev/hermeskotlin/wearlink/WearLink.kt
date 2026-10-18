@@ -288,9 +288,16 @@ data class CallUpdate(
 /**
  * Hermes calling for an answer: approval or question [requestId] waits in chat [chatId] ([title]). Answering on the
  * watch starts a live call there, which asks it aloud. It never carries the question itself, only that there is one.
+ * [agent]: the agent called on its own, and the call opens with why; nor does that reason travel here.
  */
 @Serializable
-data class WatchRing(val requestId: String, val chatId: String, val title: String, val approval: Boolean = false)
+data class WatchRing(
+    val requestId: String,
+    val chatId: String,
+    val title: String,
+    val approval: Boolean = false,
+    val agent: Boolean = false,
+)
 
 /** The ring for [requestId] is over; from the watch, [answered]: picked up there, else declined. */
 @Serializable

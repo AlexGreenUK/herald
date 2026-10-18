@@ -23,7 +23,16 @@ import dev.hermeskotlin.android.R
 import dev.hermeskotlin.core.chat.ApprovalChoice
 import dev.hermeskotlin.core.chat.InputRequest
 import dev.hermeskotlin.core.connection.ConnectionState
+import dev.hermeskotlin.core.phone.AgentCall
+import dev.hermeskotlin.core.phone.CallOpeners
+import dev.hermeskotlin.core.phone.CallOutcome
+import dev.hermeskotlin.core.phone.CallReason
+import dev.hermeskotlin.ui.calls.agentCallReason
 import dev.hermeskotlin.ui.calls.callReason
+import java.util.UUID
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -33,7 +42,11 @@ import kotlinx.coroutines.flow.update
 /** One bot's line in a room's notification, with when it was written. */
 data class RoomNotice(val bot: Bot, val picture: ByteArray?, val text: String, val at: Long)
 
-class ChatNotifications(private val context: Context) {
+class ChatNotifications(
+    private val context: Context,
+    /** Why the agent called, for a call picked up on the watch to open with. */
+    private val openers: CallOpeners = CallOpeners(),
+) {
 
     private val manager = NotificationManagerCompat.from(context)
 
@@ -81,9 +94,19 @@ class ChatNotifications(private val context: Context) {
         )
     }
 
-    /** A call ringing for an answer: what it's about, so Decline or ringing out can post the usual notification. */
-    /** [talk]: answering puts Hermes on the line to ask it aloud, rather than opening the chat. */
-    class Ringing(val storedSessionId: String?, val title: String?, val request: InputRequest, val talk: Boolean = false) {
+    /**
+     * A call ringing, by [id]: for an answer ([request]), so Decline or ringing out can post the usual notification;
+     * or one the agent placed ([agent]), whose end goes back to it. [talk]: answering puts Hermes on the line, rather
+     * than opening the chat.
+     */
+    class Ringing(
+        val id: String,
+        val storedSessionId: String?,
+        val title: String?,
+        val request: InputRequest?,
+        val talk: Boolean = false,
+        val agent: AgentCall? = null,
+    ) {
         /** The ring-out's token: Android matches it by identity, and request ids come back as copies from intents. */
         internal val timer = Any()
     }
@@ -179,7 +202,7 @@ class ChatNotifications(private val context: Context) {
         quiet: Boolean = false,
     ): Boolean {
         val rings = ring && !voiceOn() && (request is InputRequest.Approval || request is InputRequest.Clarify) && synchronized(rang) { request.id !in rang }
-        if (rings) return postCall(Ringing(storedSessionId, title, request, talk))
+        if (rings) return postCall(Ringing(request.id, storedSessionId, title, request, talk))
         val builder = base(CHANNEL_REQUESTS, storedSessionId, title)
             .setCategory(NotificationCompat.CATEGORY_REMINDER)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
@@ -259,18 +282,39 @@ class ChatNotifications(private val context: Context) {
     @SuppressLint("MissingPermission") // canPost checks it.
     private fun postCall(call: Ringing): Boolean {
         if (!canPost) return false
-        val request = call.request
-        synchronized(rang) {
-            rang += request.id
-            if (rang.size > MAX_RANG) rang.remove(rang.first())
+        if (call.request != null) {
+            synchronized(rang) {
+                rang += call.id
+                if (rang.size > MAX_RANG) rang.remove(rang.first())
+            }
         }
-        _ringing.update { it + (request.id to call) }
+        _ringing.update { it + (call.id to call) }
         // Herald on the watch rings itself, with an Answer that talks there: this phone's call isn't shown on it too,
         // unless the watch doesn't say it rings ([showOnWatch]).
         val watchRings = alsoRings?.ring(call) == true
-        manager.notify(request.id, CALL_ID, callNotification(call, localOnly = watchRings))
-        HandlerCompat.postDelayed(main, { decline(request.id) }, call.timer, RING_MS)
+        manager.notify(call.id, CALL_ID, callNotification(call, localOnly = watchRings))
+        HandlerCompat.postDelayed(main, { rangOut(call.id) }, call.timer, RING_MS)
         return true
+    }
+
+    /**
+     * Rings for a call the agent placed ([dev.hermeskotlin.core.phone.PhoneTool.CallMe]) and waits for how it ends:
+     * Answer puts Hermes on the line in [storedSessionId]'s chat (a new one when null), which opens with [reason].
+     * Never over a call or a voice chat already on: that's [CallOutcome.Busy]. Null when Herald may not ring.
+     */
+    suspend fun ringForAgent(storedSessionId: String?, title: String?, reason: CallReason): CallOutcome? {
+        val call = AgentCall(reason)
+        val id = AGENT_CALL_PREFIX + UUID.randomUUID()
+        val rings = withContext(Dispatchers.Main) {
+            if (voiceOn()) null else postCall(Ringing(id, storedSessionId, title, null, talk = true, agent = call))
+        } ?: return CallOutcome.Busy
+        if (!rings) return null
+        try {
+            return call.outcome()
+        } finally {
+            // The tool gave up (switched off, out of time): it stops ringing.
+            withContext(NonCancellable + Dispatchers.Main) { stopRinging(id) }
+        }
     }
 
     /**
@@ -291,31 +335,40 @@ class ChatNotifications(private val context: Context) {
 
     /** [again]: an update of the call already ringing, which goes on as it was instead of starting over. */
     private fun callNotification(call: Ringing, localOnly: Boolean, again: Boolean = false): Notification {
-        val request = call.request
-        val title = call.title
-        val caller = Person.Builder().setName(title?.takeIf { it.isNotBlank() } ?: "Hermes").setImportant(true).build()
+        val why = call.agent?.reason?.reason?.let { it.take(MAX_CALL_REASON) } ?: callReason(call.request is InputRequest.Approval)
+        // Over the lock screen, when it hides what notifications say, a call from the agent says only that it calls.
+        val public = if (call.agent != null) callBuilder(call, localOnly, again, agentCallReason()).build() else null
+        return callBuilder(call, localOnly, again, why)
+            .apply { public?.let(::setPublicVersion) }
+            .build()
+            // Rings on, as a call does, until it's answered, declined or rung out; else the ringtone plays once.
+            .apply { flags = flags or Notification.FLAG_INSISTENT }
+    }
+
+    private fun callBuilder(call: Ringing, localOnly: Boolean, again: Boolean, why: String): NotificationCompat.Builder {
+        val caller = Person.Builder().setName(call.title?.takeIf { it.isNotBlank() } ?: "Hermes").setImportant(true).build()
         val answer = PendingIntent.getActivity(
             context,
-            (ACTION_ANSWER + request.id).hashCode(),
+            (ACTION_ANSWER + call.id).hashCode(),
             answerIntent(call),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        val decline = action(NotificationActionReceiver.ACTION_DECLINE_CALL, request.id) {
-            putExtra(NotificationActionReceiver.EXTRA_REQUEST_ID, request.id)
+        val decline = action(NotificationActionReceiver.ACTION_DECLINE_CALL, call.id) {
+            putExtra(NotificationActionReceiver.EXTRA_REQUEST_ID, call.id)
         }
         val screen = PendingIntent.getActivity(
             context,
-            (ACTION_RING + request.id).hashCode(),
+            (ACTION_RING + call.id).hashCode(),
             Intent(context, IncomingCallActivity::class.java)
-                .putExtra(NotificationActionReceiver.EXTRA_REQUEST_ID, request.id)
+                .putExtra(NotificationActionReceiver.EXTRA_REQUEST_ID, call.id)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_USER_ACTION),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        val builder = NotificationCompat.Builder(context, CHANNEL_CALLS)
+        return NotificationCompat.Builder(context, CHANNEL_CALLS)
             .setSmallIcon(R.drawable.ic_notification)
             .setColor(ContextCompat.getColor(context, R.color.notification_accent))
             .setStyle(NotificationCompat.CallStyle.forIncomingCall(caller, decline, answer))
-            .setContentText(callReason(request is InputRequest.Approval))
+            .setContentText(why)
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setFullScreenIntent(screen, true)
@@ -326,14 +379,19 @@ class ChatNotifications(private val context: Context) {
             .setTimeoutAfter(RING_MS + RING_GRACE_MS)
             .setLocalOnly(localOnly)
             .setOnlyAlertOnce(again)
-        return builder.build()
-            // Rings on, as a call does, until it's answered, declined or rung out; else the ringtone plays once.
-            .apply { flags = flags or Notification.FLAG_INSISTENT }
+    }
+
+    /** No answer within [RING_MS]: a question becomes the usual notification, and the agent hears no one picked up. */
+    private fun rangOut(id: String) {
+        val agent = _ringing.value[id]?.agent ?: return decline(id)
+        stopRinging(id)
+        agent.end(CallOutcome.NoAnswer)
     }
 
     /**
-     * Declined, or rung out: the call goes and the usual notification takes its place. On the main thread, as the
-     * notifiers that cancel requests are: an answer elsewhere can't slip in between, leaving one for nothing.
+     * Declined, or rung out: the call goes and the usual notification takes its place; a call from the agent is
+     * declined. On the main thread, as the notifiers that cancel requests are: an answer elsewhere can't slip in
+     * between, leaving one for nothing.
      */
     fun decline(requestId: String) {
         if (Looper.myLooper() != Looper.getMainLooper()) {
@@ -341,17 +399,25 @@ class ChatNotifications(private val context: Context) {
             return
         }
         val call = stopRinging(requestId) ?: return
-        postRequest(call.storedSessionId, call.title, call.request)
+        call.request?.let { postRequest(call.storedSessionId, call.title, it) }
+        call.agent?.end(CallOutcome.Declined)
     }
 
-    /** Picked up on the watch: the call goes here, and the question waits quietly in case that call doesn't answer it. */
+    /**
+     * Picked up on the watch: the call goes here, and the question waits quietly in case that call doesn't answer it.
+     * A call from the agent is on the line there, and the call the watch starts in its chat opens with why.
+     */
     fun answeredOnWatch(requestId: String) {
         if (Looper.myLooper() != Looper.getMainLooper()) {
             main.post { answeredOnWatch(requestId) }
             return
         }
         val call = stopRinging(requestId, toldWatch = true) ?: return
-        postRequest(call.storedSessionId, call.title, call.request, quiet = true)
+        call.request?.let { postRequest(call.storedSessionId, call.title, it, quiet = true) }
+        call.agent?.let { agent ->
+            call.storedSessionId?.let { openers.put(it, agent.reason) }
+            agent.end(CallOutcome.Answered)
+        }
     }
 
     /** Declined on the watch, which already stopped ringing. */
@@ -361,10 +427,14 @@ class ChatNotifications(private val context: Context) {
             return
         }
         val call = stopRinging(requestId, toldWatch = true) ?: return
-        postRequest(call.storedSessionId, call.title, call.request)
+        call.request?.let { postRequest(call.storedSessionId, call.title, it) }
+        call.agent?.end(CallOutcome.Declined)
     }
 
-    /** Answered: the call goes, and the chat it opens shows the question. */
+    /**
+     * Answered: the call goes, and the chat it opens shows the question. A call from the agent is settled by the call
+     * screen once it's on the line ([dev.hermeskotlin.ui.calls.PhoneCallModel]), or not picked up after all.
+     */
     fun answered(requestId: String) {
         stopRinging(requestId)
     }
@@ -389,14 +459,15 @@ class ChatNotifications(private val context: Context) {
      * phone asks for its unlock on the way either way.
      */
     private fun answerIntent(call: Ringing): Intent {
-        if (call.talk && call.storedSessionId != null) {
+        // A call from the agent always talks: there's no question to open the chat on.
+        if (call.agent != null || (call.talk && call.storedSessionId != null)) {
             return Intent(context, PhoneCallActivity::class.java)
-                .putExtra(NotificationActionReceiver.EXTRA_REQUEST_ID, call.request.id)
+                .putExtra(NotificationActionReceiver.EXTRA_REQUEST_ID, call.id)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         return context.packageManager.getLaunchIntentForPackage(context.packageName)!!
             .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
-            .putExtra(EXTRA_ANSWERED_CALL, call.request.id)
+            .putExtra(EXTRA_ANSWERED_CALL, call.id)
             .apply {
                 if (call.storedSessionId != null) {
                     putExtra(EXTRA_OPEN_SESSION, call.storedSessionId).putExtra(EXTRA_OPEN_TITLE, call.title)
@@ -585,7 +656,8 @@ class ChatNotifications(private val context: Context) {
 
     /** Herald is in front: every call ringing is answered by looking, and posts no notification later. */
     fun hangUp() {
-        _ringing.value.keys.forEach(::stopRinging)
+        // A call from the agent isn't about a chat on screen: it rings on, to be answered or declined.
+        _ringing.value.filterValues { it.agent == null }.keys.forEach(::stopRinging)
     }
 
     /** Tapping it opens Herald on [storedSessionId]'s chat, when the notification is about one. */
@@ -656,6 +728,12 @@ class ChatNotifications(private val context: Context) {
         /** Read by PhoneToolAccess too, to tell whether calls can ring. */
         private const val CHANNEL_CALLS = "calls"
         private const val RING_GRACE_MS = 5_000L
+
+        /** A call from the agent's id, apart from the gateway's request ids. */
+        private const val AGENT_CALL_PREFIX = "agent-call-"
+
+        /** As much of the agent's reason as the call shows; Hermes says all of it on the line. */
+        private const val MAX_CALL_REASON = 160
         private const val MAX_RANG = 200
         private const val ACTION_ANSWER = "answer"
         private const val ACTION_RING = "ring"

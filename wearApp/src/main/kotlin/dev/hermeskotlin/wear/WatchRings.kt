@@ -44,7 +44,7 @@ class WatchRings(private val context: Context) {
         manager.createNotificationChannel(
             NotificationChannelCompat.Builder(CHANNEL, NotificationManagerCompat.IMPORTANCE_HIGH)
                 .setName("Calls for an answer")
-                .setDescription("Hermes calls when it needs an approval or an answer, if the phone rings for them.")
+                .setDescription("Hermes calls when it needs an approval or an answer, or something can't wait, if the phone rings for it.")
                 .setVibrationEnabled(true)
                 .setVibrationPattern(VIBRATION)
                 .build(),
@@ -85,7 +85,7 @@ class WatchRings(private val context: Context) {
         val notification = NotificationCompat.Builder(context, CHANNEL)
             .setSmallIcon(R.drawable.ic_call)
             .setStyle(NotificationCompat.CallStyle.forIncomingCall(caller, decline, answer))
-            .setContentText(ringReason(ring.approval))
+            .setContentText(ringReason(ring.approval, ring.agent))
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setFullScreenIntent(screen, true)
