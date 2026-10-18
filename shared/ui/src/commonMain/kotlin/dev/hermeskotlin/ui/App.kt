@@ -52,6 +52,7 @@ import dev.hermeskotlin.ui.chat.ChatViewModel
 import dev.hermeskotlin.ui.chat.ModelConfirmDialog
 import dev.hermeskotlin.ui.chat.ModelSheet
 import dev.hermeskotlin.ui.sessions.CapabilitiesPage
+import dev.hermeskotlin.ui.sessions.ConfigPage
 import dev.hermeskotlin.core.chat.ChatState
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.safeDrawing
@@ -71,9 +72,25 @@ import dev.hermeskotlin.ui.update.LocalUpdateOffer
 import dev.hermeskotlin.ui.update.rememberUpdateOffer
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
+import dev.hermeskotlin.core.inbox.InboxLink
+import dev.hermeskotlin.core.inbox.InboxLinks
 import dev.hermeskotlin.core.rooms.RoomLinks
 import org.koin.compose.koinInject
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.currentStateAsState
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.derivedStateOf
+import dev.hermeskotlin.ui.sessions.OtherChat
+import dev.hermeskotlin.ui.sessions.OtherChatEvent
+import dev.hermeskotlin.ui.sessions.OtherChatRow
+import dev.hermeskotlin.ui.sessions.OtherChatsViewModel
+import dev.hermeskotlin.ui.sessions.SessionsBadge
+import dev.hermeskotlin.ui.sessions.SessionsViewModel
 import org.koin.compose.viewmodel.koinViewModel
+import org.koin.core.parameter.parametersOf
 
 /** The current [AppSettings], for screens that change how they draw. */
 val LocalAppSettings = compositionLocalOf { AppSettings() }
@@ -229,6 +246,8 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
         val bot = openBot ?: return@LaunchedEffect
         val next = liveChat?.openId ?: return@LaunchedEffect
         val open = openSessionId ?: return@LaunchedEffect
+        // Just opened, the chat's state is still the previous chat's; the route already has the live one.
+        if (next == route.target.storedSessionId) return@LaunchedEffect
         if (open != liveChat.id && open != next && !chatState.running) app.openBotChat(bot, next)
     }
 
@@ -274,6 +293,21 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
     LaunchedEffect(desktopRoom, roster.loading) {
         if (openDesktopRoom != null && desktopRoom == null && !roster.loading) openDesktopRoom = null
     }
+    // A tapped Inbox notification: the drawer opens here, then the sidebar takes the link and consumes it.
+    // Only one of them consumes, after the drawer has settled, so the opening isn't cut short. A touch that
+    // stops the opening halfway still hands the link on: kept pending, the same notification tapped again
+    // would change nothing and open nothing.
+    val inboxLinks = koinInject<InboxLinks>()
+    val inboxLink by inboxLinks.pending.collectAsStateWithLifecycle()
+    var shownInboxLink by remember { mutableStateOf<InboxLink?>(null) }
+    LaunchedEffect(inboxLink) {
+        val link = inboxLink ?: return@LaunchedEffect
+        try {
+            sidebar.open()
+        } finally {
+            shownInboxLink = link
+        }
+    }
     // A room asked for from outside the screens (a tapped notification) opens over the chat.
     val roomLinks = koinInject<RoomLinks>()
     val roomLink by roomLinks.pending.collectAsStateWithLifecycle()
@@ -294,6 +328,57 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
             pluginLabel = null
         }
     }
+    // Other chats that need the user: the Sessions badge, the banner over the chat, Next and the buzz, with
+    // "Alerts for other chats" on (off by default). Watched only while the chat itself is on screen with Herald in
+    // the foreground; that keeps the gateway's live list polled then (every 10 s, as while the sidebar shows), and
+    // never in the background.
+    val sessions: SessionsViewModel = koinViewModel()
+    val others: OtherChatsViewModel = koinViewModel { parametersOf(sessions) }
+    val settings = LocalAppSettings.current
+    val alerts = settings.otherChatsAlerts
+    LaunchedEffect(alerts, settings.otherChatsBanner) { others.setOtherChats(alerts, banner = settings.otherChatsBanner) }
+    val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
+    // A page drawn over the chat (Settings, a plugin, the bot editor) hides it too: a banner there would time out unseen.
+    val chatShown = lifecycleState.isAtLeast(Lifecycle.State.STARTED) && openRoom == null && desktopRoom == null &&
+        !settingsOpen && pluginUrl == null && editing == null
+    LaunchedEffect(chatShown) { others.setChatShown(chatShown) }
+    // The phone's drawer over the chat: the sidebar says it all there, so the banner waits until it closes.
+    val drawerOver by remember { derivedStateOf { sidebar.fraction > 0f && !sidebar.docked } }
+    DisposableEffect(others) { onDispose { others.setChatShown(false) } }
+    // Every id the open chat goes by (a bot's chat moves on after /compress), so it never counts as another.
+    val openIds = setOfNotNull(openSessionId, route.target.storedSessionId, openBot?.canonicalSession?.id, openBot?.canonicalSession?.openId)
+    LaunchedEffect(openIds) { others.setOpenChat(openIds) }
+    // Bot Chats are hidden sessions, so the chat list doesn't have them; the roster does, with what's unread.
+    LaunchedEffect(roster.all, roster.unread) {
+        others.setBotChats(
+            roster.all.filterNot { it.meta.hidden }.mapNotNull { bot ->
+                val chat = bot.canonicalSession ?: return@mapNotNull null
+                val id = chat.openId ?: return@mapNotNull null
+                OtherChatRow(
+                    OtherChat(id, bot.label, unread = bot.name in roster.unread, activityAt = chat.lastActive, bot = bot.name),
+                    ids = setOfNotNull(chat.id, id),
+                )
+            },
+        )
+    }
+    val sessionsBadge by others.badge.collectAsStateWithLifecycle()
+    val banner by others.banner.collectAsStateWithLifecycle()
+    val haptics = LocalHapticFeedback.current
+    val vibrate = alerts && settings.otherChatsVibrate
+    LaunchedEffect(others, vibrate) {
+        if (!vibrate) return@LaunchedEffect
+        others.otherChatEvents.collect { if (it.waiting) haptics.performHapticFeedback(HapticFeedbackType.LongPress) }
+    }
+
+    /** Opens another chat as a sidebar tap does, with where its new messages start. */
+    fun openOther(id: String, title: String, bot: String?) {
+        val botOf = bot?.let { name -> roster.all.firstOrNull { it.name == name } }
+        // A bot's chat opens as its sidebar row does, which finds where its new messages start.
+        if (botOf != null) bots.open(botOf) { storedId, readUpTo -> app.openBotChat(botOf, storedId, readUpTo) }
+        else app.openSession(id, title, others.openListed(id))
+        closeDrawerToChat()
+    }
+
     // On phones the keyboard makes way for the drawer.
     LaunchedEffect(sidebar) {
         snapshotFlow { sidebar.fraction > 0f && !sidebar.docked }.filter { it }.collect { focusManager.clearFocus() }
@@ -307,8 +392,8 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
                 profile = chatsProfile,
                 selectedId = openSessionId,
                 visible = sidebar.isOpen,
-                onOpenSession = {
-                    if (it.id != openSessionId) app.openSession(it.id, it.displayTitle)
+                onOpenSession = { session, readUpTo ->
+                    if (session.id != openSessionId) app.openSession(session.id, session.displayTitle, readUpTo)
                     closeDrawerToChat()
                 },
                 onNewChat = { cwd ->
@@ -324,8 +409,8 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
                     app.switchProfile(it)
                     closeDrawerToChat()
                 },
-                onOpenBot = { bot, storedSessionId ->
-                    if (storedSessionId != openSessionId || route.target.bot == null) app.openBotChat(bot, storedSessionId)
+                onOpenBot = { bot, storedSessionId, readUpTo ->
+                    if (storedSessionId != openSessionId || route.target.bot == null) app.openBotChat(bot, storedSessionId, readUpTo)
                     closeDrawerToChat()
                 },
                 onOpenBotSession = { bot, id, title ->
@@ -355,6 +440,12 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
                     }
                 },
                 selectedRunning = chatState.running,
+                inboxLink = shownInboxLink,
+                onInboxLinkTaken = { link ->
+                    // A newer link may be handed on already: it is left for the sidebar to take.
+                    if (shownInboxLink == link) shownInboxLink = null
+                    inboxLinks.consume(link)
+                },
             )
         },
     ) {
@@ -374,6 +465,21 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
                     onOpenChat = { id, title -> app.openSession(id, title ?: "Untitled session") },
                     onSwitchProfile = app::switchProfile,
                     viewModel = chat,
+                    sessionsBadge = if (alerts) sessionsBadge else SessionsBadge(),
+                    otherChatBanner = banner.takeIf { alerts && settings.otherChatsBanner && !drawerOver },
+                    onOpenOtherChat = { event: OtherChatEvent ->
+                        others.dismissBanner(event)
+                        openOther(event.chatId, event.title, event.bot)
+                    },
+                    onDismissOtherChat = others::dismissBanner,
+                    onNextChat = if (!alerts) null else fun(): Boolean {
+                        val next = others.nextChat()
+                        if (next != null) {
+                            banner?.let(others::dismissBanner)
+                            openOther(next.id, next.title, next.bot)
+                        }
+                        return next != null
+                    },
                 )
             }
         }
@@ -396,6 +502,7 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
         onControl = chat::openControl.takeIf { chatState.control != null },
         botChat = route.target.bot != null,
         onStartFresh = openBot?.let { bot -> { startOver = bot } },
+        onOpenChat = app::openSession,
     )
     StartOverDialog(startOver, onDismiss = { startOver = null }) { bot ->
         bots.startFresh(bot) { id -> app.openBotChat(bot, id) }
@@ -406,6 +513,7 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
         val modelPicker by bots.modelPicker.collectAsStateWithLifecycle()
         var pickingModel by remember { mutableStateOf(false) }
         var capabilitiesOpen by remember { mutableStateOf(false) }
+        var configOpen by remember { mutableStateOf(false) }
         val live = target.bot?.let { edited -> roster.all.firstOrNull { it.name == edited.name } ?: edited }
         BotEditor(
             bot = target.bot,
@@ -425,6 +533,7 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
             live = live,
             onPickModel = { pickingModel = true },
             onCapabilities = { capabilitiesOpen = true },
+            onConfig = { configOpen = true },
         )
         live?.let { bot ->
             ModelSheet(
@@ -456,6 +565,20 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
                         // Hermes fixes a chat's tools when it starts (#124211).
                         note = "Changes apply to ${bot.label}'s new chats. If its Bot Chat doesn't pick one up, Start fresh gives it a new chat with everything set here.",
                         viewModel = koinViewModel(key = "capabilities-${bot.name}"),
+                    )
+                }
+            }
+            if (configOpen) {
+                PlatformBackHandler(enabled = true) { configOpen = false }
+                Box(Modifier.fillMaxSize().background(Theme[colors][background]).windowInsetsPadding(WindowInsets.safeDrawing)) {
+                    ConfigPage(
+                        gateway = route.gateway,
+                        profile = bot.name,
+                        onBack = { configOpen = false },
+                        onSessionExpired = app::onSessionExpired,
+                        title = "${bot.label}'s config",
+                        note = "${bot.label}'s own settings, saved to its profile's config.yaml. Most apply from its next chat.",
+                        viewModel = koinViewModel(key = "config-${bot.name}"),
                     )
                 }
             }

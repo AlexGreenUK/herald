@@ -1,5 +1,11 @@
 package dev.hermeskotlin.core.voice
 
+import kotlinx.coroutines.channels.ReceiveChannel
+import kotlinx.io.Buffer
+import kotlinx.io.readByteArray
+import kotlinx.io.writeIntLe
+import kotlinx.io.writeShortLe
+
 /**
  * How a recording decides you're done talking. The timings are Desktop's (tools.voice_mode); the
  * level is lower, since a phone's speech-recognition mic is unboosted where the browser's isn't.
@@ -28,9 +34,15 @@ class EndOfSpeech(private val activity: VoiceActivity) {
     var noise = -1f
         private set
     private var silenceSince = -1L
+    /** Since when the level has stood above quiet, in a pause after speech; -1 when it hasn't. */
+    private var loudSince = -1L
+    /** Where the last frame ended, which is where this one starts. */
+    private var lastFrameEnd = 0L
 
     /** Feeds one frame's [level] at [elapsedMs] into the recording; true once the recording should end. */
     fun onFrame(level: Float, elapsedMs: Long): Boolean {
+        val frameStart = lastFrameEnd
+        lastFrameEnd = elapsedMs
         // The opening moment only measures the room; nobody starts talking that fast.
         if (elapsedMs <= CALIBRATION_MS) {
             noise = if (noise < 0) level else noise + (level - noise) * 0.2f
@@ -38,9 +50,9 @@ class EndOfSpeech(private val activity: VoiceActivity) {
         }
         val speechBar = maxOf(activity.speechLevel, noise * SPEECH_OVER_NOISE)
         val quietBar = maxOf(activity.speechLevel * QUIET_FRACTION, noise * QUIET_OVER_NOISE)
-        if (level >= speechBar) {
+        val speech = level >= speechBar
+        if (speech) {
             heardSpeech = true
-            silenceSince = -1
             // A steady loud room lifts the bar too, slowly enough that a long sentence doesn't.
             noise += (level - noise) * 0.002f
         } else {
@@ -50,12 +62,18 @@ class EndOfSpeech(private val activity: VoiceActivity) {
                 level < noise -> noise + (level - noise) * 0.3f
                 else -> noise + (level - noise) * 0.02f
             }
-            if (heardSpeech && level < quietBar) {
-                if (silenceSince < 0) silenceSince = elapsedMs
-                if (elapsedMs - silenceSince >= activity.silenceMs) return true
-            } else if (heardSpeech) {
-                silenceSince = -1
-            }
+        }
+        if (heardSpeech && level < quietBar) {
+            loudSince = -1
+            if (silenceSince < 0) silenceSince = elapsedMs
+            if (elapsedMs - silenceSince >= activity.silenceMs) return true
+        } else if (heardSpeech) {
+            // Road noise, wind or a fan poke above the quiet bar for a moment; only a run of it is someone
+            // talking again, so a blip doesn't start the pause over (#185). A run counts from its first frame's
+            // start. Speech needs only a syllable's worth, so clipped words still hold; a level short of speech,
+            // which noise reaches far more often, needs longer.
+            if (loudSince < 0) loudSince = frameStart
+            if (elapsedMs - loudSince >= if (speech) SPEECH_RUN_MS else MURMUR_RUN_MS) silenceSince = -1
         }
         if (!heardSpeech && activity.idleMs > 0 && elapsedMs >= activity.idleMs) return true
         return elapsedMs >= activity.maxMs
@@ -66,6 +84,10 @@ class EndOfSpeech(private val activity: VoiceActivity) {
         const val SPEECH_OVER_NOISE = 2.5f
         const val QUIET_OVER_NOISE = 1.6f
         const val QUIET_FRACTION = 0.8f
+        /** How long the level has to stay at speech, in a pause, to count as talking again: a syllable's worth. */
+        const val SPEECH_RUN_MS = 60L
+        /** The same for a level between quiet and speech, which noise reaches more often. */
+        const val MURMUR_RUN_MS = 200L
     }
 }
 
@@ -119,6 +141,44 @@ object NoDeviceDictation : DeviceDictation {
 interface SpeechPlayer {
     /** Plays [audio] to the end; cancelling stops it. */
     suspend fun play(audio: SpokenAudio)
+
+    /**
+     * Plays 16-bit little-endian PCM at [sampleRate], [channels] interleaved, as [chunks] arrive, until the
+     * channel is closed and all of it has played; cancelling stops it at once. [onSound] says when sound starts
+     * coming out, and when it has stopped for a moment, as it does while the agent works between sentences.
+     *
+     * A player that can't stream plays it all at once when the channel closes.
+     */
+    suspend fun playPcm(sampleRate: Int, channels: Int, chunks: ReceiveChannel<ByteArray>, onSound: (Boolean) -> Unit = {}) {
+        val pcm = Buffer()
+        for (chunk in chunks) pcm.write(chunk)
+        if (pcm.size == 0L) return
+        onSound(true)
+        try {
+            play(SpokenAudio(wav(pcm.readByteArray(), sampleRate, channels), "audio/wav"))
+        } finally {
+            onSound(false)
+        }
+    }
+}
+
+/** [pcm] (16-bit, [channels] interleaved) as a WAV file. */
+fun wav(pcm: ByteArray, sampleRate: Int, channels: Int = 1): ByteArray {
+    val header = Buffer().apply {
+        write("RIFF".encodeToByteArray())
+        writeIntLe(36 + pcm.size)
+        write("WAVEfmt ".encodeToByteArray())
+        writeIntLe(16)
+        writeShortLe(1.toShort()) // PCM
+        writeShortLe(channels.toShort())
+        writeIntLe(sampleRate)
+        writeIntLe(sampleRate * channels * 2)
+        writeShortLe((channels * 2).toShort())
+        writeShortLe(16.toShort())
+        write("data".encodeToByteArray())
+        writeIntLe(pcm.size)
+    }
+    return header.readByteArray() + pcm
 }
 
 private val FENCED_CODE = Regex("```[\\s\\S]*?(?:```|$)")
