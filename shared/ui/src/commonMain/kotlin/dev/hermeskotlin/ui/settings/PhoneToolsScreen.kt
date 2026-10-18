@@ -141,7 +141,9 @@ fun PhoneToolsScreen(onBack: () -> Unit, viewModel: PhoneToolsViewModel = koinVi
 
 /** Under the switch: what quiet hours stop, and what Do Not Disturb does to the calls without them. */
 internal fun quietHoursDetail(settings: AppSettings): String {
-    val window = if (settings.quietHours) {
+    val window = if (settings.quietHours && settings.quietFrom == settings.quietUntil) {
+        "They start and end at ${clockTime(settings.quietFrom)}, so nothing is quiet yet: pick another time."
+    } else if (settings.quietHours) {
         "Nothing rings from ${clockTime(settings.quietFrom)} to ${clockTime(settings.quietUntil)}."
     } else {
         "Nothing rings between the times you pick."
@@ -556,8 +558,11 @@ private fun QuietTimeDialog(start: Boolean?, from: Int, until: Int, onDismiss: (
     var shown by remember { mutableStateOf(start) }
     if (start != null) shown = start
     val s = shown ?: return
-    // Fresh each time it opens, not as it closes.
-    var minute by remember(start != null, s) { mutableStateOf(if (s) from else until) }
+    // Fresh each time it opens, and left as it was while it closes.
+    var minute by remember { mutableStateOf(if (s) from else until) }
+    var open by remember { mutableStateOf(false) }
+    if (start != null && !open) minute = if (start) from else until
+    open = start != null
     Dialog(
         visible = start != null,
         onDismissRequest = onDismiss,
