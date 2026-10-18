@@ -35,7 +35,7 @@ internal actual fun WidgetWebView(html: String, theme: WidgetTheme, name: String
         LaunchedEffect(Unit) { failure.value("Update Android System WebView to run this widget.") }
         return
     }
-    val font = remember { context.resources.openRawResource(R.font.geist_regular).use { Base64.encode(it.readBytes()) } }
+    val font = remember { widgetFont(context) }
     val document = remember(html, theme, font) { widgetDocument(html, theme, font) }
     val currentDocument = rememberUpdatedState(document)
     val view = remember { createWidgetWebView(context, name, { currentDocument.value }) { failure.value("Couldn't display this widget.") } }
@@ -43,7 +43,8 @@ internal actual fun WidgetWebView(html: String, theme: WidgetTheme, name: String
         onDispose { view.stopLoading(); view.destroy() }
     }
     AndroidView(factory = { view }, modifier = modifier, update = {
-        if (it.tag != document) {
+        // By identity: the document is remembered, and comparing its text would read it all on each update.
+        if (it.tag !== document) {
             it.tag = document
             it.loadUrl(WIDGET_URL)
         }
@@ -51,6 +52,12 @@ internal actual fun WidgetWebView(html: String, theme: WidgetTheme, name: String
 }
 
 private const val WIDGET_URL = "https://herald-widget.invalid/"
+
+/** Geist as base64, which every widget's document embeds; read once, on the main thread like the widgets. */
+private var cachedFont: String? = null
+
+private fun widgetFont(context: Context): String = cachedFont
+    ?: context.resources.openRawResource(R.font.geist_regular).use { Base64.encode(it.readBytes()) }.also { cachedFont = it }
 
 /** The same restricted host for each widget; its document always arrives as app-supplied text. */
 @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
