@@ -22,6 +22,9 @@ data class PushMessage(
     val choices: List<String> = emptyList(),
     val expires: Long? = null,
     val choice: String? = null,
+    /** A [PHONE_CALL]'s reason and, maybe, its details. */
+    val reason: String? = null,
+    val details: String? = null,
 ) {
     companion object {
         // The types the phone acts on. The others in docs/push-protocol.md (approval, and the
@@ -31,6 +34,12 @@ data class PushMessage(
 
         /** A phone tool call waits on the gateway ([requestId]); the phone fetches it over the socket. */
         const val PHONE_REQUEST = "phone_request"
+
+        /**
+         * The agent calls the user (`phone_call_me`, request [requestId], until [expires]): the call itself, so the
+         * phone rings even when it can't reach the gateway. The answer goes back over the socket.
+         */
+        const val PHONE_CALL = "phone_call"
 
         /** Gateway → phone messages are news; older than a day they're dropped. */
         const val MAX_AGE_G2P_SECONDS = 24 * 3600L

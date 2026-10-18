@@ -22,6 +22,14 @@ enum class PhoneTool(val id: String, val title: String, val detail: String) {
     Calendar("phone_calendar", "Calendar", "Your events in a time range. Adding or moving one asks you first."),
     Contacts("phone_contacts", "Contacts", "Looks people up by name, number or email: only their names, numbers and emails, a few at a time."),
     Health("phone_health", "Health", "Steps, sleep and heart rate from Health Connect, as much of it as you allow there. While Herald is open, unless you also allow it while closed."),
+
+    /** Shown under Calls, not with the tools: it rings, as an approval does with [AppSettings.phoneRings]. */
+    CallMe(
+        "phone_call_me",
+        "Hermes can call me",
+        "The agent rings you when something can't wait, or when you ask it to call you, from a scheduled job too. " +
+            "Answer, and Hermes tells you why on the line. It only ever calls you.",
+    ),
     ;
 
     companion object {

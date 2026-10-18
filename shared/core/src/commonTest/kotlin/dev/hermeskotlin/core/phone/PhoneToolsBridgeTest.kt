@@ -14,6 +14,7 @@ import dev.hermeskotlin.core.push.PluginUpdate
 import dev.hermeskotlin.core.push.PushApi
 import dev.hermeskotlin.core.push.PushGateway
 import dev.hermeskotlin.core.push.PushKeys
+import dev.hermeskotlin.core.push.PushMessage
 import dev.hermeskotlin.core.push.PushRegistration
 import dev.hermeskotlin.core.rpc.FakeTransport
 import dev.hermeskotlin.core.settings.SettingsStore
@@ -503,6 +504,81 @@ class PhoneToolsBridgeTest {
         connect(s, plugin)
         until { plugin.answers.isNotEmpty() }
         assertEquals(PhoneToolsStatus.State.On, s.bridge.status.value.state)
+    }
+
+    private fun ringPush(id: String, reason: String? = "The deploy failed", expires: Long = GATEWAY_NOW + 75) = PushMessage(
+        id = "p-$id",
+        ts = GATEWAY_NOW,
+        type = PushMessage.PHONE_CALL,
+        session = "chat-1",
+        requestId = id,
+        expires = expires,
+        reason = reason,
+        details = "Build 42",
+    )
+
+    /** Records each call's args; each rings until [ended]. */
+    private class CallRunner : PhoneToolRunner {
+        val calls = mutableListOf<Pair<PhoneTool, JsonObject>>()
+        val ringing = CompletableDeferred<Unit>()
+
+        override suspend fun run(tool: PhoneTool, args: JsonObject, session: String): JsonElement {
+            calls += tool to args
+            ringing.await()
+            return buildJsonObject { put("status", "declined") }
+        }
+    }
+
+    @Test
+    fun aRingInAPushRingsWithoutTheGateway() = runTest {
+        val runner = CallRunner()
+        val s = setup(runner, on = listOf(PhoneTool.CallMe))
+        s.bridge.ring(ringPush("e".repeat(32)))
+        until { runner.calls.isNotEmpty() }
+        assertTrue(s.connection.state.value !is ConnectionState.Connected)
+        assertEquals(PhoneTool.CallMe, runner.calls.single().first)
+        assertEquals("""{"reason":"The deploy failed","details":"Build 42"}""", runner.calls.single().second.toString())
+    }
+
+    @Test
+    fun aRingInAPushAndOnTheGatewayRingsOnceAndItsEndGoesBack() = runTest {
+        val runner = CallRunner()
+        val s = setup(runner, on = listOf(PhoneTool.CallMe))
+        val id = "e".repeat(32)
+        val plugin = Plugin()
+        connect(s, plugin)
+        until { plugin.reports.isNotEmpty() }
+        // The gateway lists it too: it doesn't ring a second time, and the answer gets there.
+        s.bridge.ring(ringPush(id))
+        plugin.call(id, PhoneTool.CallMe.id, expires = GATEWAY_NOW + 75)
+        s.bridge.wake()
+        until { runner.calls.isNotEmpty() }
+        delay(PhoneToolsBridge.EVENT_DRAINS_MS.last())
+        runner.ringing.complete(Unit)
+        until { plugin.answers.containsKey(id) }
+        assertEquals("""{"status":"declined"}""", plugin.answers[id]!!["result"].toString())
+        delay(PhoneToolsBridge.POLL_MS * 2)
+        assertEquals(1, runner.calls.size)
+    }
+
+    @Test
+    fun aRingPastItsTimeOrWithoutAReasonDoesntRing() = runTest {
+        val runner = CallRunner()
+        val s = setup(runner, on = listOf(PhoneTool.CallMe))
+        s.bridge.ring(ringPush("e".repeat(32), expires = GATEWAY_NOW + 5))
+        s.bridge.ring(ringPush("f".repeat(32), reason = " "))
+        s.bridge.ring(ringPush("not-an-id"))
+        delay(1_000)
+        assertTrue(runner.calls.isEmpty())
+    }
+
+    @Test
+    fun aRingWithCallsOffDoesntRing() = runTest {
+        val runner = CallRunner()
+        val s = setup(runner, on = listOf(PhoneTool.Battery))
+        s.bridge.ring(ringPush("e".repeat(32)))
+        delay(1_000)
+        assertTrue(runner.calls.isEmpty())
     }
 
     @Test

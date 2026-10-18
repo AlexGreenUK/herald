@@ -11,6 +11,7 @@ import dev.hermeskotlin.core.push.PhoneRequest
 import dev.hermeskotlin.core.push.PluginState
 import dev.hermeskotlin.core.push.PushApi
 import dev.hermeskotlin.core.push.PushKeys
+import dev.hermeskotlin.core.push.PushMessage
 import dev.hermeskotlin.core.rpc.JsonRpcClient
 import dev.hermeskotlin.core.settings.SettingsStore
 import dev.hermeskotlin.core.storage.KeyValueStore
@@ -29,13 +30,17 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -319,11 +324,30 @@ class PhoneToolsBridge(
         } catch (e: Exception) {
             null
         } ?: return@withLock
-        runningLock.withLock {
-            for (request in waiting) {
-                if (request.id in running || request.id in answered) continue
-                running[request.id] = Running(request.tool, scope.launch { handle(request) })
-            }
+        startAll(waiting)
+    }
+
+    /**
+     * A push carried a call that rings ([PhoneTool.CallMe]): it rings at once, even while the gateway is out of reach,
+     * and the answer goes back once it isn't. Fetched over the socket too, it still rings once.
+     */
+    fun ring(message: PushMessage) {
+        val id = message.requestId?.takeIf { REQUEST_ID.matches(it) } ?: return
+        val reason = message.reason?.takeIf { it.isNotBlank() } ?: return
+        val expires = message.expires ?: return
+        val args = buildJsonObject {
+            put("reason", reason)
+            message.details?.takeIf { it.isNotBlank() }?.let { put("details", it) }
+        }
+        val request = PhoneRequest(id, PhoneTool.CallMe.id, args, message.session.orEmpty(), expires, gatewayNow = message.ts)
+        scope.launch { startAll(listOf(request)) }
+    }
+
+    /** Starts each of [waiting] not already running or answered. */
+    private suspend fun startAll(waiting: List<PhoneRequest>) = runningLock.withLock {
+        for (request in waiting) {
+            if (request.id in running || request.id in answered) continue
+            running[request.id] = Running(request.tool, scope.launch { handle(request) })
         }
     }
 
@@ -390,6 +414,11 @@ class PhoneToolsBridge(
 
     private suspend fun answer(requestId: String, result: JsonElement?, error: String?) {
         try {
+            // A call rung from a push may end while Herald can't reach the gateway: the answer waits a little for it.
+            if (connection.state.value !is ConnectionState.Connected) {
+                connection.retry()
+                withTimeoutOrNull(ANSWER_WAIT_MS) { connection.state.first { it is ConnectionState.Connected } } ?: return
+            }
             val me = identity()
             api.phoneAnswer(me.id, me.key, requestId, result, error)
         } catch (e: CancellationException) {
@@ -443,6 +472,10 @@ class PhoneToolsBridge(
 
         /** Stopped this long before the gateway's deadline, for the answer to get there. */
         const val DEADLINE_MARGIN_MS = 8_000L
+
+        /** How long an answer waits for the way to the gateway, when there's none. */
+        const val ANSWER_WAIT_MS = 20_000L
+        private val REQUEST_ID = Regex("^[0-9a-f]{32}$")
         const val MAX_RECENT = 20
         const val TOO_LONG = "The phone took too long."
         const val SWITCHED_OFF = "The user turned this tool off on the phone."
