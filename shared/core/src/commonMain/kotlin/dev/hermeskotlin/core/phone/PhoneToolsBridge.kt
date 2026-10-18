@@ -339,7 +339,12 @@ class PhoneToolsBridge(
             put("reason", reason)
             message.details?.takeIf { it.isNotBlank() }?.let { put("details", it) }
         }
-        val request = PhoneRequest(id, PhoneTool.CallMe.id, args, message.session.orEmpty(), expires, gatewayNow = message.ts)
+        // The push says when it was sent, not when it got here: one read late (a backlog after the phone was off)
+        // counts the delay against the call's time, on this phone's clock with some slack for a clock that's off.
+        val late = (now() / 1_000 - message.ts - PUSH_SKEW_S).coerceAtLeast(0)
+        val sent = message.ts + late
+        if ((expires - sent) * 1_000 <= DEADLINE_MARGIN_MS) return
+        val request = PhoneRequest(id, PhoneTool.CallMe.id, args, message.session.orEmpty(), expires, gatewayNow = sent)
         scope.launch { startAll(listOf(request)) }
     }
 
@@ -475,6 +480,9 @@ class PhoneToolsBridge(
 
         /** How long an answer waits for the way to the gateway, when there's none. */
         const val ANSWER_WAIT_MS = 20_000L
+
+        /** How far the phone's clock may be off the gateway's before a ring push counts as late. */
+        const val PUSH_SKEW_S = 30L
         private val REQUEST_ID = Regex("^[0-9a-f]{32}$")
         const val MAX_RECENT = 20
         const val TOO_LONG = "The phone took too long."

@@ -506,9 +506,9 @@ class PhoneToolsBridgeTest {
         assertEquals(PhoneToolsStatus.State.On, s.bridge.status.value.state)
     }
 
-    private fun ringPush(id: String, reason: String? = "The deploy failed", expires: Long = GATEWAY_NOW + 75) = PushMessage(
+    private fun ringPush(id: String, reason: String? = "The deploy failed", expires: Long = GATEWAY_NOW + 75, ts: Long = GATEWAY_NOW) = PushMessage(
         id = "p-$id",
-        ts = GATEWAY_NOW,
+        ts = ts,
         type = PushMessage.PHONE_CALL,
         session = "chat-1",
         requestId = id,
@@ -568,6 +568,8 @@ class PhoneToolsBridgeTest {
         s.bridge.ring(ringPush("e".repeat(32), expires = GATEWAY_NOW + 5))
         s.bridge.ring(ringPush("f".repeat(32), reason = " "))
         s.bridge.ring(ringPush("not-an-id"))
+        // Read an hour after it was sent (this phone's clock is at 0): the agent gave up on it long ago.
+        s.bridge.ring(ringPush("d".repeat(32), ts = -3_600, expires = -3_600 + 75))
         delay(1_000)
         assertTrue(runner.calls.isEmpty())
     }
