@@ -2,8 +2,10 @@ package dev.hermeskotlin.ui.chat
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.Color
 import android.view.MotionEvent
+import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.webkit.PermissionRequest
 import android.webkit.RenderProcessGoneDetail
@@ -24,6 +26,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import dev.hermeskotlin.designsystem.R
 import java.io.ByteArrayInputStream
 import kotlin.io.encoding.Base64
+import kotlin.math.hypot
 
 /** Untrusted widget HTML gets no gateway origin, cookies, storage, native bridge or network. */
 @Composable
@@ -67,20 +70,33 @@ internal fun createWidgetWebView(context: Context, name: String, document: () ->
         layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         setBackgroundColor(Color.TRANSPARENT)
         contentDescription = name
-        // Keep iframe scrolling and controls out of the transcript's drag gesture, until what's under the finger has
-        // scrolled to its end that way (the widget reports its ends as the title): then the transcript scrolls on.
-        // Until the first report, as for content that doesn't scroll, both ends count as reached. WebView owns clicks.
-        var edges = "tb"
-        var lastY = 0f
+        // Each drag goes to the widget or to the transcript, decided once from the widget's last report (as the title)
+        // after a little movement, before the transcript's own touch slop: widgetKeepsDrag. A second finger (a pinch)
+        // always stays in the widget. WebView owns clicks.
+        var report = WidgetReport()
+        var downX = 0f
+        var downY = 0f
+        var decided = false
+        val decideAfter = ViewConfiguration.get(context).scaledTouchSlop / 2f
+        val density = resources.displayMetrics.density
         setOnTouchListener { view, event ->
             when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN -> lastY = event.y
-                MotionEvent.ACTION_MOVE -> {
-                    val dy = event.y - lastY
-                    lastY = event.y
-                    // A finger moving down scrolls content up, towards its top end.
-                    val atEnd = if (dy > 0) 't' in edges else if (dy < 0) 'b' in edges else null
-                    if (atEnd != null) view.parent?.requestDisallowInterceptTouchEvent(!atEnd)
+                MotionEvent.ACTION_DOWN -> {
+                    downX = event.x
+                    downY = event.y
+                    decided = false
+                }
+                MotionEvent.ACTION_POINTER_DOWN -> {
+                    decided = true
+                    view.parent?.requestDisallowInterceptTouchEvent(true)
+                }
+                MotionEvent.ACTION_MOVE -> if (!decided) {
+                    val dx = event.x - downX
+                    val dy = event.y - downY
+                    if (hypot(dx, dy) >= decideAfter) {
+                        decided = true
+                        view.parent?.requestDisallowInterceptTouchEvent(widgetKeepsDrag(report, downX / density, downY / density, dx, dy))
+                    }
                 }
             }
             false
@@ -101,10 +117,15 @@ internal fun createWidgetWebView(context: Context, name: String, document: () ->
             override fun onPermissionRequest(request: PermissionRequest) { request.deny() }
 
             override fun onReceivedTitle(view: WebView, title: String?) {
-                if (title != null && title.startsWith(WIDGET_EDGES)) edges = title.removePrefix(WIDGET_EDGES)
+                widgetReport(title)?.let { report = it }
             }
         }
         webViewClient = object : WebViewClient() {
+            // A reloaded document (a theme change) reports for itself; the last one's areas are gone.
+            override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
+                report = WidgetReport()
+            }
+
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean = true
 
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse =

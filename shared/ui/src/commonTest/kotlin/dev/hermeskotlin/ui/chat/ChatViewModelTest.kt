@@ -179,6 +179,12 @@ class ChatViewModelTest {
         assertEquals<List<Pair<String, String?>>>(List(4) { "hermes.example.ts.net" to "first" }, reads)
         assertEquals(first.gateway.gatewayUrl to first.profile, oldFiles.identity)
         assertEquals("same-id", oldTranscript.state.storedSessionId)
+
+        // A new title on the same chat reads the same files, so its widgets keep their key and don't reload.
+        val current = vm.transcript.value.widgetFiles
+        vm.open(first.copy(gateway = SavedGateway("https://other.example"), title = "Renamed"))
+        runCurrent()
+        assertEquals(assertNotNull(current).identity, assertNotNull(vm.transcript.value.widgetFiles).identity)
     }
 
     @Test

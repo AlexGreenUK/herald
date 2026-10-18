@@ -45,7 +45,10 @@ import dev.hermeskotlin.designsystem.typography
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withTimeoutOrNull
 
-/** File callbacks and the owning gateway/profile/chat identity; never share documents across contexts. */
+/**
+ * File callbacks and whose files they read (gateway and profile, all the callbacks use); never share documents across
+ * owners. A loaded widget keeps the callbacks it started with, so the identity must grow if they ever use more.
+ */
 internal data class WidgetFiles(
     val identity: Any,
     val load: suspend (GatewayFile) -> FileLoad,
