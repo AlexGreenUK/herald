@@ -229,3 +229,6 @@ internal fun callStatus(state: PhoneCallState, seconds: Long): String {
 
 /** Why it rings, in a few words: what the agent waits for, never the command or the question itself. */
 fun callReason(approval: Boolean): String = if (approval) "Needs your approval" else "Has a question for you"
+
+/** Why a call the agent placed rings, over the lock screen: not what it's about, which Hermes says on the line. */
+fun agentCallReason(): String = "Calling you"

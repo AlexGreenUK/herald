@@ -50,6 +50,8 @@ internal class LiveConversation(
     private val state: MutableStateFlow<VoiceChatState>,
     /** An approval is only taken while the phone is unlocked. */
     private val lock: DeviceLock = DeviceLock.None,
+    /** A call the agent placed: what the voice is told to say first, why it called. */
+    private val opener: String? = null,
 ) {
     private val transcript = ArrayList<LiveFragment>()
     private var eventSeq = 0
@@ -207,6 +209,13 @@ internal class LiveConversation(
                 }
             }
             ended.complete("The live call dropped.")
+        }
+        // A call the agent placed: the voice says why first, once it's up (it drops what comes earlier).
+        if (opener != null) {
+            launch {
+                started.await()
+                speakAside(opener)
+            }
         }
         // A question or an approval Hermes stops on goes to the voice to ask, once each; not before the voice is up,
         // which drops what comes earlier.

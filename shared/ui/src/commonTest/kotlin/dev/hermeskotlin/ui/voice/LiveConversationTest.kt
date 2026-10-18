@@ -8,6 +8,7 @@ import dev.hermeskotlin.core.connection.ConnectionState
 import dev.hermeskotlin.core.connection.GatewayConnection
 import dev.hermeskotlin.core.gateway.GatewayUrl
 import dev.hermeskotlin.core.network.createHttpClient
+import dev.hermeskotlin.core.phone.CallReason
 import dev.hermeskotlin.core.rpc.RpcTransport
 import dev.hermeskotlin.core.sessions.SessionsApi
 import dev.hermeskotlin.core.storage.InMemoryKeyValueStore
@@ -160,6 +161,32 @@ class LiveConversationTest {
         },
         PersistentCookiesStorage(InMemoryKeyValueStore()),
     )
+
+    @Test
+    fun aCallTheAgentPlacedOpensWithWhyOnceTheVoiceIsUp() = runTest {
+        val client = http("gpt-live", mutableListOf())
+        val socket = Socket()
+        val connection = GatewayConnection(AuthApi(client, PersistentCookiesStorage(InMemoryKeyValueStore())), { _, _ -> socket }, backgroundScope)
+        connection.start(gateway)
+        connection.state.first { it is ConnectionState.Connected }
+        val session = ChatSession(gateway, null, null, connection, SessionsApi(client), backgroundScope)
+        session.start()
+        val call = FakeCall()
+        val voice = VoiceController(AudioApi(client), NoRecorder, Silent, backgroundScope, backgroundScope) { call }
+
+        voice.startChat(session, gateway, "work", opener = CallReason("The deploy failed", "Build 42"))
+        voice.chat.first { it.live && it.phase == VoicePhase.Listening }
+        // Nothing is said before the voice is up: it would drop it.
+        assertTrue(call.said("session.commentary.append").isEmpty())
+        call.receive("""{"type":"session.started","session":{"id":"live-1"}}""")
+        call.sent.first { sent -> sent.any { it["type"]?.jsonPrimitive?.contentOrNull == "session.commentary.append" } }
+        val said = call.said("session.commentary.append").single()
+        assertTrue(said.contains("tell them why, briefly: The deploy failed"), said)
+        assertTrue(said.contains("Build 42"), said)
+        // Said by the voice, not a request: no Hermes turn starts.
+        assertTrue(socket.submits.value.isEmpty())
+        voice.stopChat()
+    }
 
     @Test
     fun aRequestTheVoiceHandsOverIsAHermesTurnAndItsReplyGoesBackToTheVoice() = runTest {

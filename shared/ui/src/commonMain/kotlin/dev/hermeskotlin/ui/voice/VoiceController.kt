@@ -8,6 +8,9 @@ import dev.hermeskotlin.core.chat.InputRequest
 import dev.hermeskotlin.core.gateway.GatewayUrl
 import dev.hermeskotlin.core.network.ApiResult
 import dev.hermeskotlin.core.network.errorMessage
+import dev.hermeskotlin.core.phone.CallReason
+import dev.hermeskotlin.core.phone.liveOpener
+import dev.hermeskotlin.core.phone.spokenOpener
 import dev.hermeskotlin.core.settings.DictationEngine
 import dev.hermeskotlin.core.voice.AudioApi
 import dev.hermeskotlin.core.voice.DeviceDictation
@@ -114,8 +117,17 @@ class VoiceController(
     /** Herald went out of sight since the chat started. */
     private var away = false
 
-    /** [pauseMs] is how long a quiet spell after speech has to last before it's sent. */
-    fun startChat(session: ChatSession, gateway: GatewayUrl, profile: String?, pauseMs: Long = VoiceActivity().silenceMs) {
+    /**
+     * [pauseMs] is how long a quiet spell after speech has to last before it's sent. [opener]: a call the agent placed,
+     * which the voice opens by saying why.
+     */
+    fun startChat(
+        session: ChatSession,
+        gateway: GatewayUrl,
+        profile: String?,
+        pauseMs: Long = VoiceActivity().silenceMs,
+        opener: CallReason? = null,
+    ) {
         if (chatJob?.isActive == true) return
         cancelDictation()
         _chat.value = VoiceChatState(VoicePhase.Listening)
@@ -132,8 +144,8 @@ class VoiceController(
         ) == true
         val job = scope.launch {
             try {
-                if (startLive(session, gateway, profile)) return@launch
-                converseChained(session, gateway, profile, pauseMs)
+                if (startLive(session, gateway, profile, opener)) return@launch
+                converseChained(session, gateway, profile, pauseMs, opener)
             } finally {
                 // Also a chat ended before it found its mode (End during the status check). An ending the person
                 // chose needs no explanation; one forced by an error keeps it. A newer chat keeps its own.
@@ -153,10 +165,15 @@ class VoiceController(
     }
 
     /** Desktop's chained voice chat: listen, send what you said, read the reply aloud, until it ends. */
-    private suspend fun converseChained(session: ChatSession, gateway: GatewayUrl, profile: String?, pauseMs: Long) {
+    private suspend fun converseChained(session: ChatSession, gateway: GatewayUrl, profile: String?, pauseMs: Long, opener: CallReason?) {
         appScope.launch { audio.ttsLease(gateway, active = true, profile) }
         var failures = 0
         try {
+            if (opener != null) {
+                val said = opener.spokenOpener()
+                _chat.update { it.copy(phase = VoicePhase.Speaking, caption = said, captionIsVoice = true) }
+                speak(said, gateway, profile)
+            }
             while (currentCoroutineContext().isActive) {
                 if (!converseOnce(session, gateway, profile, VoiceActivity(silenceMs = pauseMs))) break
                 failures = if (_chat.value.error == null) 0 else failures + 1
@@ -183,13 +200,13 @@ class VoiceController(
      * Runs a GPT-Live call when the profile picked it and it can start; false to fall back to the chained chat
      * (another mode, no OpenAI key on the gateway, an older gateway, or no WebRTC on this device).
      */
-    private suspend fun startLive(session: ChatSession, gateway: GatewayUrl, profile: String?): Boolean {
+    private suspend fun startLive(session: ChatSession, gateway: GatewayUrl, profile: String?, opener: CallReason?): Boolean {
         val calls = liveCalls ?: return false
         val status = audio.voiceLiveStatus(gateway, profile)
         if (status !is ApiResult.Success || !status.value.live) return false
         val call = calls.create() ?: return false
         _chat.value = VoiceChatState(VoicePhase.Connecting, live = true)
-        val conversation = LiveConversation(call, session, _chat, deviceLock)
+        val conversation = LiveConversation(call, session, _chat, deviceLock, opener?.liveOpener())
         live = conversation
         var error: String? = null
         try {

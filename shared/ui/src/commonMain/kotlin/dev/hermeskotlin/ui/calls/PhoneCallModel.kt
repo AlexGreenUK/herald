@@ -3,6 +3,8 @@ package dev.hermeskotlin.ui.calls
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.hermeskotlin.core.chat.InputRequest
+import dev.hermeskotlin.core.phone.AgentCall
+import dev.hermeskotlin.core.phone.CallOutcome
 import dev.hermeskotlin.core.settings.AppSettings
 import dev.hermeskotlin.core.settings.SettingsStore
 import dev.hermeskotlin.core.voice.AudioApi
@@ -21,6 +23,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -35,8 +38,17 @@ data class PhoneCallState(
     val notAsked: PickedUpCall? = null,
 )
 
-/** A call being picked up: the chat that rang, and the request it rang for. */
-data class PickedUpCall(val storedSessionId: String, val caller: String, val request: InputRequest)
+/**
+ * A call being picked up, by its ring's [id]: the chat that rang, and the request it rang for; or a call the agent
+ * placed ([agent]), in its chat when this gateway has it, else a new one.
+ */
+data class PickedUpCall(
+    val id: String,
+    val storedSessionId: String?,
+    val caller: String,
+    val request: InputRequest?,
+    val agent: AgentCall? = null,
+)
 
 /**
  * A call for an answer, picked up: Hermes on the line in the chat that rang, without the chat on screen. It's
@@ -80,18 +92,28 @@ class PhoneCallModel(
         // Counted from here, so the gateway link stays up and the chat's turns aren't notified over the call.
         relay.callStarted()
         counted = true
-        relay.callChat(call.storedSessionId)
+        call.storedSessionId?.let(relay::callChat)
         viewModelScope.launch {
             val chat = when (val found = relay.chatForCall(call.storedSessionId)) {
                 is CallChat.Failed -> {
                     _state.update { it?.copy(notAsked = call) }
+                    call.agent?.end(CallOutcome.Declined)
                     return@launch end(found.message)
                 }
                 is CallChat.Ready -> found
             }
-            if (_state.value?.ended == true) return@launch
+            if (_state.value?.ended == true) {
+                call.agent?.end(CallOutcome.Declined)
+                return@launch
+            }
+            // On the line: the agent hears it was answered, and the voice opens with why it called.
+            call.agent?.end(CallOutcome.Answered)
             val pause = (settings.settings.value ?: AppSettings()).voicePause
-            voice.startChat(chat.session, chat.gateway, chat.profile, pause.millis)
+            voice.startChat(chat.session, chat.gateway, chat.profile, pause.millis, opener = call.agent?.reason)
+            // A new chat gets its id with the first request: it's held from then on.
+            if (call.storedSessionId == null) {
+                launch { relay.callChat(chat.session.state.mapNotNull { it.storedSessionId }.first()) }
+            }
             launch { voice.chat.collect { v -> _state.update { it?.copy(voice = v) } } }
             voice.chat.first { it.phase == VoicePhase.Off }
             end(voice.chat.value.error)
