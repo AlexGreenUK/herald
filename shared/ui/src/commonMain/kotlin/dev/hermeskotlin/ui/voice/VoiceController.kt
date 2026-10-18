@@ -166,6 +166,8 @@ class VoiceController(
     private var dictationFinished = false
     private var live: LiveConversation? = null
     private var held = false
+    /** The room's quiet floor as the chat's last listen over the voice left it, for the next one. */
+    private var roomFloor = 0f
     /** Herald went out of sight since the chat started. */
     private var away = false
     /** The voice is sounding right now; someone talking over it has to be louder than its bleed. */
@@ -192,6 +194,7 @@ class VoiceController(
         stopReading()
         _chat.value = VoiceChatState(VoicePhase.Listening)
         stoppedByUser = false
+        roomFloor = 0f
         noSpeechStream = null
         // Held now, on the tap: Android only lets the microphone go to the background from the foreground.
         away = false
@@ -456,9 +459,10 @@ class VoiceController(
         val settings = bargeIn?.await() ?: return null
         if (!settings.enabled) return null
         _chat.update { it.copy(bargeIn = true) }
+        val detector = BargeIn(settings, activity.silenceMs, roomFloor)
         val heard = try {
             recorder.listenOver(
-                BargeIn(settings, activity.silenceMs),
+                detector,
                 playing = { playing.value },
                 onTrip = { tripped.complete(Unit) },
                 onLevel = { level -> _chat.update { if (it.phase == VoicePhase.Listening) it.copy(level = level) else it } },
@@ -467,6 +471,8 @@ class VoiceController(
             throw e
         } catch (_: Exception) {
             null
+        } finally {
+            if (detector.roomFloor > 0f) roomFloor = detector.roomFloor
         }
         // The microphone wouldn't listen over the voice: the reply goes on as without barge-in, and doesn't offer it.
         if (heard == null) _chat.update { it.copy(bargeIn = false) }

@@ -155,6 +155,31 @@ class BargeInTest {
         assertNotNull(mic.feed(bar * 1.15f, 1_000, playing = true))
     }
 
+    /** A listen that starts over the voice never heard the room quiet; its hum, once the voice holds, isn't someone. */
+    @Test
+    fun aRoomsHumOnceTheVoiceHoldsIsNotSomeone() {
+        val bargeIn = BargeIn()
+        val mic = Mic(bargeIn)
+        assertEquals(BargeIn.Step.Tripped, assertNotNull(mic.feed(0.6f, 2_000, playing = true)).second)
+        assertEquals(BargeIn.Step.Done, assertNotNull(mic.feed(0.045f, 2_000)).second)
+        assertFalse(bargeIn.spoke)
+    }
+
+    /** The room's floor carries over from the chat's earlier listen, so a louder room's hum isn't someone either. */
+    @Test
+    fun theRoomsFloorCarriesOverToTheNextListen() {
+        val first = BargeIn()
+        val quiet = Mic(first)
+        assertNull(quiet.feed(0.06f, 1_000))
+        assertTrue(first.roomFloor > 0.05f)
+
+        val next = BargeIn(roomFloor = first.roomFloor)
+        val mic = Mic(next)
+        assertEquals(BargeIn.Step.Tripped, assertNotNull(mic.feed(0.6f, 2_000, playing = true)).second)
+        assertEquals(BargeIn.Step.Done, assertNotNull(mic.feed(0.09f, 2_000)).second)
+        assertFalse(next.spoke)
+    }
+
     /** Echo can't come before the voice: someone already talking when it starts isn't learnt as its echo. */
     @Test
     fun someoneAlreadyTalkingAsTheVoiceStartsStillCutsIn() {

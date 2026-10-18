@@ -43,7 +43,12 @@ data class BargeInSettings(
  * The levels are the recorder's (RMS scaled so 1.0 is loud speech). They sit below Desktop's: the phone's
  * call microphone is quieter than a browser's, and its echo cancelling takes most of the voice out already.
  */
-class BargeIn(private val settings: BargeInSettings = BargeInSettings(), private val silenceMs: Long = 1_250) {
+class BargeIn(
+    private val settings: BargeInSettings = BargeInSettings(),
+    private val silenceMs: Long = 1_250,
+    /** The room's quiet floor as an earlier listen in the same chat left it ([roomFloor]); 0 when none has. */
+    roomFloor: Float = 0f,
+) {
     private val scale = settings.multiplier?.takeIf { it.isFinite() && it > 0 }?.let { it / DEFAULT_MULTIPLIER } ?: 1.0
     private val floorMultiplier = (FLOOR_MULTIPLIER * scale).toFloat()
     private val playbackMin = (PLAYBACK_MIN_LEVEL * scale).toFloat()
@@ -55,6 +60,14 @@ class BargeIn(private val settings: BargeInSettings = BargeInSettings(), private
 
     private val floorSamples = ArrayDeque<Float>()
     private var floor = 0f
+
+    init {
+        // A listen that starts over the voice, as after it held and went on, can't measure the room itself.
+        if (roomFloor > 0f) addFloor(roomFloor)
+    }
+
+    /** The room's quiet floor so far, for the next listen in the chat; 0 when it hasn't heard the room quiet. */
+    val roomFloor: Float get() = floor
     private val bleedSamples = ArrayDeque<Float>()
     private var bleed = 0f
     private var calibratedSince = -1L
@@ -140,9 +153,12 @@ class BargeIn(private val settings: BargeInSettings = BargeInSettings(), private
         return last.size >= 3 && last.count { it.second } >= last.size * SUSTAINED_MAJORITY
     }
 
-    /** After the trip the voice holds, so a plain pause ends the utterance. */
+    /**
+     * After the trip the voice holds, so a plain pause ends the utterance. Someone went on talking only as loud as
+     * could have cut in over the voice: the room's hum isn't them.
+     */
     private fun endpoint(level: Float, nowMs: Long): Step {
-        if (nowMs - trippedAt >= HOLD_SETTLE_MS && level >= quietBar() && ++spokeFrames >= SPOKE_FRAMES) spoke = true
+        if (nowMs - trippedAt >= HOLD_SETTLE_MS && level >= playingBar() && ++spokeFrames >= SPOKE_FRAMES) spoke = true
         if (level >= max(MIN_TRIGGER_LEVEL * QUIET_FRACTION, floor * QUIET_OVER_FLOOR)) quietSince = -1
         else if (quietSince < 0) quietSince = nowMs
         // Nobody went on once the voice held: it was the phone hearing itself, or a knock.
