@@ -65,6 +65,24 @@ class UpdateCheckerTest {
     }
 
     @Test
+    fun theWatchAppsApkIsNeverOffered() {
+        // It sorts after every phone APK, so versions up to 0.5.1 still take the universal one first.
+        val names = listOf("herald-0.9.0.apk", "herald-0.9.0_arm64-v8a.apk", "herald-wear-0.9.0.apk")
+        assertEquals(names, names.sorted())
+        fun release(vararg assets: Pair<String, String>) = HermesJson.parseToJsonElement(
+            """{"tag_name":"v0.9.0","html_url":"https://github.com/o/r/releases/tag/v0.9.0","assets":[""" +
+                assets.joinToString(",") { (name, url) -> """{"name":"$name","browser_download_url":"https://x/$url"}""" } + "]}",
+        ) as JsonObject
+
+        val full = release("herald-0.9.0.apk" to "universal.apk", "herald-0.9.0_arm64-v8a.apk" to "arm64.apk", "herald-wear-0.9.0.apk" to "wear.apk")
+        assertEquals("https://x/universal.apk", parseRelease(full, listOf("x86"))?.apkUrl)
+        assertEquals("https://x/arm64.apk", parseRelease(full, listOf("arm64-v8a"))?.apkUrl)
+        // Only the watch's APK: the release page, not an APK the phone can't use.
+        val wearOnly = release("herald-wear-0.9.0.apk" to "wear.apk")
+        assertEquals(null, parseRelease(wearOnly, listOf("arm64-v8a"))?.apkUrl)
+    }
+
+    @Test
     fun aNewerReleaseIsOfferedUntilDismissed() = runTest {
         val checker = checker()
         assertEquals("0.3.0", checker.check("o/r", "0.2.0")?.version)

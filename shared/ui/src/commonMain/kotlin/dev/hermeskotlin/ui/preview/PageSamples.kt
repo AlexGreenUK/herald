@@ -1,6 +1,12 @@
 package dev.hermeskotlin.ui.preview
 
 import dev.hermeskotlin.core.capabilities.Skill
+import dev.hermeskotlin.core.config.ConfigCatalog
+import dev.hermeskotlin.core.config.ConfigSchema
+import dev.hermeskotlin.ui.sessions.ConfigPlace
+import dev.hermeskotlin.ui.sessions.ConfigUiState
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
 import dev.hermeskotlin.core.chat.BackgroundProcess
 import dev.hermeskotlin.core.chat.Checkpoint
 import dev.hermeskotlin.core.chat.CheckpointDiff
@@ -104,6 +110,57 @@ internal object PageSamples {
             ),
         ),
     )
+
+    /** Hermes's settings on a sample gateway, open at [place]: the sections, or one of them by id. */
+    fun config(place: String? = null): ConfigUiState {
+        val schema = Json { ignoreUnknownKeys = true }.decodeFromString<ConfigSchema>(CONFIG_SCHEMA)
+        return ConfigUiState(
+            schema = schema,
+            values = Json.parseToJsonElement(CONFIG_VALUES).jsonObject,
+            view = place?.let { id -> ConfigPlace.Section(ConfigCatalog.sections.first { it.id == id }) } ?: ConfigPlace.Overview,
+            saving = setOf("voice.gpt_live.voice").takeIf { place == "voice" }.orEmpty(),
+        )
+    }
+
+    private val CONFIG_SCHEMA = """{"category_order":["general","agent","terminal","display","delegation","memory","compression","security","voice","tts","stt"],"fields":{
+        "model":{"type":"string","description":"Default model","category":"general"},
+        "model_context_length":{"type":"number","description":"Context window override","category":"general"},
+        "fallback_providers":{"type":"list","description":"Fallback Providers","category":"general"},
+        "toolsets":{"type":"list","description":"Toolsets","category":"general"},
+        "timezone":{"type":"select","description":"IANA timezone","category":"general","options":["America/New_York","Europe/London","Asia/Tokyo"],"searchable":true,"clearable":true},
+        "display.personality":{"type":"string","description":"Personality","category":"display"},
+        "display.show_reasoning":{"type":"boolean","description":"Show reasoning","category":"display"},
+        "approvals.mode":{"type":"select","description":"Dangerous command approval mode","category":"security","options":["manual","smart","off"]},
+        "approvals.timeout":{"type":"number","description":"Approvals → Timeout","category":"security"},
+        "command_allowlist":{"type":"list","description":"Command Allowlist","category":"general"},
+        "security.redact_secrets":{"type":"boolean","description":"Security → Redact Secrets","category":"security"},
+        "checkpoints.enabled":{"type":"boolean","description":"Checkpoints → Enabled","category":"agent"},
+        "agent.max_turns":{"type":"number","description":"Agent → Max Turns","category":"agent"},
+        "memory.memory_enabled":{"type":"boolean","description":"Memory → Memory Enabled","category":"memory"},
+        "memory.user_profile_enabled":{"type":"boolean","description":"Memory → User Profile Enabled","category":"memory"},
+        "memory.provider":{"type":"select","description":"Memory provider plugin","category":"memory","options":["","hindsight","honcho"]},
+        "compression.enabled":{"type":"boolean","description":"Compression → Enabled","category":"compression"},
+        "compression.threshold":{"type":"number","description":"Compression → Threshold","category":"compression"},
+        "voice.voice_chat_mode":{"type":"string","description":"Voice chat mode","category":"voice"},
+        "voice.gpt_live.voice":{"type":"string","description":"GPT-Live voice","category":"voice"},
+        "voice.auto_tts":{"type":"boolean","description":"Voice → Auto Tts","category":"voice"},
+        "tts.provider":{"type":"select","description":"Text-to-speech provider","category":"tts","options":["edge","elevenlabs","openai","xai"]},
+        "tts.openai.voice":{"type":"string","description":"OpenAI voice","category":"tts"},
+        "tts.openai.model":{"type":"string","description":"OpenAI model","category":"tts"},
+        "stt.enabled":{"type":"boolean","description":"Stt → Enabled","category":"stt"},
+        "stt.local.model":{"type":"select","description":"Local faster-whisper model size","category":"stt","options":["base","small","medium"]},
+        "delegation.max_concurrent_children":{"type":"number","description":"Delegation → Max Concurrent Children","category":"delegation"},
+        "terminal.backend":{"type":"select","description":"Terminal execution backend","category":"terminal","options":["local","docker","ssh"]}}}"""
+
+    private val CONFIG_VALUES = """{"model":"kimi-k3","model_context_length":0,
+        "fallback_providers":[{"provider":"opencode-go","model":"glm-5.3"},{"provider":"openrouter","model":"google/gemini-3-flash"}],
+        "toolsets":["hermes-cli"],"timezone":"America/New_York","display":{"personality":"","show_reasoning":false},
+        "approvals":{"mode":"smart","timeout":120},"command_allowlist":["git status","ls"],"security":{"redact_secrets":true},
+        "checkpoints":{"enabled":true},"agent":{"max_turns":90},
+        "memory":{"memory_enabled":true,"user_profile_enabled":true,"provider":"hindsight"},"compression":{"enabled":true,"threshold":0.5},
+        "voice":{"voice_chat_mode":"gpt-live","gpt_live":{"voice":"willow"},"auto_tts":false},
+        "tts":{"provider":"openai","openai":{"voice":"nova","model":"gpt-4o-mini-tts"}},"stt":{"enabled":true,"local":{"model":"small"}},
+        "delegation":{"max_concurrent_children":3},"terminal":{"backend":"local"}}"""
 
     val deliveryTargets = listOf(
         DeliveryTarget("local", "Local (save only)"),

@@ -22,13 +22,16 @@ import androidx.core.content.edit
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.lifecycleScope
 import androidx.core.content.pm.ShortcutManagerCompat
+import dev.hermeskotlin.android.notify.BotNotifier
 import dev.hermeskotlin.android.notify.BotShortcuts
 import dev.hermeskotlin.android.notify.ChatNotifications
 import dev.hermeskotlin.android.phone.PhoneConfirmations
+import dev.hermeskotlin.ui.settings.AppIconRestart
 import dev.hermeskotlin.ui.settings.PhoneQuestion
 import dev.hermeskotlin.core.chat.AppLink
 import dev.hermeskotlin.core.chat.ChatHost
 import dev.hermeskotlin.core.chat.ChatLinks
+import dev.hermeskotlin.core.inbox.InboxLinks
 import dev.hermeskotlin.core.rooms.RoomLinks
 import dev.hermeskotlin.core.chat.ComposeDraft
 import dev.hermeskotlin.core.chat.SharedContent
@@ -50,8 +53,12 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import org.koin.android.ext.android.inject
 
-// A FragmentActivity because BiometricPrompt (App lock) needs one.
-class MainActivity : FragmentActivity() {
+/**
+ * The app. The launcher doesn't start it by this name but through one alias per app icon (AppIcons), and the
+ * default icon's alias is called MainActivity, this activity's old name, so home-screen icons from before stay.
+ * A FragmentActivity because BiometricPrompt (App lock) needs one.
+ */
+class HeraldActivity : FragmentActivity() {
 
     // The last theme shown, read synchronously so the window behind the first frame already matches it.
     private val windowPrefs by lazy { getSharedPreferences("window", MODE_PRIVATE) }
@@ -60,8 +67,10 @@ class MainActivity : FragmentActivity() {
     private val connection: GatewayConnection by inject()
     private val links: ChatLinks by inject()
     private val roomLinks: RoomLinks by inject()
+    private val inboxLinks: InboxLinks by inject()
     private val settings: SettingsStore by inject()
     private val appScope: CoroutineScope by inject()
+    private val bots: BotNotifier by inject()
     private val notifications: ChatNotifications by inject()
     private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
 
@@ -81,7 +90,8 @@ class MainActivity : FragmentActivity() {
         if (windowPrefs.contains(KEY_DARK)) applyWindowTheme(windowPrefs.getBoolean(KEY_DARK, false))
         // The stored setting is read asynchronously; this copy decides the very first frame.
         val lockOn = windowPrefs.getBoolean(KEY_APP_LOCK, false)
-        appLock.onLaunch(lockOn, fresh = savedInstanceState == null)
+        // Switching the app icon restarts Herald in a new task: that's no fresh open, so it stays unlocked.
+        appLock.onLaunch(lockOn, fresh = savedInstanceState == null && !AppIconRestart.take())
         lockGate.hideFromRecents(lockOn)
         promptOnResume = appLock.locked.value
         followAppLockSetting()
@@ -89,6 +99,7 @@ class MainActivity : FragmentActivity() {
         if (savedInstanceState == null) handleIntent(intent)
         val browser = InAppBrowser(this) { windowPrefs.getBoolean(KEY_DARK, false) }
         askPhoneQuestionsInApp()
+        bots.republishIfIconChanged()
         setContent {
             val locked by appLock.locked.collectAsState()
             val asked by PhoneConfirmations.asking.collectAsState()
@@ -162,7 +173,9 @@ class MainActivity : FragmentActivity() {
         val sessionId = intent.getStringExtra(ChatNotifications.EXTRA_OPEN_SESSION)
         val title = intent.getStringExtra(ChatNotifications.EXTRA_OPEN_TITLE)
         val link = intent.data?.let { AppLink.parse(it.toString()) }
+        val inbox = intent.getStringExtra(ChatNotifications.EXTRA_OPEN_INBOX)
         when {
+            inbox != null -> inboxLinks.open(inbox)
             room != null -> roomLinks.open(room, title)
             bot != null -> links.openBot(bot, title, sessionId)
             sessionId != null -> links.open(sessionId, title)
@@ -173,6 +186,7 @@ class MainActivity : FragmentActivity() {
         intent.removeExtra(ChatNotifications.EXTRA_OPEN_SESSION)
         intent.removeExtra(ChatNotifications.EXTRA_OPEN_BOT)
         intent.removeExtra(ChatNotifications.EXTRA_OPEN_ROOM)
+        intent.removeExtra(ChatNotifications.EXTRA_OPEN_INBOX)
         intent.data = null
     }
 

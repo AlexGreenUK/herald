@@ -25,6 +25,14 @@ data class PushMessage(
     /** A [PHONE_CALL]'s reason and, maybe, its details. */
     val reason: String? = null,
     val details: String? = null,
+    /** A [CRON_RUN]'s job id, its run (the output file's name, `YYYY-MM-DD_HH-MM-SS`), and how it went. */
+    val job: String? = null,
+    val run: String? = null,
+    val status: String? = null,
+    /** A [CRON_RUN] the user wants a notification for; otherwise it only goes into the Inbox. */
+    val notify: Boolean = false,
+    /** When a [CRON_RUN] finished, unix seconds. */
+    val at: Long? = null,
 ) {
     companion object {
         // The types the phone acts on. The others in docs/push-protocol.md (approval, and the
@@ -40,6 +48,9 @@ data class PushMessage(
          * phone rings even when it can't reach the gateway. The answer goes back over the socket.
          */
         const val PHONE_CALL = "phone_call"
+
+        /** A cron job the user follows finished a run ([job], [run], [status], [text] its start). */
+        const val CRON_RUN = "cron_run"
 
         /** Gateway → phone messages are news; older than a day they're dropped. */
         const val MAX_AGE_G2P_SECONDS = 24 * 3600L

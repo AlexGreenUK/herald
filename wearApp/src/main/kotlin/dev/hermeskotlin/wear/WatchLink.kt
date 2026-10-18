@@ -6,7 +6,6 @@ import androidx.wear.tiles.TileService
 import com.google.android.gms.wearable.CapabilityClient
 import com.google.android.gms.wearable.Wearable
 import dev.hermeskotlin.wearlink.CALL_EVENT_TYPES
-import dev.hermeskotlin.wearlink.CALL_GAP_MS
 import dev.hermeskotlin.wearlink.InOrder
 import dev.hermeskotlin.wearlink.CallEnd
 import dev.hermeskotlin.wearlink.CallEvents
@@ -15,6 +14,7 @@ import dev.hermeskotlin.wearlink.CallStart
 import dev.hermeskotlin.wearlink.CallUpdate
 import dev.hermeskotlin.wearlink.ChatList
 import dev.hermeskotlin.wearlink.PhoneStatus
+import dev.hermeskotlin.wearlink.PhoneStatusRequest
 import dev.hermeskotlin.wearlink.RecordedAsk
 import dev.hermeskotlin.wearlink.ReplyPhase
 import dev.hermeskotlin.wearlink.ReplySpeech
@@ -374,12 +374,7 @@ class WatchLink(
         if (events.callId != now.id || !now.active) return
         val order = callSends
         order.add(events.seq, events)
-        if (order.waiting && callSendGap?.isActive != true) {
-            callSendGap = scope.launch(main) {
-                delay(CALL_GAP_MS)
-                order.skipGap()
-            }
-        }
+        if (order.waiting && callSendGap?.isActive != true) callSendGap = scope.launch(main) { order.skipGaps() }
     }
 
     fun newChat() {
@@ -406,7 +401,7 @@ class WatchLink(
     }
 
     fun refreshPhone() {
-        scope.launch { send(WearPaths.STATUS, ByteArray(0)) }
+        scope.launch { send(WearPaths.STATUS, WearJson.encode(PhoneStatusRequest(accentRevision = store.accent.value?.revision))) }
     }
 
     /** A message from the phone, from [WatchListenerService] or the fake phone. */
@@ -425,7 +420,9 @@ class WatchLink(
             }
             WearPaths.RING_END -> WearJson.decode<RingEnd>(data)?.let { rings.stop(it.requestId) }
             WearPaths.STATUS -> WearJson.decode<PhoneStatus>(data)?.let {
-                _liveVoice.value = it.liveVoice
+                // The tile draws its mic in the accent too.
+                if (it.accent?.let(store::setAccent) == true) TileService.getUpdater(context).requestUpdate(AskTileService::class.java)
+                it.liveVoice?.let { live -> _liveVoice.value = live }
                 _phone.value = when {
                     !it.signedIn -> PhoneState.SignedOut
                     it.connected -> PhoneState.Ready

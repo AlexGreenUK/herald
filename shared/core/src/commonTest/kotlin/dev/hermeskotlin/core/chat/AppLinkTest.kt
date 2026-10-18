@@ -7,6 +7,13 @@ import kotlin.test.assertNull
 class AppLinkTest {
 
     @Test
+    fun aVoiceChatLinkIsRecognized() {
+        assertEquals(AppLink.VoiceChat, AppLink.parse("hermes://voice-chat"))
+        assertEquals(AppLink.VoiceChat, AppLink.parse("HERMES://Voice-Chat/?from=launcher#top"))
+        assertNull(AppLink.parse("hermes://voice-chat/extra"))
+    }
+
+    @Test
     fun readsEachKindOfLink() {
         assertEquals(AppLink.NewChat, AppLink.parse("hermes://new-chat"))
         assertEquals(AppLink.NewChatVoice, AppLink.parse("hermes://new-chat-voice"))

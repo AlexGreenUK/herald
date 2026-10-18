@@ -10,6 +10,7 @@ import dev.hermeskotlin.core.cache.PlainSealer
 import kotlin.coroutines.EmptyCoroutineContext
 import dev.hermeskotlin.core.chat.ChatHost
 import dev.hermeskotlin.core.chat.ChatLinks
+import dev.hermeskotlin.core.sessions.SeenStore
 import dev.hermeskotlin.core.chat.LastChat
 import dev.hermeskotlin.core.chat.LastChatStore
 import dev.hermeskotlin.core.connection.GatewayConnection
@@ -94,8 +95,11 @@ class AppViewModelTest {
         val connection = GatewayConnection(auth, openSocket = { _, _ -> error("no socket in tests") }, scope = backgroundScope)
         val host = ChatHost(connection, SessionsApi(client), backgroundScope)
         val push = PushSetup(PushApi(connection), NoPushKeys, connection, gateways, SettingsStore(store, backgroundScope), backgroundScope) { "Test" }
-        return AppViewModel(gateways, auth, connection, lastChats, host, ProfileStore(store), ChatLinks(), BotChats(NoBotChats), push, access, cache)
+        return AppViewModel(gateways, auth, connection, lastChats, host, ProfileStore(store), links, BotChats(NoBotChats), push, access, cache, seen)
     }
+
+    private val links = ChatLinks()
+    private val seen = SeenStore(store) { 1_000.0 }
 
     // Push was never set up and no bot is opened in these tests.
     private object NoPushKeys : PushKeys {
@@ -354,5 +358,50 @@ class AppViewModelTest {
 
         assertNull(cache.savedList(home.gatewayUrl, null, SessionListFilter.Recent))
         assertNotNull(cache.savedList(other.gatewayUrl, null, SessionListFilter.Recent))
+    }
+
+    @Test
+    fun aChatOpenedFromANotificationStartsWhereItWasLastRead() = runTest {
+        gateways.save(home)
+        signedIn(home)
+        val app = viewModel()
+        app.awaitChat(home)
+        seen.markSeen(home.gatewayUrl, SessionSummary("s9", lastActive = 1_200.0))
+
+        links.open("s9", "Report")
+        val chat = app.route.first { it is Route.Chat && it.target.storedSessionId == "s9" } as Route.Chat
+
+        // The same last look the chat list would give, so the "New messages" line goes in the same place.
+        assertEquals(1_200.0, chat.target.readUpTo)
+    }
+
+    @Test
+    fun aChatNeverOpenedOnThisPhoneCountsFromWhenTrackingBegan() = runTest {
+        gateways.save(home)
+        signedIn(home)
+        val app = viewModel()
+        app.awaitChat(home)
+
+        links.open("s7", "Report")
+        val chat = app.route.first { it is Route.Chat && it.target.storedSessionId == "s7" } as Route.Chat
+
+        assertEquals(1_000.0, chat.target.readUpTo)
+    }
+
+    @Test
+    fun aNotificationForTheChatLeftOpenPlacesTheLineInIt() = runTest {
+        gateways.save(home)
+        signedIn(home)
+        lastChats.set(home.gatewayUrl, LastChat("s9", "Report"))
+        val app = viewModel()
+        assertEquals("s9", app.awaitChat(home).target.storedSessionId)
+        // The user left the app on this chat; a reply came in and its notification was tapped.
+        seen.markLooked(home.gatewayUrl, "s9", at = 1_300.0)
+
+        links.open("s9", "Report")
+        val chat = app.route.first { it is Route.Chat && it.target.readUpTo != null } as Route.Chat
+
+        assertEquals("s9", chat.target.storedSessionId)
+        assertEquals(1_300.0, chat.target.readUpTo)
     }
 }
