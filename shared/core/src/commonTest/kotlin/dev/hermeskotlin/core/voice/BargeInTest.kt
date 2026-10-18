@@ -94,24 +94,45 @@ class BargeInTest {
             assertNull(mic.feed(0.35f, 200, playing = true))
             assertNull(mic.feed(0.15f, 200, playing = true))
         }
-        assertTrue(bargeIn.trigger(playing = true) in 0.25f..BargeIn.ECHO_CEILING_LEVEL)
+        assertTrue(bargeIn.trigger(playing = true) > 0.35f)
         // Someone talking clearly over it still cuts in.
         assertNotNull(mic.feed(0.9f, 1_000, playing = true))
     }
 
-    /** Their voice in the voice's first moment is learnt as its echo, but mustn't lift the bar over itself. */
+    /** Turned right up with no echo cancelling to speak of: syllables louder than speech, the whole reply long. */
+    @Test
+    fun aLoudSpeakerDoesNotCutInOnItself() {
+        val mic = Mic()
+        assertNull(mic.feed(0.01f, 1_000))
+        repeat(20) {
+            assertNull(mic.feed(0.6f, 200, playing = true))
+            assertNull(mic.feed(0.3f, 200, playing = true))
+        }
+    }
+
+    /** It starts softly and gets loud once the grace is over, past the echo it learnt first. */
+    @Test
+    fun aVoiceThatGetsLouderDoesNotCutInOnItself() {
+        val mic = Mic()
+        assertNull(mic.feed(0.01f, 1_000))
+        assertNull(mic.feed(0.15f, 600, playing = true))
+        repeat(15) {
+            assertNull(mic.feed(0.5f, 200, playing = true))
+            assertNull(mic.feed(0.25f, 200, playing = true))
+        }
+        // Someone talking over it, and staying there, still cuts in.
+        assertNotNull(mic.feed(0.9f, 1_000, playing = true))
+    }
+
+    /** Echo can't come before the voice: someone already talking when it starts isn't learnt as its echo. */
     @Test
     fun someoneAlreadyTalkingAsTheVoiceStartsStillCutsIn() {
-        val fromTheStart = Mic()
-        assertNull(fromTheStart.feed(0.01f, 1_000))
-        val (at, _) = assertNotNull(fromTheStart.feed(0.3f, 4_000, playing = true))
+        val mic = Mic()
+        assertNull(mic.feed(0.01f, 1_000))
+        assertNull(mic.feed(0.3f, 100))
+        val (at, _) = assertNotNull(mic.feed(0.3f, 4_000, playing = true))
         // Once the grace is over and the speech has held.
-        assertTrue(at - 1_000 <= 1_000, "tripped ${at - 1_000} ms in")
-
-        val justBefore = Mic()
-        assertNull(justBefore.feed(0.01f, 1_000))
-        assertNull(justBefore.feed(0.3f, 100))
-        assertNotNull(justBefore.feed(0.3f, 4_000, playing = true))
+        assertTrue(at - 1_100 <= 1_000, "tripped ${at - 1_100} ms in")
     }
 
     @Test

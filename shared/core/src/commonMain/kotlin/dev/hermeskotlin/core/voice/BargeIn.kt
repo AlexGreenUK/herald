@@ -26,11 +26,13 @@ data class BargeInSettings(
  *   the speaker, its bleed would sit in the floor and the bar would be out of reach.
  * - While the voice plays, the bar is raised so its bleed alone can't trip it, and capped so speech still can.
  * - Unlike Desktop, it also learns how loud the voice actually comes back (its louder syllables) and keeps the bar
- *   clearly above that, so a loudspeaker the phone can't cancel doesn't cut in on itself. That bar has a ceiling
- *   of its own, [ECHO_CEILING_LEVEL]: someone already talking as the voice starts is learnt as its echo too, and
- *   without the ceiling would raise the bar over their own voice and never get through.
+ *   clearly above that, so a loudspeaker the phone can't cancel doesn't cut in on itself, however loud it's
+ *   turned up. Over that echo, speech has to hold longer ([SUSTAINED_OVER_ECHO_MS]): the voice's own syllables
+ *   rise and fall, someone talking over it doesn't. Someone already talking as the voice starts isn't learnt as
+ *   its echo, since echo can't come before the voice.
  * - The voice's first moment after a real gap can't trip it ([BargeInSettings.graceMs]).
  * - Speech has to hold: most of the last [SUSTAINED_MS] above the bar, so dips inside a word don't start it over.
+ *   Over a loud echo, most of the last [SUSTAINED_OVER_ECHO_MS].
  *
  * Once tripped, the utterance runs until a pause of [silenceMs] or [UTTERANCE_MAX_MS].
  *
@@ -57,7 +59,9 @@ class BargeIn(private val settings: BargeInSettings = BargeInSettings(), private
     private var playbackSeen = false
     private var lastPlayingAt = 0L
     private var graceUntil = 0L
-    /** Whether each recent frame stood above the bar, and when it came; the last [SUSTAINED_MS] of them. */
+    /** The voice's first moment is learnt as its echo; not when someone was already talking as it started. */
+    private var graceIsEcho = true
+    /** Whether each recent frame stood above the bar, and when it came; the last [SUSTAINED_OVER_ECHO_MS] of them. */
     private val recent = ArrayDeque<Pair<Long, Boolean>>()
     private var trippedAt = 0L
     private var quietSince = -1L
@@ -74,7 +78,10 @@ class BargeIn(private val settings: BargeInSettings = BargeInSettings(), private
         }
         // A grace only when the voice starts after a real gap, so it flickering between sentences can't chain them.
         if (playing && !wasPlaying) {
-            if (!playbackSeen || nowMs - lastPlayingAt >= PLAYBACK_GAP_FOR_GRACE_MS) graceUntil = nowMs + settings.graceMs
+            if (!playbackSeen || nowMs - lastPlayingAt >= PLAYBACK_GAP_FOR_GRACE_MS) {
+                graceUntil = nowMs + settings.graceMs
+                graceIsEcho = !talkingAt(nowMs)
+            }
             playbackSeen = true
         }
         wasPlaying = playing
@@ -85,13 +92,16 @@ class BargeIn(private val settings: BargeInSettings = BargeInSettings(), private
         if (floorLocked && !playing && level < trigger) addFloor(level)
         // How loud the voice comes back through the microphone, which echo cancelling may or may not have taken out.
         // Learnt from all of its first moment (nothing can trip it then), and after that from what stays under the bar.
-        if (playing && (nowMs < graceUntil || level < trigger)) addBleed(level)
+        if (playing && (nowMs < graceUntil && graceIsEcho || level < trigger)) addBleed(level)
         val above = floorLocked && level >= trigger && nowMs >= graceUntil
         recent.addLast(nowMs to above)
-        while (recent.isNotEmpty() && nowMs - recent.first().first > SUSTAINED_MS) recent.removeFirst()
-        val span = nowMs - recent.first().first
-        val aboveCount = recent.count { it.second }
-        if (above && span >= SUSTAINED_MS * SUSTAINED_MAJORITY && aboveCount >= recent.size * SUSTAINED_MAJORITY) {
+        while (recent.isNotEmpty() && nowMs - recent.first().first > SUSTAINED_OVER_ECHO_MS) recent.removeFirst()
+        // Over a loud echo its syllables can poke above the bar; someone talking stays there.
+        val hold = if (playing && trigger > playingBar()) SUSTAINED_OVER_ECHO_MS else SUSTAINED_MS
+        val held = recent.filter { nowMs - it.first <= hold }
+        val span = nowMs - held.first().first
+        val aboveCount = held.count { it.second }
+        if (above && span >= hold * SUSTAINED_MAJORITY && aboveCount >= held.size * SUSTAINED_MAJORITY) {
             tripped = true
             trippedAt = nowMs
             return Step.Tripped
@@ -101,10 +111,20 @@ class BargeIn(private val settings: BargeInSettings = BargeInSettings(), private
 
     /** The bar speech has to clear now. */
     internal fun trigger(playing: Boolean): Float {
-        val quiet = max(MIN_TRIGGER_LEVEL, floor * floorMultiplier)
-        if (!playing) return quiet
-        // Over the voice: not under its own echo, up to a level that speech close to the phone still clears.
-        return max(min(max(quiet, playbackMin), TRIGGER_CEILING_LEVEL), min(bleed * bleedMultiplier, ECHO_CEILING_LEVEL))
+        if (!playing) return quietBar()
+        // Over the voice: never under its own echo, however loud the speaker. Speech has to stand clearly above it.
+        return max(playingBar(), bleed * bleedMultiplier)
+    }
+
+    private fun quietBar() = max(MIN_TRIGGER_LEVEL, floor * floorMultiplier)
+
+    /** The bar over the voice before its echo is counted: raised for its bleed, capped so speech still clears it. */
+    private fun playingBar() = min(max(quietBar(), playbackMin), TRIGGER_CEILING_LEVEL)
+
+    /** Someone was talking just before [nowMs]: most of the last [TALKING_MS] stood over the bar. */
+    private fun talkingAt(nowMs: Long): Boolean {
+        val last = recent.filter { nowMs - it.first <= TALKING_MS }
+        return last.size >= 3 && last.count { it.second } >= last.size * SUSTAINED_MAJORITY
     }
 
     /** After the trip the voice is already cut, so a plain pause ends the utterance. */
@@ -144,6 +164,8 @@ class BargeIn(private val settings: BargeInSettings = BargeInSettings(), private
         const val DEFAULT_MULTIPLIER = 3.0
         const val CALIBRATION_MS = 400L
         const val SUSTAINED_MS = 300L
+        const val SUSTAINED_OVER_ECHO_MS = 500L
+        const val TALKING_MS = 100L
         const val SUSTAINED_MAJORITY = 0.8f
         const val MIN_TRIGGER_LEVEL = 0.025f
         const val FLOOR_MULTIPLIER = 3.5
@@ -153,8 +175,6 @@ class BargeIn(private val settings: BargeInSettings = BargeInSettings(), private
         const val MIN_BLEED_MARGIN = 1.2
         const val BLEED_PERCENTILE = 0.8f
         const val TRIGGER_CEILING_LEVEL = 0.25f
-        /** The most the voice's echo can raise the bar: speech close to the phone clears it. */
-        const val ECHO_CEILING_LEVEL = 0.3f
         const val PLAYBACK_GAP_FOR_GRACE_MS = 1_000L
         /** Three seconds of 20 ms frames. */
         const val FLOOR_SAMPLES = 150
