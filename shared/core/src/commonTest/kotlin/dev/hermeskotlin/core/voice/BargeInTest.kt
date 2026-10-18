@@ -124,6 +124,37 @@ class BargeInTest {
         assertNotNull(mic.feed(0.9f, 1_000, playing = true))
     }
 
+    /** However loud the speaker, the bar stays where someone talking can reach it. */
+    @Test
+    fun aVeryLoudEchoLeavesTheBarInReach() {
+        val bargeIn = BargeIn()
+        val mic = Mic(bargeIn)
+        assertNull(mic.feed(0.01f, 1_000))
+        repeat(20) {
+            assertNull(mic.feed(0.8f, 200, playing = true))
+            assertNull(mic.feed(0.3f, 200, playing = true))
+        }
+        assertEquals(BargeIn.ECHO_BAR_CEILING_LEVEL, bargeIn.trigger(playing = true))
+        assertNotNull(mic.feed(0.5f, 1_000, playing = true))
+    }
+
+    /** Someone talking a little under the bar isn't learnt as the echo, so it doesn't climb away as they try. */
+    @Test
+    fun talkingUnderTheBarDoesNotRaiseIt() {
+        val bargeIn = BargeIn()
+        val mic = Mic(bargeIn)
+        assertNull(mic.feed(0.01f, 1_000))
+        repeat(5) {
+            assertNull(mic.feed(0.15f, 200, playing = true))
+            assertNull(mic.feed(0.07f, 200, playing = true))
+        }
+        val bar = bargeIn.trigger(playing = true)
+        assertNull(mic.feed(bar * 0.9f, 2_000, playing = true))
+        assertEquals(bar, bargeIn.trigger(playing = true))
+        // Then a little louder, and it cuts in.
+        assertNotNull(mic.feed(bar * 1.15f, 1_000, playing = true))
+    }
+
     /** Echo can't come before the voice: someone already talking when it starts isn't learnt as its echo. */
     @Test
     fun someoneAlreadyTalkingAsTheVoiceStartsStillCutsIn() {

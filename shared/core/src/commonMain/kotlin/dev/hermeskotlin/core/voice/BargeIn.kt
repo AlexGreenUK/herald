@@ -29,7 +29,9 @@ data class BargeInSettings(
  *   clearly above that, so a loudspeaker the phone can't cancel doesn't cut in on itself, however loud it's
  *   turned up. Over that echo, speech has to hold longer ([SUSTAINED_OVER_ECHO_MS]): the voice's own syllables
  *   rise and fall, someone talking over it doesn't. Someone already talking as the voice starts isn't learnt as
- *   its echo, since echo can't come before the voice.
+ *   its echo, since echo can't come before the voice; nor is someone talking a little under the bar, which would
+ *   raise it out of their reach the longer they tried. However loud the echo, the bar stays where speech can reach
+ *   it ([ECHO_BAR_CEILING_LEVEL]): an echo that trips it only holds the voice for a moment.
  * - The voice's first moment after a real gap can't trip it ([BargeInSettings.graceMs]).
  * - Speech has to hold: most of the last [SUSTAINED_MS] above the bar, so dips inside a word don't start it over.
  *   Over a loud echo, most of the last [SUSTAINED_OVER_ECHO_MS].
@@ -99,8 +101,12 @@ class BargeIn(private val settings: BargeInSettings = BargeInSettings(), private
         if (floorLocked && !playing && level < trigger) addFloor(level)
         // How loud the voice comes back through the microphone, which echo cancelling may or may not have taken out.
         // Learnt from all of its first moment (nothing can trip it then), and after that from what stays under the bar.
-        if (playing && (nowMs < graceUntil && graceIsEcho || level < trigger)) addBleed(level)
-        val above = floorLocked && level >= trigger && nowMs >= graceUntil
+        // Not from a frame well over the echo learnt so far, nor while anything stood over the bar: that's someone
+        // talking just under it.
+        val inGrace = nowMs < graceUntil
+        if (playing && (inGrace && graceIsEcho || !inGrace && level < trigger && level <= bleed * BLEED_LEARN_HEADROOM &&
+                recent.none { it.second })) addBleed(level)
+        val above = floorLocked && level >= trigger && !inGrace
         recent.addLast(nowMs to above)
         while (recent.isNotEmpty() && nowMs - recent.first().first > SUSTAINED_OVER_ECHO_MS) recent.removeFirst()
         // Over a loud echo its syllables can poke above the bar; someone talking stays there.
@@ -119,8 +125,8 @@ class BargeIn(private val settings: BargeInSettings = BargeInSettings(), private
     /** The bar speech has to clear now. */
     internal fun trigger(playing: Boolean): Float {
         if (!playing) return quietBar()
-        // Over the voice: never under its own echo, however loud the speaker. Speech has to stand clearly above it.
-        return max(playingBar(), bleed * bleedMultiplier)
+        // Over the voice: above its own echo, so speech has to stand clearly over it; but never out of speech's reach.
+        return max(playingBar(), min(bleed * bleedMultiplier, ECHO_BAR_CEILING_LEVEL))
     }
 
     private fun quietBar() = max(MIN_TRIGGER_LEVEL, floor * floorMultiplier)
@@ -185,6 +191,10 @@ class BargeIn(private val settings: BargeInSettings = BargeInSettings(), private
         const val MIN_BLEED_MARGIN = 1.2
         const val BLEED_PERCENTILE = 0.8f
         const val TRIGGER_CEILING_LEVEL = 0.25f
+        /** The highest the bar goes over a loud echo; past it the echo trips it, and the voice only holds a moment. */
+        const val ECHO_BAR_CEILING_LEVEL = 0.4f
+        /** After the voice's first moment, its echo is learnt only from frames this close to what's learnt already. */
+        const val BLEED_LEARN_HEADROOM = 1.25f
         const val PLAYBACK_GAP_FOR_GRACE_MS = 1_000L
         /** Three seconds of 20 ms frames. */
         const val FLOOR_SAMPLES = 150
