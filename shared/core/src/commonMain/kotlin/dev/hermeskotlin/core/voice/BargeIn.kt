@@ -34,7 +34,9 @@ data class BargeInSettings(
  * - Speech has to hold: most of the last [SUSTAINED_MS] above the bar, so dips inside a word don't start it over.
  *   Over a loud echo, most of the last [SUSTAINED_OVER_ECHO_MS].
  *
- * Once tripped, the utterance runs until a pause of [silenceMs] or [UTTERANCE_MAX_MS].
+ * Once tripped, the voice holds and the utterance runs until a pause of [silenceMs] or [UTTERANCE_MAX_MS]. Whether
+ * anyone went on talking once it held ([spoke]) tells someone cutting in from the phone hearing its own voice,
+ * whose echo stops with it; when nobody did, it's over after [NOBODY_AFTER_MS] rather than a whole pause.
  *
  * The levels are the recorder's (RMS scaled so 1.0 is loud speech). They sit below Desktop's: the phone's
  * call microphone is quieter than a browser's, and its echo cancelling takes most of the voice out already.
@@ -65,6 +67,11 @@ class BargeIn(private val settings: BargeInSettings = BargeInSettings(), private
     private val recent = ArrayDeque<Pair<Long, Boolean>>()
     private var trippedAt = 0L
     private var quietSince = -1L
+    private var spokeFrames = 0
+
+    /** Someone went on talking once the voice held, past its last echo ([HOLD_SETTLE_MS]); not just the voice. */
+    var spoke = false
+        private set
 
     /** Feeds one frame's [level] at [nowMs], with the voice [playing] or not; how things stand after it. */
     fun onFrame(level: Float, nowMs: Long, playing: Boolean): Step {
@@ -127,10 +134,13 @@ class BargeIn(private val settings: BargeInSettings = BargeInSettings(), private
         return last.size >= 3 && last.count { it.second } >= last.size * SUSTAINED_MAJORITY
     }
 
-    /** After the trip the voice is already cut, so a plain pause ends the utterance. */
+    /** After the trip the voice holds, so a plain pause ends the utterance. */
     private fun endpoint(level: Float, nowMs: Long): Step {
+        if (nowMs - trippedAt >= HOLD_SETTLE_MS && level >= quietBar() && ++spokeFrames >= SPOKE_FRAMES) spoke = true
         if (level >= max(MIN_TRIGGER_LEVEL * QUIET_FRACTION, floor * QUIET_OVER_FLOOR)) quietSince = -1
         else if (quietSince < 0) quietSince = nowMs
+        // Nobody went on once the voice held: it was the phone hearing itself, or a knock.
+        if (!spoke && nowMs - trippedAt >= NOBODY_AFTER_MS) return Step.Done
         val done = quietSince >= 0 && nowMs - quietSince >= silenceMs || nowMs - trippedAt >= UTTERANCE_MAX_MS
         return if (done) Step.Done else Step.Hearing
     }
@@ -181,8 +191,17 @@ class BargeIn(private val settings: BargeInSettings = BargeInSettings(), private
         const val QUIET_FRACTION = 0.8f
         const val QUIET_OVER_FLOOR = 1.6f
         const val UTTERANCE_MAX_MS = 30_000L
-        /** How much sound before the trip is kept, so the utterance has its first syllable. */
-        const val PRE_ROLL_MS = 1_500L
+        /**
+         * How much sound before the trip is kept, so the utterance has its first syllable: the longest it takes to
+         * trip, and a little more. Not longer, since what's before it is the voice's own words.
+         */
+        const val PRE_ROLL_MS = 800L
+        /** How long the voice's echo can go on after it holds: the speaker's buffer, and the room. */
+        const val HOLD_SETTLE_MS = 300L
+        /** How much talking, past that, says someone is there. */
+        const val SPOKE_FRAMES = 8
+        /** When nobody has gone on talking by then, the trip was the voice's own echo, or a knock. */
+        const val NOBODY_AFTER_MS = 900L
     }
 }
 

@@ -121,9 +121,9 @@ class StreamedSpeechTest {
 
     /**
      * Hears one request; then, over the reply, someone cuts in when the test says so ([cut]) and the recording
-     * goes to the gateway. Listens for good after that.
+     * goes to the gateway, having [goneOn] talking once the voice held, or not. Listens for good after that.
      */
-    private class CutsIn : VoiceRecorder {
+    private class CutsIn(val goneOn: Boolean = true) : VoiceRecorder {
         var recordings = 0
         val listening = MutableStateFlow(0)
         val cut = CompletableDeferred<Unit>()
@@ -143,11 +143,18 @@ class StreamedSpeechTest {
             cut.await()
             heardCut = true
             onTrip()
-            return Recording(byteArrayOf(4, 5, 6), "audio/wav", heardSpeech = true)
+            return Recording(byteArrayOf(4, 5, 6), "audio/wav", heardSpeech = goneOn)
         }
     }
 
-    private class Player(val fails: Boolean = false) : SpeechPlayer {
+    /** [canHold]: the voice holds when someone seems to cut in; [holds] is each hold and letting go. */
+    private class Player(val fails: Boolean = false, val canHold: Boolean = false) : SpeechPlayer {
+        val holds = mutableListOf<Boolean>()
+        override fun hold(on: Boolean): Boolean {
+            holds += on
+            return canHold
+        }
+
         val clips = mutableListOf<SpokenAudio>()
         val streamed = MutableStateFlow<List<ByteArray>>(emptyList())
         var rate = 0
@@ -325,7 +332,10 @@ class StreamedSpeechTest {
         setup.voice.stopChat()
     }
 
-    /** Over a loudspeaker the phone can hear itself; that isn't anyone cutting in, so nothing is sent. */
+    /**
+     * Over a loudspeaker the phone can hear itself; that isn't anyone cutting in. A voice that can't hold is told
+     * by its words: nothing is sent, the reply goes on, and the microphone listens over it again.
+     */
     @Test
     fun itsOwnVoiceHeardBackIsNotSent() = runTest {
         val recorder = CutsIn()
@@ -340,11 +350,88 @@ class StreamedSpeechTest {
         setup.voice.chat.first { it.phase == VoicePhase.Speaking }
         recorder.listening.first { it == 1 }
         recorder.cut.complete(Unit)
-        setup.socket.event("message.complete", """{"text":"It was a long day.","status":"interrupted"}""")
 
-        // It listens again instead.
-        setup.voice.chat.first { it.phase == VoicePhase.Listening && recorder.recordings == 2 }
+        recorder.listening.first { it == 2 }
+        assertEquals(VoicePhase.Speaking, setup.voice.chat.value.phase)
+        assertFalse(stream.closed)
         assertEquals(1, setup.socket.submits.value.size)
+        assertTrue(setup.socket.calls.value.none { "session.interrupt" in it })
+        setup.voice.stopChat()
+    }
+
+    /**
+     * A speaker turned right up trips it with its own voice. The voice holds; nobody goes on talking, since its
+     * echo stopped with it, so it goes on where it held, whatever the words: nothing sent, nothing stopped.
+     */
+    @Test
+    fun aVoiceThatHeldGoesOnWhenNobodyWentOnTalking() = runTest {
+        val recorder = CutsIn(goneOn = false)
+        val stream = Stream()
+        val player = Player(canHold = true)
+        val setup = chat(player = player, recorder = recorder, transcripts = listOf("How was your day?", "a long day and")) { stream }
+
+        setup.socket.event("message.start")
+        setup.socket.event("message.delta", """{"text":"It was a long day. First the meeting ran over. "}""")
+        stream.appended.first { it.isNotEmpty() }
+        stream.gateway.send(SpeechStreamEvent.Start(sampleRate = 24_000))
+        stream.gateway.send(SpeechStreamEvent.Audio(byteArrayOf(1, 0, 2, 0)))
+        setup.voice.chat.first { it.phase == VoicePhase.Speaking }
+        recorder.listening.first { it == 1 }
+        recorder.cut.complete(Unit)
+
+        recorder.listening.first { it == 2 }
+        assertEquals(listOf(true, false), player.holds)
+        assertEquals(VoicePhase.Speaking, setup.voice.chat.value.phase)
+        assertFalse(stream.closed)
+        assertEquals(1, setup.socket.submits.value.size)
+        assertTrue(setup.socket.calls.value.none { "session.interrupt" in it })
+        setup.voice.stopChat()
+    }
+
+    /** A quick "stop" can be over before the voice held; it's still heard, and ends the chat. */
+    @Test
+    fun aQuickStopOverBeforeTheVoiceHeldStillEndsTheChat() = runTest {
+        val recorder = CutsIn(goneOn = false)
+        val stream = Stream()
+        val player = Player(canHold = true)
+        val setup = chat(player = player, recorder = recorder, transcripts = listOf("How was your day?", "stop")) { stream }
+
+        setup.socket.event("message.start")
+        setup.socket.event("message.delta", """{"text":"It was a long day. First the meeting ran over. "}""")
+        stream.appended.first { it.isNotEmpty() }
+        stream.gateway.send(SpeechStreamEvent.Start(sampleRate = 24_000))
+        stream.gateway.send(SpeechStreamEvent.Audio(byteArrayOf(1, 0, 2, 0)))
+        setup.voice.chat.first { it.phase == VoicePhase.Speaking }
+        recorder.listening.first { it == 1 }
+        recorder.cut.complete(Unit)
+
+        setup.voice.chat.first { it.phase == VoicePhase.Off }
+        assertEquals(1, setup.socket.submits.value.size)
+    }
+
+    /** Someone who went on talking once the voice held is cutting in, even in words like the reply's own. */
+    @Test
+    fun someoneWhoWentOnTalkingOnceItHeldCutsIn() = runTest {
+        val recorder = CutsIn(goneOn = true)
+        val stream = Stream()
+        val player = Player(canHold = true)
+        val setup = chat(player = player, recorder = recorder, transcripts = listOf("How was your day?", "the meeting ran over again")) { stream }
+
+        setup.socket.event("message.start")
+        setup.socket.event("message.delta", """{"text":"It was a long day. First the meeting ran over. "}""")
+        stream.appended.first { it.isNotEmpty() }
+        stream.gateway.send(SpeechStreamEvent.Start(sampleRate = 24_000))
+        stream.gateway.send(SpeechStreamEvent.Audio(byteArrayOf(1, 0, 2, 0)))
+        setup.voice.chat.first { it.phase == VoicePhase.Speaking }
+        recorder.listening.first { it == 1 }
+        recorder.cut.complete(Unit)
+
+        setup.socket.calls.first { "session.interrupt" in it }
+        assertTrue(stream.closed)
+        setup.socket.event("message.complete", """{"text":"It was a long day.","status":"interrupted"}""")
+        setup.socket.submits.first { it.size == 2 }
+        assertEquals("the meeting ran over again", setup.socket.submits.value[1]["params"]!!.jsonObject["text"]!!.jsonPrimitive.content)
+        assertEquals(listOf(true, false), player.holds)
         setup.voice.stopChat()
     }
 

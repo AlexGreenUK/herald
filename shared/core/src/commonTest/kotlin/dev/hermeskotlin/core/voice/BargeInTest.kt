@@ -161,6 +161,32 @@ class BargeInTest {
         }
     }
 
+    /** Its own echo stops when the voice holds: nobody goes on, and that's known well before a whole pause. */
+    @Test
+    fun nobodyGoingOnOnceTheVoiceHoldsEndsItSoon() {
+        val bargeIn = BargeIn(silenceMs = 1_250)
+        val mic = Mic(bargeIn)
+        assertNull(mic.feed(0.01f, 1_000))
+        val (trippedAt, _) = assertNotNull(mic.feed(0.2f, 1_000))
+        // The echo dies away as the speaker's buffer and the room empty.
+        assertNull(mic.feed(0.15f, 200))
+        val (at, step) = assertNotNull(mic.feed(0.01f, 3_000))
+        assertEquals(BargeIn.Step.Done, step)
+        assertFalse(bargeIn.spoke)
+        assertTrue(at - trippedAt <= BargeIn.NOBODY_AFTER_MS + 20, "done ${at - trippedAt} ms after the trip")
+    }
+
+    @Test
+    fun someoneGoingOnOnceTheVoiceHoldsIsHeardToTheirPause() {
+        val bargeIn = BargeIn(silenceMs = 1_000)
+        val mic = Mic(bargeIn)
+        assertNull(mic.feed(0.01f, 1_000))
+        assertNotNull(mic.feed(0.2f, 1_000))
+        assertNull(mic.feed(0.2f, 1_500))
+        assertTrue(bargeIn.spoke)
+        assertEquals(BargeIn.Step.Done, assertNotNull(mic.feed(0.01f, 3_000)).second)
+    }
+
     @Test
     fun theUtteranceEndsOnAPause() {
         val mic = Mic(BargeIn(silenceMs = 1_000))

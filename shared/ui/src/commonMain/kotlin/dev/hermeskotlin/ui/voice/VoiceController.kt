@@ -353,16 +353,13 @@ class VoiceController(
             val from = session.state.value.messages.indexOfLast { it is ChatMessage.User } + 1
             return finishTurn(session, from, gateway, profile, activity, streamed = false)
         }
-        val transcript = when (val heard = hear(gateway, profile, activity, cutIn?.recording)) {
+        // What was said over the last reply was heard and written down already.
+        val transcript = cutIn?.transcript ?: when (val heard = hear(gateway, profile, activity)) {
             Heard.Broken -> return Turn.End
             Heard.Silence -> return Turn.Quiet
             Heard.Unclear -> return Turn.Failed
-            is Heard.Words -> heard.text
+            is Heard.Words -> heard.text.also { if (isVoiceStopCommand(it)) return Turn.End }
         }
-        if (isVoiceStopCommand(transcript)) return Turn.End
-        // The phone heard its own voice over the speaker, not someone cutting in: nobody spoke. Off the main thread,
-        // since it compares against every stretch of a long reply.
-        if (cutIn != null && withContext(Dispatchers.Default) { isTtsEcho(transcript, cutIn.overVoice) }) return Turn.Quiet
 
         _chat.update { it.copy(phase = VoicePhase.Thinking, caption = transcript.trim(), captionIsVoice = false) }
         val sentAt = session.state.value.messages.size
@@ -384,7 +381,7 @@ class VoiceController(
                 closeUnused(opening)
                 return@coroutineScope null
             }
-            overVoice(session, activity) { voiceAsWritten(session, sentAt, opening) }
+            overVoice(session, gateway, profile, activity) { voiceAsWritten(session, sentAt, opening) }
         } ?: return Turn.Failed
         val voiced = when (cut) {
             is Cut.Over -> return cut.turn
@@ -423,19 +420,32 @@ class VoiceController(
      * the profile has it on. [Cut.Done] with what [work] came to; [Cut.Over] with how the turn went when someone
      * talked over it.
      */
-    private suspend fun <T> overVoice(session: ChatSession, activity: VoiceActivity, work: suspend () -> T): Cut<T> = coroutineScope {
-        val tripped = CompletableDeferred<Unit>()
-        val over = async { listenOver(activity, tripped) }
+    private suspend fun <T> overVoice(
+        session: ChatSession,
+        gateway: GatewayUrl,
+        profile: String?,
+        activity: VoiceActivity,
+        work: suspend () -> T,
+    ): Cut<T> = coroutineScope {
         val done = async { work() }
-        select {
-            done.onAwait { value ->
-                // The microphone is free again before the next listen takes it.
-                over.cancelAndJoin()
-                Cut.Done(value)
+        var cut: Cut<T>? = null
+        while (cut == null) {
+            val tripped = CompletableDeferred<Unit>()
+            val over = async { listenOver(activity, tripped) }
+            val someone = select {
+                done.onAwait {
+                    // The microphone is free again before the next listen takes it.
+                    over.cancelAndJoin()
+                    false
+                }
+                tripped.onAwait { true }
+                // A microphone that couldn't listen over the voice won't on the next try either.
+                over.onAwait { heard -> heard != null }
             }
-            tripped.onAwait { Cut.Over(cutIn(session, done, over)) }
-            over.onAwait { heard -> if (heard == null) Cut.Done(done.await()) else Cut.Over(cutIn(session, done, over)) }
+            // Null when it was its own voice, or a knock: the voice went on where it held; listen again.
+            cut = if (someone) heardOver(session, gateway, profile, done, over)?.let { Cut.Over(it) } else Cut.Done(done.await())
         }
+        cut
     }
 
     /**
@@ -464,17 +474,53 @@ class VoiceController(
     }
 
     /**
-     * Someone talked over the reply: it stops, and the agent too if it's still at work, since what it's writing
-     * answers what came before. What they say, once they pause, is the next turn.
+     * Someone seemed to talk over the reply. The voice holds at once, and what they say is heard to its end and
+     * written down. When nobody went on talking once it held, it was the phone hearing its own voice (a speaker
+     * turned right up), or a knock: null, and the voice goes on where it held, nothing lost. Otherwise the reply
+     * stops, and the agent too if it's still at work, since what it's writing answers what came before; what they
+     * said is the next turn, or "stop" ends the chat.
      */
-    private suspend fun cutIn(session: ChatSession, reply: Deferred<*>, over: Deferred<Recording?>): Turn = coroutineScope {
+    private suspend fun heardOver(session: ChatSession, gateway: GatewayUrl, profile: String?, reply: Deferred<*>, over: Deferred<Recording?>): Turn? {
         val overVoice = voiced
-        reply.cancelAndJoin()
-        playing.value = false
-        _chat.update { it.copy(phase = VoicePhase.Listening, level = 0f, hearing = true, working = null) }
-        if (session.state.value.running) launch { session.interrupt() }
-        val heard = over.await() ?: return@coroutineScope Turn.Quiet
-        Turn.CutIn(Interjection(heard, overVoice))
+        val held = player.hold(true)
+        val phase = _chat.value.phase
+        _chat.update { it.copy(phase = VoicePhase.Listening, level = 0f, hearing = true) }
+        try {
+            val heard = over.await()
+            if (held && heard?.heardSpeech != true) {
+                // Nobody went on once it held: its own echo, or a knock. It goes on at once. What was heard is still
+                // written down meanwhile, since a quick "stop" can be over before the voice held.
+                val chat = chatJob
+                if (heard != null) scope.launch {
+                    val words = (audio.transcribe(gateway, heard.bytes, heard.mimeType, profile) as? ApiResult.Success)?.value.orEmpty()
+                    if (isVoiceStopCommand(words) && chat != null && chatJob === chat) stopChat()
+                }
+                _chat.update { it.copy(phase = phase, level = 0f, hearing = false) }
+                return null
+            }
+            val transcript = heard?.let {
+                _chat.update { it.copy(phase = VoicePhase.Transcribing, level = 0f, hearing = false) }
+                (audio.transcribe(gateway, it.bytes, it.mimeType, profile) as? ApiResult.Success)?.value?.trim()
+            }.orEmpty()
+            // Its own words, heard back. Off the main thread: it compares every stretch of the reply.
+            val echo = transcript.isNotBlank() && withContext(Dispatchers.Default) { isTtsEcho(transcript, overVoice) }
+            // A voice that held stops its echo with it, so someone went on talking; one that couldn't hold is told by
+            // its words.
+            val someone = transcript.isNotBlank() && (held || !echo)
+            // "Stop" said over the voice can come after some of its own words, and be over before it held.
+            val stop = isVoiceStopCommand(transcript) || !echo && isVoiceStopCommand(transcript.substringAfterLast(' '))
+            if (!stop && !someone) {
+                _chat.update { it.copy(phase = phase, level = 0f, hearing = false) }
+                return null
+            }
+            reply.cancelAndJoin()
+            playing.value = false
+            _chat.update { it.copy(working = null) }
+            if (session.state.value.running) appScope.launch { session.interrupt() }
+            return if (stop && (!someone || isVoiceStopCommand(transcript))) Turn.End else Turn.CutIn(Interjection(transcript))
+        } finally {
+            player.hold(false)
+        }
     }
 
     /**
@@ -494,7 +540,7 @@ class VoiceController(
         var stopped = false
         while (true) {
             // The microphone listens over the agent at work, but not while it asks: that takes the microphone itself.
-            val chat = when (val cut = overVoice(session, activity) { nextStop(session, pointedAt) }) {
+            val chat = when (val cut = overVoice(session, gateway, profile, activity) { nextStop(session, pointedAt) }) {
                 is Cut.Over -> return cut.turn
                 is Cut.Done -> cut.value
             }
@@ -535,7 +581,7 @@ class VoiceController(
 
         // An error left from asking (an unclear last try, answered elsewhere after) isn't this reading's.
         _chat.update { it.copy(phase = VoicePhase.Speaking, caption = text, captionIsVoice = true, error = null) }
-        val cut = overVoice(session, activity) { speak(text, gateway, profile) }
+        val cut = overVoice(session, gateway, profile, activity) { speak(text, gateway, profile) }
         if (cut is Cut.Over) return cut.turn
         // The voice couldn't be made or played (a provider's 429, say).
         return if (_chat.value.error == null) Turn.Done else Turn.Failed
@@ -556,13 +602,10 @@ class VoiceController(
         }
     }
 
-    /**
-     * What's said next, as [Heard] tells, or in [recorded] when it was heard already (over the last reply). An error
-     * on show stays through silence, and goes once words come.
-     */
-    private suspend fun hear(gateway: GatewayUrl, profile: String?, activity: VoiceActivity, recorded: Recording? = null): Heard {
-        if (recorded == null) _chat.update { it.copy(phase = VoicePhase.Listening, level = 0f, hearing = false) }
-        val recording = recorded ?: try {
+    /** What's said next, as [Heard] tells. An error on show stays through silence, and goes once words come. */
+    private suspend fun hear(gateway: GatewayUrl, profile: String?, activity: VoiceActivity): Heard {
+        _chat.update { it.copy(phase = VoicePhase.Listening, level = 0f, hearing = false) }
+        val recording = try {
             recorder.record(
                 activity,
                 onLevel = { level -> _chat.update { it.copy(level = level) } },
@@ -1041,7 +1084,7 @@ private sealed interface Turn {
 }
 
 /** What someone said over a reply, and what the voice was saying then ([overVoice]), to tell it from an echo. */
-private class Interjection(val recording: Recording, val overVoice: String)
+private class Interjection(val transcript: String)
 
 /** How a stretch with the microphone open over it went: it came to [Done.value], or someone talked [Over] it. */
 private sealed interface Cut<out T> {

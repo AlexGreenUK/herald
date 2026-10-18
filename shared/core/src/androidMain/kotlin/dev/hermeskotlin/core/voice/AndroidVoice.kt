@@ -177,7 +177,7 @@ class AndroidVoiceRecorder : VoiceRecorder {
                 record.release()
                 onLevel(0f)
             }
-            Recording(wav(pcm.toByteArray()), "audio/wav", heardSpeech = true)
+            Recording(wav(pcm.toByteArray()), "audio/wav", heardSpeech = bargeIn.spoke || finishRequested)
         }
 
     private fun wav(pcm: ByteArray): ByteArray {
@@ -213,6 +213,21 @@ class AndroidVoiceRecorder : VoiceRecorder {
  * [AudioTrack] as it arrives, both as an assistant voice.
  */
 class AndroidSpeechPlayer(private val context: Context) : SpeechPlayer {
+    private val lock = Any()
+    /** Held ([hold]): what plays now is paused, and what's ready meanwhile waits to start. */
+    private var holding = false
+    private var track: AudioTrack? = null
+    /** A clip once it's ready to play. */
+    private var clip: MediaPlayer? = null
+
+    override fun hold(on: Boolean): Boolean {
+        synchronized(lock) {
+            holding = on
+            track?.let { runCatching { if (on) it.pause() else it.play() } }
+            clip?.let { runCatching { if (on) { if (it.isPlaying) it.pause() } else if (!it.isPlaying) it.start() } }
+        }
+        return true
+    }
 
     override suspend fun playPcm(sampleRate: Int, channels: Int, chunks: ReceiveChannel<ByteArray>, onSound: (Boolean) -> Unit) = coroutineScope {
         val mask = when (channels) {
@@ -266,7 +281,11 @@ class AndroidSpeechPlayer(private val context: Context) : SpeechPlayer {
         }
         try {
             withContext(Dispatchers.IO) {
-                track.play()
+                synchronized(lock) {
+                    this@AndroidSpeechPlayer.track = track
+                    // Held, it fills its buffer and waits to be let go.
+                    if (!holding) track.play()
+                }
                 // Provider chunks needn't end on a whole frame; what's left over waits for the next chunk.
                 var carry = ByteArray(0)
                 for (chunk in chunks) {
@@ -295,6 +314,7 @@ class AndroidSpeechPlayer(private val context: Context) : SpeechPlayer {
         } finally {
             withContext(NonCancellable) { sound.cancelAndJoin() }
             onSound(false)
+            synchronized(lock) { if (this@AndroidSpeechPlayer.track === track) this@AndroidSpeechPlayer.track = null }
             runCatching {
                 track.pause()
                 track.flush()
@@ -322,17 +342,27 @@ class AndroidSpeechPlayer(private val context: Context) : SpeechPlayer {
                         .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                         .build(),
                 )
-                player.setOnCompletionListener { if (continuation.isActive) continuation.resume(Unit) }
+                player.setOnCompletionListener {
+                    // Done: letting go of a hold mustn't start it over.
+                    synchronized(lock) { if (clip === player) clip = null }
+                    if (continuation.isActive) continuation.resume(Unit)
+                }
                 player.setOnErrorListener { _, what, _ ->
                     if (continuation.isActive) continuation.resumeWithException(IllegalStateException("Couldn't play the reply ($what)."))
                     true
                 }
                 player.setDataSource(file.absolutePath)
-                player.setOnPreparedListener { it.start() }
+                player.setOnPreparedListener {
+                    synchronized(lock) {
+                        clip = it
+                        if (!holding) it.start()
+                    }
+                }
                 player.prepareAsync()
                 continuation.invokeOnCancellation { runCatching { player.stop() } }
             }
         } finally {
+            synchronized(lock) { if (clip === player) clip = null }
             player.release()
             file.delete()
         }
