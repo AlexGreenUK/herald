@@ -49,6 +49,7 @@ uses. The protocol itself is described in [hermes-protocol-research.md](hermes-p
 - [ ] Chat bubble, tool card, approval card as design-system components (they live in `shared/ui` for now)
 - [x] Theme picker (system / light / dark) and pure black
 - [x] Accent color presets (Settings → Appearance → Accent): blue, violet, green, orange, pink and teal, each tuned for light, dark and pure black
+- [x] App icon (Settings → Appearance → App icon): the mark on each accent color, or over hearts, marks or chat bubbles
 - [x] Glow switch (Settings → Appearance): off, the colored glows go (the halo behind each screen, and the light under prompts, the app mark, Send, New chat, main buttons, live subagent cards, the voice screen, and the assistant edge's halo, which keeps its crisp line) and everything sits flat
 
 ---
@@ -88,10 +89,11 @@ uses. The protocol itself is described in [hermes-protocol-research.md](hermes-p
 - [x] Long chats load a page at a time: the newest 60 rows on opening, older pages as you scroll to the top (`order=latest` + `offset`), each starting at a prompt so no turn is cut in two; the list keeps its place. Branching loads the rest first so it counts from the first row
 - [x] Resume a session live and reply in it (`session.resume {omit_messages}` + REST history, like Desktop)
 - [x] The app opens on a chat: the one you had open last on this gateway, or a fresh one if you left on a new chat (remembered per gateway)
-- [x] Sessions live in a left sidebar: a swipe-in drawer on phones (swipe right or the panel button; swipe left, tap outside or Back to close), docked and collapsible on wide screens; the open chat is highlighted
+- [x] Sessions live in a left sidebar: a swipe-in drawer on phones (swipe right or the panel button; swipe left off the chat rows, tap outside or Back to close), docked and collapsible on wide screens; the open chat is highlighted
 - [x] Sidebar layout: title with a round search button, Scheduled / Archived rows, title-only chat rows with a live dot for running sessions, floating "New chat" pill and an initials avatar (with a connection warning dot) that opens the account sheet
 - [x] Refetch the list whenever the sidebar opens
 - [x] Rename, pin, archive and delete (`PATCH`/`DELETE /api/sessions/{id}`), with optimistic updates that roll back on error
+- [x] Swipe a chat row: right pins or unpins, left archives (with Undo); in Archived, right unarchives and left deletes (after asking). A row's swipe wins over the drawer's swipe-left close; screen readers get the same actions
 - [x] Chat options (⋮ beside new chat) for the open chat: rename, pin, export as Markdown, copy session ID, archive, delete
 - [x] Floating see-through composer over the conversation
 - [x] Reading back stays put while a reply streams below; the jump arrow then reads "New reply"
@@ -105,11 +107,13 @@ uses. The protocol itself is described in [hermes-protocol-research.md](hermes-p
 - [x] Streaming assistant text (`message.start`, `message.delta`, `message.complete`), including outcome (complete / stopped / error)
 - [x] Interim commentary (`message.interim`), folded into the reply
 - [x] Markdown rendering (GFM: lists, tables, links, code blocks with language label and copy button; copy whole reply); only web and mail links open
+- [x] Tables in replies size each column by its cells (a column of emoji or numbers stays slim, wordy ones share the rest and wrap, and only a table whose longest words don't fit scrolls sideways), with faint grid lines and every second row tinted
 - [x] Pictures from the web load only on a tap, without gateway cookies
+- [x] Optional webpage cards beneath completed replies (Settings → Chat → Show link previews, off by default): up to three unique links, with title, description and thumbnail when available; fetched without gateway cookies, never from loopback, LAN, link-local or tailnet addresses (checked again after DNS)
 - [x] Syntax highlighting in code blocks (Highlights, cached by content; light and dark palettes); long lines scroll sideways or wrap ("Wrap code lines" setting)
 - [x] TeX math: inline `$…$` / `\(…\)` and display `$$…$$` / `\[…\]` typeset with JLaTeXMath (display formulas centered and scrollable); prices like "$5 and $10" stay text, code is left alone, and a formula that won't parse shows its source
 - [x] A small time under each prompt and finished reply ("Message timestamps" setting): the stored row's time, or when this device sent or saw it finish
-- [x] Reasoning/thinking blocks, collapsible (`reasoning.delta`, `thinking.delta`, `reasoning.available`)
+- [x] Reasoning/thinking blocks, collapsible, with compact Markdown rendering (`reasoning.delta`, `thinking.delta`, `reasoning.available`)
 - [x] Stop a running turn (`session.interrupt`): the Send button turns into Stop while a turn runs
 - [x] Prompts sent from another client (Desktop, CLI, messaging) show up live: a turn this client didn't start refetches the transcript at its start and end, since the gateway streams only the reply
 - [x] Send while a reply runs, three ways: Steer (`session.steer`, the agent reads it after its current step; rejected → queued as the next prompt, a gateway without steering → plain `prompt.submit`), Queue (`prompt.submit {queued}`) and Stop & send (`session.interrupt`, wait for the turn to end, then `prompt.submit`). A Send button appears beside Stop; long-press it for a dropdown to pick the way for one message. `/steer <note>` uses `session.steer` too. A steer the turn ended before reading is requeued by the gateway and shows up as the next turn
@@ -118,6 +122,7 @@ uses. The protocol itself is described in [hermes-protocol-research.md](hermes-p
 - [x] Token usage per turn (live turns) and per session with cost, context window and account limits (`session.usage`, `MessageCompletePayload.usage`, `GET /api/sessions/{id}`)
 - [x] Error banner and live status line (`error`, `status.update`, failed turns)
 - [x] Notices and warnings (`notice`, `MessageCompletePayload.warning`)
+- [x] A New messages line where the unread messages start; a chat with unread messages (opened from the list or from a notification) opens there instead of at the bottom. The line stays put while the chat is open, so it does not jump while you read, and is gone the next time it is opened (the last look is kept per chat on the phone). Other bots' messages count as new; when the first new message is more than five pages back, there is no line rather than a misplaced one
 
 ### 5. Tool activity
 - [x] Tool rows in the reply: name, what it is doing, running spinner → done (`tool.start`, `tool.complete` summary)
@@ -160,9 +165,10 @@ uses. The protocol itself is described in [hermes-protocol-research.md](hermes-p
 - [x] File and PDF attachments (`file.attach` as `@file:` refs, `pdf.attach` with a `file.attach` fallback when the gateway can't render pages)
 - [x] Images in history: stored `@image:` refs fetched through `GET /api/media`, `@file:` refs as file cards, the attached-context block hidden
 - [x] Pictures and files the agent delivers (`MEDIA:` paths, Markdown images, `::preview` widget files) shown inline or as cards, fetched through `GET /api/files/download`
+- [x] Links to files on the gateway (`[name](/path)`, `file://`, `/src/App.kt:42`) open full screen: Markdown rendered, JSON indented, CSV/TSV as a table, code with line numbers at the linked line; Save and Share fetch the whole file (`GET /api/fs/read-text`, `GET /api/fs/download`)
 - [x] Full-screen image viewer with pinch-zoom; Save (Pictures / Download `Herald`) and Share for pictures and files
 - [x] Chats open as the `desktop` surface (`source` on `session.create` / `session.resume`), so the agent knows Markdown and files render
-- [ ] Run `::preview` widgets inline (a WebView with Desktop's theme prelude)
+- [x] Run self-contained HTML `::preview` widgets inline (an isolated WebView with Desktop-compatible theme colors and Herald's font; a scrollable panel, with Save and Share; requires Android System WebView 152+). External resources and widget-to-agent messages aren't supported yet
 - [x] Share sheet: text, links, pictures and files shared from other apps open a new chat with them as its draft (up to 10 files, through the composer's size limits); nothing sends until you do, and before sign-in the draft waits
 
 ### Voice
@@ -171,7 +177,9 @@ uses. The protocol itself is described in [hermes-protocol-research.md](hermes-p
 - [x] Dictation switch (Settings → Voice): off, the mic leaves the composer and the empty chat's pills, so the model name has room on a narrow phone; a dictation already running (the New chat with voice shortcut) keeps its mic to finish it
 - [x] An empty chat offers "Attach" and "Dictate" under the wordmark, as one split capsule as wide as the lettering
 - [x] Voice chat: listen, transcribe, send, read the reply aloud (`/api/audio/speak`, `tts-lease`), say "stop" to end; `/voice`
-- [ ] Talk over the reply to interrupt it (barge-in) and speak while the reply streams (`/api/audio/speak-stream`)
+- [x] Send now in the voice chat: once it hears you, an arrow sends what's been said without waiting for the pause, for a car or wind where the pause never comes; the end of speech also lets brief noise (a gust, a fan) pass without starting the pause over
+- [x] Speak while the reply streams (`/api/audio/speak-stream`): in the voice chat, the reply's text goes to the gateway as it's written and its audio plays as it comes back (an `AudioTrack` stream), so the first sentence is heard long before the reply ends; code blocks and attached files aren't sent. The orb shows Speaking while sound plays and Thinking in the pauses while the agent works. A gateway without the socket, or one that made no audio, reads the finished reply as before; Skip stops it without reading it again
+- [ ] Talk over the reply to interrupt it (barge-in)
 - [x] Live voice mode, Desktop's GPT-Live (`voice.voice_chat_mode: gpt-live`): the voice button opens a WebRTC call with OpenAI's voice model through the gateway (`/api/audio/voice-live/status`, `/api/audio/voice-live/session`); each request it hands over (`session.delegation.created`) is a Hermes turn in the chat (`prompt.submit` with `surface: voice-live` and the spoken context), and the reply streams back a sentence at a time (`session.commentary.append`) with the running tool as quiet progress; talk over it to cut in, Mute, say "stop" to end. Another mode, no OpenAI key on the gateway, or an older gateway keeps the voice chat above
 - [ ] Wake word (phone mic → `wake.feed`, `wake.detected`)
 
@@ -235,13 +243,17 @@ uses. The protocol itself is described in [hermes-protocol-research.md](hermes-p
 - [x] Skills: a Capabilities page in the sidebar, after Desktop's, lists the profile's skills by category with search and an on/off switch (`GET /api/skills`, `PUT /api/skills/toggle`). Installing from the hub (`skills.manage`) not yet
 - [x] Toolsets on the Capabilities page with their switches and a "needs setup" tag (`GET /api/tools/toolsets`, `PUT /api/tools/toolsets/{name}`)
 - [x] MCP servers on the Capabilities page: switch, and a connection test listing its tools (`/api/mcp/servers`, `…/{name}/enabled`, `…/{name}/test`). Adding servers and OAuth not yet
-- [ ] Config viewer and editor (`config.get`, `config.set`)
+- [x] Config page in the sidebar, after Desktop's Settings (`GET /api/config/schema`, `GET`/`PUT /api/config`): Desktop's sections (Model, Chat, Workspace, Safety, Browser, Memory and context, Voice, Advanced) with its labels, Voice showing only the picked providers' fields; a search over every field in the schema; All settings by the gateway's own categories. A switch, a picker sheet (searchable when long, "Other…" for voices and models off the list) or a text field per type; each change saved at once as a patch of just that key and put back if refused; emptying the toolsets asks first. Edit config.yaml as a whole (`/api/config/raw`) behind a confirm. Each bot's config from its editor
 - [x] Projects in the chat list (`projects.tree`, `projects.project_sessions`): a chip per project with chats, as Desktop groups them by folder; a new chat started under one runs in its folder (`session.create` `cwd`)
+- [x] A pinned chat's row names its project after the title, lightly, except inside that project's own list (`ProjectIndex` maps a chat, or any id in its compression lineage, to its project)
+- [x] Threads: permanent chats in a section above Pinned, in an order you set. Start fresh archives the old chat as "<name> · date time" and opens a new one in the same slot; renaming a thread retitles its chat. Kept in the profile's `ui_meta`, so every phone sees them
+- [x] Projects as a list (Settings → Appearance → Projects as a list): one button where the chips were, naming the picked project, that opens a menu of every project with its chat count and a tick on the picked one; long names keep their room, and a long list scrolls with its cut edge faded. Off by default, the chips as before. Every menu now scrolls when the screen is too short for it, where its last rows used to be cut off
 - [ ] A chat's working folder: show it, and change it with a folder picker (`complete.path`, `session.cwd.set`, `session.workspace.move`)
 - [x] Create, rename and delete projects (`projects.create`, `projects.update`, `projects.delete`): a New project button beside the project chips (name and an optional folder on the gateway, typed or picked by browsing the gateway's folders with `complete.path`), and the picked project's options: Rename and Delete for one you made, "Save as project" for a folder the gateway only grouped chats by. A project you made shows before it has chats
 - [x] Insights page in the sidebar, after Desktop's (`GET /api/analytics/usage`): cost, sessions, tokens and cache share over 7/30/90 days, tokens by day (tap a day), top models, tools and skills. `usage.bars` (subscription limits) not yet
 
 ### Notifications & background
+- [x] Inbox: finished runs of the cron jobs you follow, newest first and grouped by day, each read in full as Markdown; per job Off, Inbox (quiet) or Notify, plus a notification for any failed run; an unread count on the sidebar tile. Chips along the top show one job's history (a chip per job, with its unread count) or only the failed runs; or, switched to My groups, the user's own groups of jobs (such as RUBIX and Personal, with Other for the rest), made, renamed and filled on a Chips and groups page and kept on the phone. Runs come from the herald-push plugin (0.4.0, `/herald-push cron`), which reads the gateway's cron output files, so a job keeps its own delivery (Telegram and so on). Pushed runs are kept on the phone and read offline
 - [x] Foreground service that keeps the WS alive during long runs
 - [x] One constant, quiet ongoing notification ("Herald · Connected to Hermes") in place of a Live Update; what a turn does shows in the app
 - [x] Local notifications: approval waiting, run finished; tapping one opens its chat
@@ -285,7 +297,7 @@ Agent tools that run on the phone: a gateway plugin registers them, Herald answe
 
 ### Platforms & polish
 - [x] 48dp touch targets (`MinTouchTarget`) on icon buttons, the composer, the top bar and the sidebar rows, without enlarging the icons
-- [x] Launcher shortcuts New chat and New chat with voice (starts dictating); links `hermes://new-chat`, `hermes://new-chat-voice` and `hermes://session/<id>`
+- [x] Launcher shortcuts New chat, New chat with voice (starts dictating) and Call Hermes (a voice chat in a new chat, once the gateway is connected); links `hermes://new-chat`, `hermes://new-chat-voice`, `hermes://voice-chat` and `hermes://session/<id>`
 - [x] Web links in replies open in a Custom Tab in the app's colors, or the browser when there's none
 - [x] App lock (Settings → Privacy): fingerprint, face or screen lock on launch and after a minute away; content hidden in Recents
 - [ ] Tablet and foldable adaptive layout (list and detail side by side)
@@ -296,5 +308,6 @@ Agent tools that run on the phone: a gateway plugin registers them, Herald answe
 - [ ] Desktop (JVM) app
 - [x] Wear OS companion (`wearApp`, `shared/wearlink`): talk to Hermes from the watch through Herald on the phone (Data Layer relay, its own side chat); the watch's speech recognizer, or a recording the gateway transcribes; live progress, the reply and the chat's title; the gateway's voice played on the watch, the watch's own voice when there is none; pick, start or continue a chat; an "Ask Hermes" tile and complication
 - [x] Wear OS live voice: with GPT-Live on the gateway, the watch holds the voice call itself (WebRTC, its microphone and speaker, over Wi-Fi or mobile data when it has them) while Herald on the phone gets the model's answer and runs each request as a Hermes turn in the watch's chat; captions, Hermes at work, mute and hang up on the watch; "Talk live" in the watch's settings
+- [x] watch follows phone accent colors
 - [ ] Wear OS direct mode: the watch talks to the gateway itself, without the phone
 - [ ] Localization (`i18n.catalog`)

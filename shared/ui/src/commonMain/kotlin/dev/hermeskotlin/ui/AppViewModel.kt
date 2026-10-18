@@ -19,9 +19,11 @@ import dev.hermeskotlin.core.connection.GatewayConnection
 import dev.hermeskotlin.core.gateway.AccessTokens
 import dev.hermeskotlin.core.gateway.GatewayList
 import dev.hermeskotlin.core.gateway.GatewayRepository
+import dev.hermeskotlin.core.inbox.InboxStore
 import dev.hermeskotlin.core.gateway.SavedGateway
 import dev.hermeskotlin.core.profiles.ProfileStore
 import dev.hermeskotlin.core.push.PushSetup
+import dev.hermeskotlin.core.sessions.SeenStore
 import dev.hermeskotlin.ui.chat.ChatTarget
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -65,6 +67,10 @@ class AppViewModel(
     private val access: AccessTokens,
     /** The chats saved on this device, which go with signing out. */
     private val cache: OfflineCache? = null,
+    /** Where the user last looked in each chat, so one opened from a notification starts at its new messages. */
+    private val seen: SeenStore? = null,
+    /** Each gateway's Inbox kept on the phone, which goes with the gateway. */
+    private val inbox: InboxStore? = null,
 ) : ViewModel() {
 
     private val _route = MutableStateFlow<Route>(Route.Loading)
@@ -114,9 +120,15 @@ class AppViewModel(
                     val bot = link.bot
                     val stored = link.storedSessionId
                     when {
-                        bot != null -> openBotLink(bot, link.title, stored, link.draft)
+                        bot != null -> openBotLink(bot, link.title, stored, link.draft, stored?.let { lastLook(it, profile = bot) })
                         stored == null -> newChat(link.draft)
-                        open != stored -> openSession(stored, link.title ?: "Chat")
+                        open != stored -> openSession(stored, link.title ?: "Chat", lastLook(stored, currentProfile()))
+                        // Usually the notification is for the chat left open: the reply came in while away.
+                        // It stays open, with the line placed from the last look.
+                        else -> (_route.value as? Route.Chat)?.let { route ->
+                            val readUpTo = lastLook(stored, route.target.profile)
+                            _route.value = Route.Chat(route.target.copy(readUpTo = readUpTo))
+                        }
                     }
                 }
         }
@@ -186,6 +198,7 @@ class AppViewModel(
             // Again: a list read that was under way may have saved itself since.
             cache?.forgetGateway(gateway.gatewayUrl)
             gateways.remove(gateway.url)
+            inbox?.forget(gateway.gatewayUrl.value)
             forgetUnusedAccessTokens()
             sessionsChanged.update { it + 1 }
             if (wasCurrent) {
@@ -200,9 +213,10 @@ class AppViewModel(
         access.retainOnly(gateways.all().gateways.map { it.gatewayUrl.host })
     }
 
-    fun openSession(sessionId: String, title: String) {
+    /** Opens a stored chat; [readUpTo] is how far it had been read, when it has new messages since. */
+    fun openSession(sessionId: String, title: String, readUpTo: Double? = null) {
         val gateway = signedInGateway() ?: return
-        _route.value = Route.Chat(ChatTarget(gateway, sessionId, title, profile = currentProfile()))
+        _route.value = Route.Chat(ChatTarget(gateway, sessionId, title, profile = currentProfile(), readUpTo = readUpTo))
     }
 
     /**
@@ -226,10 +240,13 @@ class AppViewModel(
         _route.value = Route.Chat(newChatTarget(gateway, bot.name))
     }
 
-    /** Opens [bot]'s permanent chat, the stored session [storedSessionId], in the bot's own profile. */
-    fun openBotChat(bot: Bot, storedSessionId: String) {
+    /**
+     * Opens [bot]'s permanent chat, the stored session [storedSessionId], in the bot's own profile; [readUpTo] is
+     * how far it had been read, when it has new messages since.
+     */
+    fun openBotChat(bot: Bot, storedSessionId: String, readUpTo: Double? = null) {
         val gateway = signedInGateway() ?: return
-        _route.value = Route.Chat(botChatTarget(gateway, storedSessionId, bot.name, bot.label))
+        _route.value = Route.Chat(botChatTarget(gateway, storedSessionId, bot.name, bot.label).copy(readUpTo = readUpTo))
     }
 
     /**
@@ -237,11 +254,11 @@ class AppViewModel(
      * opens at once and is then checked against the gateway; without one it's looked up first, safely.
      * [draft] (a share to the bot) goes into its composer, after what the user had typed there.
      */
-    private fun openBotLink(bot: String, label: String?, storedSessionId: String?, draft: ComposeDraft? = null) {
+    private fun openBotLink(bot: String, label: String?, storedSessionId: String?, draft: ComposeDraft? = null, readUpTo: Double? = null) {
         val gateway = signedInGateway() ?: return
         val name = label?.takeIf { it.isNotBlank() } ?: Bot(name = bot).label
         if (storedSessionId != null) {
-            _route.value = Route.Chat(botChatTarget(gateway, storedSessionId, bot, name, draft).also(::followBotChat))
+            _route.value = Route.Chat(botChatTarget(gateway, storedSessionId, bot, name, draft).copy(readUpTo = readUpTo).also(::followBotChat))
             return
         }
         viewModelScope.launch {
@@ -357,6 +374,16 @@ class AppViewModel(
     // The nonce makes every new chat a fresh target, even right after another empty one.
     private fun newChatTarget(gateway: SavedGateway, profile: String?) =
         ChatTarget(gateway, storedSessionId = null, title = null, nonce = ++newChatCount, profile = profile)
+
+    /**
+     * How far the user had read [sessionId] in [profile], for a chat opened from a notification. A link there
+     * means something came in, so the "New messages" line goes above whatever is newer than this; when
+     * nothing is, there's no line.
+     */
+    private suspend fun lastLook(sessionId: String, profile: String?): Double? {
+        val gateway = signedInGateway() ?: return null
+        return seen?.lastLook(gateway.gatewayUrl, sessionId, profile)
+    }
 
     private fun signedInGateway(): SavedGateway? = (_route.value as? Route.Chat)?.gateway
 

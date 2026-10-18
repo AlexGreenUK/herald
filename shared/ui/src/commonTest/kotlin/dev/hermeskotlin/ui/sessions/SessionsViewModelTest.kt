@@ -2,6 +2,8 @@ package dev.hermeskotlin.ui.sessions
 
 import dev.hermeskotlin.core.auth.AuthApi
 import dev.hermeskotlin.core.projects.ProjectsApi
+import dev.hermeskotlin.core.threads.ThreadsApi
+import dev.hermeskotlin.core.threads.ThreadsRepository
 import dev.hermeskotlin.core.auth.PersistentCookiesStorage
 import dev.hermeskotlin.core.chat.AttentionTracker
 import dev.hermeskotlin.core.chat.ChatHost
@@ -106,6 +108,7 @@ class SessionsViewModelTest {
         return SessionsViewModel(
             SessionsApi(client), auth, connection, LastChatStore(InMemoryKeyValueStore()), ProfilesApi(client),
             attention, SeenStore(InMemoryKeyValueStore()) { 0.0 }, DraftStore(InMemoryKeyValueStore()), ProjectsApi(connection),
+            ThreadsRepository(ThreadsApi(connection), SessionsApi(client), ProfilesApi(client)),
             cache,
         )
     }
@@ -240,6 +243,30 @@ class SessionsViewModelTest {
         val state = vm.awaitLoaded()
         assertEquals(listOf("a", "b"), state.sessions.map { it.id })
         assertEquals(false, state.canLoadMore)
+    }
+
+    @Test
+    fun eachReadOfTheListIsSaidAsItIsAskedAndWhenItComesBack() = runTest(dispatcher) {
+        val vm = viewModel()
+        val reads = mutableListOf<ListRead>()
+        backgroundScope.launch { vm.listReads.collect { reads += it } }
+        vm.bind(gateway, profile = "work")
+        vm.awaitLoaded()
+        assertEquals(ListBinding(gateway, "work"), vm.binding.value)
+        assertEquals(
+            setOf(ListRead.Asked(gateway.gatewayUrl, "work", SessionListFilter.Recent), ListRead.Done(SessionListFilter.Recent)),
+            reads.toSet(),
+        )
+    }
+
+    @Test
+    fun aReadThatFailsIsOnlyAsked() = runTest(dispatcher) {
+        val vm = viewModel(listStatus = HttpStatusCode.InternalServerError)
+        val reads = mutableListOf<ListRead>()
+        backgroundScope.launch { vm.listReads.collect { reads += it } }
+        vm.bind(gateway)
+        vm.awaitLoaded()
+        assertEquals(listOf<ListRead>(ListRead.Asked(gateway.gatewayUrl, null, SessionListFilter.Recent)), reads)
     }
 
     @Test

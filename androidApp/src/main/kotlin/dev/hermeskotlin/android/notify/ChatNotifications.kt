@@ -19,6 +19,7 @@ import androidx.core.app.Person
 import androidx.core.app.RemoteInput
 import dev.hermeskotlin.core.bots.Bot
 import androidx.core.content.ContextCompat
+import dev.hermeskotlin.android.HeraldActivity
 import dev.hermeskotlin.android.R
 import dev.hermeskotlin.core.chat.ApprovalChoice
 import dev.hermeskotlin.core.chat.InputRequest
@@ -58,6 +59,14 @@ class ChatNotifications(private val context: Context) {
                 NotificationChannelCompat.Builder(CHANNEL_BOTS, NotificationManagerCompat.IMPORTANCE_DEFAULT)
                     .setName("Bot messages")
                     .setDescription("A bot wrote in its chat while the app was in the background.")
+                    .build(),
+                NotificationChannelCompat.Builder(CHANNEL_INBOX, NotificationManagerCompat.IMPORTANCE_DEFAULT)
+                    .setName("Inbox")
+                    .setDescription("A scheduled job you follow reported, such as a morning briefing.")
+                    .build(),
+                NotificationChannelCompat.Builder(CHANNEL_INBOX_FAILED, NotificationManagerCompat.IMPORTANCE_HIGH)
+                    .setName("Failed jobs")
+                    .setDescription("A scheduled job's run failed.")
                     .build(),
                 NotificationChannelCompat.Builder(CHANNEL_VOICE, NotificationManagerCompat.IMPORTANCE_LOW)
                     .setName("Voice chat")
@@ -438,8 +447,17 @@ class ChatNotifications(private val context: Context) {
     /** Each room's lines shown in its notification, oldest first. */
     private val unreadRoomLines = mutableMapOf<String, List<RoomNotice>>()
 
+    /**
+     * Opens Herald like its launcher icon does. Named by the activity, not the launch intent, which names the
+     * app icon's alias: picking another icon turns that alias off, and a notification posted before then would
+     * open nothing.
+     */
+    private fun appIntent(): Intent = Intent(context, HeraldActivity::class.java)
+        .setAction(Intent.ACTION_MAIN)
+        .addCategory(Intent.CATEGORY_LAUNCHER)
+
     private fun openRoom(roomId: String, name: String): PendingIntent {
-        val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)!!
+        val intent = appIntent()
             .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
             .putExtra(EXTRA_OPEN_ROOM, roomId)
             .putExtra(EXTRA_OPEN_TITLE, name)
@@ -462,6 +480,30 @@ class ChatNotifications(private val context: Context) {
     /** Bot messages posted lately: bot and opening words → (came through push, when). */
     private val recentBotMessages = LinkedHashMap<String, Pair<Boolean, Long>>()
 
+    /**
+     * A finished run of a cron job the user follows: the job as the title, the start of what it said, and a tap
+     * that opens it in the Inbox. One notification per job (a job id is only unique in its profile, [bot]), so a
+     * job's next run replaces its last.
+     */
+    fun postCronRun(key: String, bot: String, job: String, title: String, text: String, failed: Boolean) {
+        val body = text.toPlainText().take(MAX_PREVIEW).ifBlank { if (failed) "The run failed." else "Finished." }
+        val notification = base(if (failed) CHANNEL_INBOX_FAILED else CHANNEL_INBOX)
+            .setContentTitle(if (failed) "$title failed" else title)
+            .setContentText(body.lineSequence().firstOrNull { it.isNotBlank() }?.trim() ?: body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setCategory(if (failed) NotificationCompat.CATEGORY_ERROR else NotificationCompat.CATEGORY_MESSAGE)
+            .setContentIntent(openInbox(key))
+            .build()
+        post("cron:$bot/$job", INBOX_ID, notification)
+    }
+
+    private fun openInbox(key: String): PendingIntent {
+        val intent = appIntent()
+            .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            .putExtra(EXTRA_OPEN_INBOX, key)
+        return PendingIntent.getActivity(context, "inbox:$key".hashCode(), intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+    }
+
     /** "Send a test" from the push setup: proof that a push got through ntfy and decrypted. */
     fun postPushTest() = post(
         null,
@@ -474,7 +516,7 @@ class ChatNotifications(private val context: Context) {
     )
 
     private fun openBot(bot: Bot, storedSessionId: String): PendingIntent {
-        val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)!!
+        val intent = appIntent()
             .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
             .putExtra(EXTRA_OPEN_BOT, bot.name)
             .putExtra(EXTRA_OPEN_SESSION, storedSessionId)
@@ -516,7 +558,7 @@ class ChatNotifications(private val context: Context) {
     }
 
     private fun openApp(storedSessionId: String?, title: String?): PendingIntent {
-        val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)!!
+        val intent = appIntent()
             .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
         if (storedSessionId != null) {
             intent.putExtra(EXTRA_OPEN_SESSION, storedSessionId).putExtra(EXTRA_OPEN_TITLE, title)
@@ -542,7 +584,11 @@ class ChatNotifications(private val context: Context) {
         const val PUSH_TEST_ID = 5
         const val ROOM_ID = 6
         const val VOICE_ID = 7
-        const val CALL_ID = 8
+        const val INBOX_ID = 8
+
+        /** On the launch intent of an Inbox notification: the run's key ([dev.hermeskotlin.core.inbox.InboxRun.key]). */
+        const val EXTRA_OPEN_INBOX = "open_inbox"
+        const val CALL_ID = 9
 
         /** On an Answer's launch intent: the request whose call was answered. */
         const val EXTRA_ANSWERED_CALL = "answered_call"
@@ -566,6 +612,8 @@ class ChatNotifications(private val context: Context) {
         private const val CHANNEL_REPLIES = "replies"
         private const val CHANNEL_BOTS = "bots"
         private const val CHANNEL_VOICE = "voice"
+        private const val CHANNEL_INBOX = "inbox"
+        private const val CHANNEL_INBOX_FAILED = "inbox_failed"
 
         /** Read by PhoneToolAccess too, to tell whether calls can ring. */
         private const val CHANNEL_CALLS = "calls"

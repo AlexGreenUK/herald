@@ -93,7 +93,9 @@ class BotNotifier(
         }
         scope.launch {
             connection.events.filter { it.type == "sessions.changed" }.debounce(DEBOUNCE_MS).collect {
-                runCatching { check(notify = !visibility.visible.value, watch = false) }
+                // In sight, only with notifications for other chats on; the open chat is skipped below either way.
+                val inApp = settings.settings.value?.notifyOtherChatsInApp == true
+                runCatching { check(notify = !visibility.visible.value || inApp, watch = false) }
             }
         }
         // Leaving the app: a bot removed, renamed or hidden in it leaves the share sheet and launcher now,
@@ -108,6 +110,23 @@ class BotNotifier(
 
     /** The bots the shortcuts were last published for, by name, label and look: a change publishes them again. */
     private var published: List<Bot>? = null
+
+    /**
+     * The launcher entry (the app icon's alias) the shortcuts went out under. Android drops them when the user
+     * picks another app icon, which turns that entry off.
+     */
+    private var publishedUnder: String? = null
+
+    private fun launcherEntry(): String? =
+        context.packageManager.getLaunchIntentForPackage(context.packageName)?.component?.className
+
+    /** After an app icon change (Herald restarts from the new icon), puts the bot shortcuts back under it. */
+    fun republishIfIconChanged() {
+        if (publishedUnder == null || launcherEntry() == publishedUnder) return
+        scope.launch {
+            if (connection.state.value is ConnectionState.Connected) runCatching { check(notify = false, watch = false, track = false) }
+        }
+    }
 
     /** Reads the roster: keeps the shortcuts to it, and with [track] notes (and with [notify] tells) what each bot's chat did. */
     private suspend fun check(notify: Boolean, watch: Boolean, track: Boolean = true) = lock.withLock {
@@ -127,10 +146,12 @@ class BotNotifier(
         // is renamed or hidden, so the share sheet never offers one that's gone.
         val shown = bots.filterNot { it.meta.hidden }
         val look = shown.map { Bot(name = it.name, isDefault = it.isDefault, displayName = it.displayName, uiMeta = it.uiMeta, hasAvatar = it.hasAvatar) }
-        if (watch || look != published) {
+        val launcher = launcherEntry()
+        if (watch || look != published || launcher != publishedUnder) {
             loadPictures(shown)
             BotShortcuts.publish(context, shown, pictures)
             published = look
+            publishedUnder = launcher
         }
         if (!track) return@withLock
         val prefs = settings.settings.value ?: AppSettings()

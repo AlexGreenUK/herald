@@ -10,10 +10,13 @@ import dev.hermeskotlin.core.chat.Checkpoint
 import dev.hermeskotlin.core.chat.ChatHost
 import dev.hermeskotlin.core.chat.ChatMessage
 import dev.hermeskotlin.core.chat.ChatSession
+import dev.hermeskotlin.core.threads.ChatThread
+import dev.hermeskotlin.core.threads.ThreadsRepository
 import dev.hermeskotlin.core.bots.BotsApi
 import dev.hermeskotlin.core.chat.ChatState
 import dev.hermeskotlin.core.chat.ComposeDraft
 import dev.hermeskotlin.core.chat.ControlAction
+import dev.hermeskotlin.core.chat.DraftStart
 import dev.hermeskotlin.core.chat.DraftStore
 import dev.hermeskotlin.core.chat.InputRequest
 import dev.hermeskotlin.core.chat.LastChat
@@ -21,6 +24,9 @@ import dev.hermeskotlin.core.chat.LastChatStore
 import dev.hermeskotlin.core.connection.ConnectionState
 import dev.hermeskotlin.core.connection.GatewayConnection
 import dev.hermeskotlin.core.gateway.SavedGateway
+import dev.hermeskotlin.core.media.GatewayFile
+import dev.hermeskotlin.core.media.LinkPreview
+import dev.hermeskotlin.core.media.LinkPreviews
 import dev.hermeskotlin.core.media.MediaApi
 import dev.hermeskotlin.core.network.ApiResult
 import dev.hermeskotlin.core.models.ModelCatalog
@@ -34,6 +40,7 @@ import dev.hermeskotlin.core.chat.promptNow
 import dev.hermeskotlin.core.chat.regenerateTarget
 import dev.hermeskotlin.core.network.errorMessage
 import dev.hermeskotlin.core.profiles.ProfilesApi
+import dev.hermeskotlin.core.sessions.SeenStore
 import dev.hermeskotlin.core.sessions.SessionsApi
 import dev.hermeskotlin.core.settings.SettingsStore
 import dev.hermeskotlin.core.settings.AppSettings
@@ -47,6 +54,7 @@ import dev.hermeskotlin.core.voice.AudioApi
 import dev.hermeskotlin.core.voice.LiveCalls
 import dev.hermeskotlin.core.voice.VoiceKeepAlive
 import dev.hermeskotlin.core.voice.SpeechPlayer
+import dev.hermeskotlin.core.voice.SpeechStreams
 import dev.hermeskotlin.core.voice.VoiceRecorder
 import dev.hermeskotlin.core.voice.DeviceDictation
 import dev.hermeskotlin.ui.voice.VoiceController
@@ -77,11 +85,13 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonObject
 
 /** The model sheet: the catalog once loaded, and a pricey pick waiting for a yes. */
@@ -124,7 +134,8 @@ sealed interface ChatRequest {
  * Identifies what the chat screen shows: a stored session, or a new chat (`storedSessionId == null`),
  * in [profile] (null: the gateway's launch profile). With [bot] it is that bot's permanent chat. A new
  * chat opened from outside (share sheet, shortcut) brings its [draft]. A new chat started in a project
- * runs in that project's folder, [cwd].
+ * runs in that project's folder, [cwd]. [readUpTo] is how far the user had read the chat when they opened
+ * it (epoch seconds), so the messages since can be marked as new; null when there was nothing new.
  */
 data class ChatTarget(
     val gateway: SavedGateway,
@@ -135,6 +146,7 @@ data class ChatTarget(
     val bot: BotIdentity? = null,
     val draft: ComposeDraft? = null,
     val cwd: String? = null,
+    val readUpTo: Double? = null,
 ) {
     /**
      * The profile whose last chat this is, which the next launch reads: a bot's chat counts where the Chats
@@ -148,6 +160,9 @@ data class ChatTarget(
  * the Chats list was on when it opened, where the app remembers to come back to this chat.
  */
 data class BotIdentity(val name: String, val label: String, val chatsProfile: String? = null)
+
+/** A transcript and its file callbacks travel together while the selected route changes. */
+internal data class ChatTranscript(val state: ChatState = ChatState(), val widgetFiles: WidgetFiles? = null)
 
 /**
  * Shows the [ChatSession] the app-wide [ChatHost] has open; opening another target replaces it.
@@ -177,10 +192,20 @@ class ChatViewModel(
     liveCalls: LiveCalls,
     voiceKeepAlive: VoiceKeepAlive,
     deviceDictation: DeviceDictation,
+    speechStreams: SpeechStreams,
+    /** Where the user last looked in each chat, so a chat reopened from a notification starts at its new messages. */
+    private val seen: SeenStore? = null,
+    /** The threads, so `/new` in a thread's chat starts the thread fresh instead of leaving it. */
+    private val threads: ThreadsRepository? = null,
+    private val linkPreviews: LinkPreviews? = null,
 ) : ViewModel(), ChatActions {
 
     /** Dictation and voice chat for the open chat. */
-    val voice = VoiceController(audioApi, recorder, player, viewModelScope, appScope, voiceKeepAlive, deviceDictation, liveCalls)
+    val voice = VoiceController(
+        audioApi, recorder, player, viewModelScope, appScope, voiceKeepAlive, deviceDictation,
+        speechStreams = speechStreams,
+        liveCalls = liveCalls,
+    )
 
     /** The profile's pet and its gallery. */
     val pets = PetController(petApi, viewModelScope)
@@ -209,12 +234,24 @@ class ChatViewModel(
 
     private var target: ChatTarget? = null
     private val session = MutableStateFlow<ChatSession?>(null)
+    private val widgetSession = MutableStateFlow<Pair<ChatSession, ChatTarget>?>(null)
 
     init {
         // A chat opened under the checkpoints sheet shows its own checkpoints, not the last chat's.
         viewModelScope.launch { session.collect { checkpoints.follow(it) } }
         viewModelScope.launch { session.collect { control.follow(it) } }
     }
+
+    internal val transcript: StateFlow<ChatTranscript> = widgetSession
+        .flatMapLatest { bound ->
+            if (bound == null) flowOf(ChatTranscript()) else {
+                val (chat, owner) = bound
+                // Keyed by whose files these are, so a new title or draft on the same chat doesn't reload its widgets.
+                val files = WidgetFiles(owner.gateway.gatewayUrl to owner.profile, { previewFile(it, owner) }, { downloadFile(it, owner) })
+                chat.state.map { ChatTranscript(it, files) }
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, ChatTranscript())
 
     val state: StateFlow<ChatState> = session
         .flatMapLatest { it?.state ?: flowOf(ChatState()) }
@@ -262,6 +299,12 @@ class ChatViewModel(
 
     /** Commands the screen answers: a new chat, the model sheet, the sessions list. */
     val requests: Flow<ChatRequest> = _requests.receiveAsFlow()
+
+    /**
+     * Whether the chat screen is on screen ([onScreen]): started, and not swapped out for a room. A call can't
+     * take the microphone from the background, and shouldn't start behind another screen.
+     */
+    private val shown = MutableStateFlow(true)
 
     /** The commands and skills of the open chat's profile; fetched once per chat, on the first `/`. */
     private var catalog: SlashCatalog? = null
@@ -371,15 +414,39 @@ class ChatViewModel(
         }
     }
 
+    /**
+     * The user is leaving this chat, for another one or out of the app: everything in it up to now counts as
+     * read, so a reply that comes in meanwhile (and its notification) is new to them. The lists only record a
+     * look when a chat is tapped there, which misses what came in while it stayed open. A turn still running
+     * then makes its reply new even in a chat from a messaging platform, as Desktop's finished-turn dot does.
+     */
+    fun markLooked() {
+        val target = target ?: return
+        val state = state.value
+        val id = state.storedSessionId ?: return
+        // The machinery's rows (deliveries, routines) count too: they move the chat's activity on as well.
+        val newest = state.messages.mapNotNull { it.sentAt ?: (it as? ChatMessage.Event)?.timestamp }.maxOrNull() ?: return
+        viewModelScope.launch { seen?.markLooked(target.gateway.gatewayUrl, id, newest, target.profile, running = state.running) }
+    }
+
+    /** Opens [target]'s chat in the host, with the transcript's file callbacks bound to that target. */
+    private fun bind(target: ChatTarget) {
+        val chat = host.open(target.gateway.gatewayUrl, target.storedSessionId, target.title, target.profile, target.cwd)
+        session.value = chat
+        widgetSession.value = chat?.let { it to target }
+    }
+
     fun open(target: ChatTarget) {
-        if (this.target == target) {
+        // The same chat, perhaps with a new read position (reopened from a notification): the screen places the
+        // "New messages" line from the target; the chat itself, its draft and any voice chat stay as they are.
+        if (this.target?.copy(readUpTo = null) == target.copy(readUpTo = null)) {
+            this.target = target
             // An expired session or sign-out closes the host's chat; the same chat reopened after signing
             // back in needs a fresh session, not the stopped one this view model still holds.
-            if (session.value !== host.session.value) {
-                session.value = host.open(target.gateway.gatewayUrl, target.storedSessionId, target.title, target.profile, target.cwd)
-            }
+            if (session.value !== host.session.value) bind(target)
             return
         }
+        markLooked()
         // An edit belongs to its chat; what was typed before it is that chat's draft.
         cancelEdit()
         val sameChat = draftOf?.let(::draftChat)?.takeIf { it == target.storedSessionId } != null
@@ -393,12 +460,40 @@ class ChatViewModel(
         restoreDraft(target, typed)
         target.draft?.let(::takeDraft)
         if (target.storedSessionId == null) viewModelScope.launch { lastChats.set(target.gateway.gatewayUrl, null, target.profile) }
-        session.value = host.open(target.gateway.gatewayUrl, target.storedSessionId, target.title, target.profile, target.cwd)
+        bind(target)
         // The catalog marks the previous chat's model; a new chat must show the profile default instead.
         _picker.update { it.copy(catalog = null, confirm = null) }
         if (connectionState.value is ConnectionState.Connected) {
             loadModels()
             pets.bind(target.profile)
+        }
+        // After the new chat's session is bound: the call belongs to it.
+        if (target.draft?.start == DraftStart.VoiceChat) startVoiceWhenConnected(target)
+    }
+
+    /** The screen tells whether it's on screen (started) or gone to the background (stopped). */
+    fun onScreen(shown: Boolean) {
+        this.shown.value = shown
+    }
+
+    /**
+     * Starts the Call Hermes shortcut's voice chat in [target] once the gateway is connected, as the Voice chat
+     * button can't be pressed before then either, and while the app is on screen. A call that can't start in time
+     * isn't started late, when the person may have moved on. A gateway that can't be reached gets a notice;
+     * an expired sign-in shows its own screen, and someone who left the app knows why nothing rang.
+     */
+    private fun startVoiceWhenConnected(target: ChatTarget) {
+        viewModelScope.launch {
+            val ready = withTimeoutOrNull(VOICE_CONNECT_WAIT_MS) {
+                combine(connectionState, shown) { state, shown -> state.takeIf { it !is ConnectionState.Connected || shown } }
+                    .first { it is ConnectionState.Connected || it is ConnectionState.Failed || it is ConnectionState.SessionExpired }
+            }
+            if (this@ChatViewModel.target != target) return@launch
+            when {
+                ready is ConnectionState.Connected -> _requests.send(ChatRequest.StartVoice)
+                ready is ConnectionState.Failed || (ready == null && connectionState.value !is ConnectionState.Connected) ->
+                    showAttachmentError("The call didn't start: Herald couldn't reach the gateway.")
+            }
         }
     }
 
@@ -412,7 +507,7 @@ class ChatViewModel(
         draft.notice?.let(::showAttachmentError)
         // After the notice: when the files overfill a tray that already held some, the tray limit is what to tell.
         if (draft.attachments.isNotEmpty()) addAttachments(draft.attachments)
-        if (draft.dictate) viewModelScope.launch { _requests.send(ChatRequest.StartDictation) }
+        if (draft.start == DraftStart.Dictation) viewModelScope.launch { _requests.send(ChatRequest.StartDictation) }
     }
 
     fun startVoiceChat() {
@@ -574,6 +669,8 @@ class ChatViewModel(
 
     private val mediaCache = mutableMapOf<String, ByteArray>()
 
+    override suspend fun loadLinkPreview(url: String): LinkPreview? = linkPreviews?.load(url)
+
     /**
      * The bytes behind a picture or file the chat shows: a gateway path (`@image:` in a stored prompt,
      * `MEDIA:` in a reply), a web URL or a `data:` URL. Cached per source; null when it can't be had.
@@ -592,6 +689,34 @@ class ChatViewModel(
         if (mediaCache.size >= MAX_CACHED_MEDIA) mediaCache.remove(mediaCache.keys.first())
         mediaCache[source] = result
         return result
+    }
+
+    /**
+     * The start of a gateway file a reply linked to, for its viewer; the reason in plain words
+     * when the gateway won't hand it over.
+     */
+    suspend fun previewFile(file: GatewayFile): FileLoad = previewFile(file, target)
+
+    internal suspend fun previewFile(file: GatewayFile, owner: ChatTarget?): FileLoad {
+        val gateway = owner?.gateway?.gatewayUrl ?: return FileLoad.Failed("Not connected to a gateway.")
+        return when (val result = media.readText(gateway, file.path, owner.profile)) {
+            is ApiResult.Success -> FileLoad.Ready(result.value)
+            else -> FileLoad.Failed(fileError(result))
+        }
+    }
+
+    /**
+     * A whole gateway file a reply linked to, through the chat's profile: for Save and Share, and for a
+     * linked picture. Fetched each time, so a file the agent has since rewritten comes back as it is now.
+     */
+    suspend fun downloadFile(file: GatewayFile): FileDownload = downloadFile(file, target)
+
+    internal suspend fun downloadFile(file: GatewayFile, owner: ChatTarget?): FileDownload {
+        val gateway = owner?.gateway?.gatewayUrl ?: return FileDownload.Failed("Not connected to a gateway.")
+        return when (val result = media.download(gateway, file.path, owner.profile)) {
+            is ApiResult.Success -> FileDownload.Ready(result.value)
+            else -> FileDownload.Failed(fileError(result, whole = true))
+        }
     }
 
     /** Adds picked files to the composer tray, up to [OutgoingAttachment.MAX_COUNT]. */
@@ -675,6 +800,37 @@ class ChatViewModel(
         }
     }
 
+    /** The thread whose chat is open, when the chat is one and is in the profile the threads were read for. */
+    fun openThread(): ChatThread? {
+        val repo = threads ?: return null
+        val open = target ?: return null
+        val scope = repo.scope.value ?: return null
+        if (open.bot != null || scope.url != open.gateway.gatewayUrl || scope.profile != open.profile) return null
+        return repo.threadFor(session.value?.state?.value?.storedSessionId ?: open.storedSessionId)
+    }
+
+    /**
+     * Starts the open thread fresh and moves to its new chat. Asked for by [command] (`/new` or `/reset`), whose
+     * failure shows in the chat like any command's output.
+     */
+    fun startThreadFresh(command: String = "/new") {
+        val chat = session.value ?: return
+        viewModelScope.launch { startThreadFresh(chat, command) }
+    }
+
+    private suspend fun startThreadFresh(chat: ChatSession, command: String) {
+        val repo = threads ?: return
+        val thread = openThread() ?: return
+        try {
+            val fresh = repo.startFresh(thread)
+            _requests.send(ChatRequest.OpenChat(fresh.sessionId, fresh.title))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            chat.showCommandOutput(command, e.message ?: "Couldn't start ${thread.name} fresh.", failed = true)
+        }
+    }
+
     /** A command typed in the composer: answered here when this app has its own control for it, else run on the gateway. */
     private fun runCommand(chat: ChatSession, command: SlashCommand) {
         viewModelScope.launch {
@@ -684,7 +840,12 @@ class ChatViewModel(
             }
             when (val route = SlashRoute.of(command.name, catalog())) {
                 // A bot keeps one chat forever, so a fresh start there is a fresh context, as on Desktop.
-                SlashRoute.NewChat -> if (target?.bot != null) chat.compress(arg) else _requests.send(ChatRequest.NewChat)
+                SlashRoute.NewChat -> when {
+                    target?.bot != null -> chat.compress(arg)
+                    // A thread keeps its place: its chat is filed away and a new one takes over.
+                    openThread() != null -> startThreadFresh(chat, "/${command.name}")
+                    else -> _requests.send(ChatRequest.NewChat)
+                }
                 // Like Desktop: bare opens the picker, `/model <name>` is for the gateway to parse.
                 SlashRoute.PickModel -> if (arg.isEmpty()) _requests.send(ChatRequest.PickModel) else onGateway()
                 SlashRoute.BrowseSessions -> if (arg.isEmpty()) _requests.send(ChatRequest.BrowseSessions) else resume(chat, arg)
@@ -1060,6 +1221,8 @@ class ChatViewModel(
 
     override fun skipSpeech() = voice.skipSpeech()
 
+    override fun sendVoiceNow() = voice.sendNow()
+
     override fun stopVoiceChat() = voice.stopChat()
 
     override fun toggleVoiceMute() = voice.toggleMute()
@@ -1085,5 +1248,33 @@ class ChatViewModel(
 
         /** How much of the selection a `/btw` question quotes. */
         const val ASIDE_QUOTE_MAX = 160
+
+        /** How long the Call Hermes shortcut waits for the gateway (a cold start connects in a few seconds). */
+        const val VOICE_CONNECT_WAIT_MS = 30_000L
     }
+}
+
+/**
+ * Why a gateway file couldn't be read, in the words the file viewer shows. [whole] is for the whole file
+ * (Save, Share, a linked picture), where too large means past the phone's cap, not the preview's.
+ */
+internal fun fileError(result: ApiResult<*>, whole: Boolean = false): String = when (result) {
+    is ApiResult.Failed -> when (result.status) {
+        404 -> "It isn't on the gateway, or it has moved since the reply was written."
+        403 -> if (result.message.contains("sensitive", ignoreCase = true)) {
+            "The gateway keeps files like this one private."
+        } else {
+            "The gateway won't share it: ${result.message.trimEnd('.')}."
+        }
+        413 -> when {
+            !whole -> "It's too large for the gateway to preview. Save still gets it."
+            result.message == MediaApi.TOO_LARGE -> MediaApi.TOO_LARGE
+            else -> "It's too large for the gateway to hand over."
+        }
+        else -> result.message.trimEnd('.') + "."
+    }
+    ApiResult.SessionExpired -> "Sign in again to open files."
+    ApiResult.RateLimited -> "The gateway is busy. Try again in a moment."
+    is ApiResult.Unavailable -> "Couldn't reach the gateway."
+    else -> "Couldn't open it."
 }

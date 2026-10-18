@@ -9,6 +9,7 @@ plugins {
 // Herald on the phone over the Data Layer (shared:wearlink), which pairs the two only when they share the
 // application ID and signing key. So its IDs, versions and signing follow androidApp's exactly.
 val appVersion = (findProperty("appVersion") as String?)?.removePrefix("v") ?: "0.1.0"
+val releasesRepo = (findProperty("releasesRepo") as String?).orEmpty()
 
 android {
     namespace = "dev.hermeskotlin.wear"
@@ -19,6 +20,7 @@ android {
         minSdk = libs.versions.android.wear.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
         val (major, minor, patch) = appVersion.substringBefore('-').split('.').map { it.toInt() }.plus(listOf(0, 0)).take(3)
+        require(minor < 100 && patch < 100) { "appVersion $appVersion: minor and patch must stay under 100" }
         // androidApp's code plus a million: Play takes each version code once per app, across phone and watch.
         versionCode = 1_000_000 + major * 10_000 + minor * 100 + patch
         versionName = appVersion
@@ -27,6 +29,8 @@ android {
     val keystore = rootProject.file("keystore.properties").takeIf { it.exists() }?.let { file ->
         Properties().apply { file.inputStream().use(::load) }
     }
+    // As androidApp: a published watch APK signed with the debug key wouldn't pair with the phone, so a release fails.
+    if (keystore == null && releasesRepo.isNotEmpty()) error("releasesRepo is set but keystore.properties is missing")
     signingConfigs {
         if (keystore != null) create("release") {
             storeFile = rootProject.file("androidApp").resolve(keystore.getProperty("storeFile"))

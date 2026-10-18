@@ -8,7 +8,6 @@ import dev.hermeskotlin.core.wear.WatchOutbox
 import dev.hermeskotlin.core.wear.WatchRelay
 import dev.hermeskotlin.core.wear.contextPercentOf
 import dev.hermeskotlin.core.wear.modelOf
-import dev.hermeskotlin.wearlink.CALL_GAP_MS
 import dev.hermeskotlin.wearlink.CallEnd
 import dev.hermeskotlin.wearlink.CallEvents
 import dev.hermeskotlin.wearlink.CallPhase
@@ -143,7 +142,7 @@ class WatchCalls(
         val forward = scope.launch {
             var heldChat: String? = null
             combine(voice, chat.session.state) { v, s ->
-                CallView(v.caption, v.captionIsVoice, v.phase == VoicePhase.Thinking, v.working, v.error, s.storedSessionId, s.title, modelOf(s), contextPercentOf(s))
+                CallView(v.caption, v.captionIsVoice, v.phase == VoicePhase.Thinking, v.working, v.error?.let(::briefError), s.storedSessionId, s.title, modelOf(s), contextPercentOf(s))
             }.distinctUntilChanged().conflate().collect { view ->
                 view.chatId?.takeIf { it != heldChat }?.let {
                     heldChat = it
@@ -196,7 +195,7 @@ class WatchCalls(
         }
         // Hung up on the watch: nothing to tell. Otherwise ("stop" said, the call dropped, the watch gone quiet)
         // it's told, in case it's still there.
-        if (!held.hungUp) end(if (held.lost) CALL_LOST else error)
+        if (!held.hungUp) end(if (held.lost) CALL_LOST else error?.let(::briefError))
     }
 
     /** The watch's call as [LiveConversation] sees it: the model's events come from the watch, and go back to it. */
@@ -235,12 +234,7 @@ class WatchCalls(
             heardAt = TimeSource.Monotonic.markNow()
             if (batch.events.isNotEmpty()) heard = true
             order.add(batch.seq, batch)
-            if (order.waiting && gap?.isActive != true) {
-                gap = scope.launch {
-                    delay(CALL_GAP_MS)
-                    order.skipGap()
-                }
-            }
+            if (order.waiting && gap?.isActive != true) gap = scope.launch { order.skipGaps() }
         }
 
         fun hungUp() {

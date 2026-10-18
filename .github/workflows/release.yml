@@ -1,4 +1,4 @@
-# Pushing a tag like v0.2.0 tests and builds a signed APK and attaches it to a DRAFT release.
+# Pushing a tag like v0.2.0 tests and builds the signed phone and watch APKs and attaches them to a DRAFT release.
 # Publishing the draft (on GitHub) is what makes it the latest release the app offers as an update.
 #
 # Repo secrets (Settings → Secrets and variables → Actions):
@@ -51,7 +51,8 @@ jobs:
       - name: Test and build
         run: >
           ./gradlew --no-daemon
-          :shared:core:testAndroidHostTest :shared:designsystem:testAndroidHostTest :shared:ui:testAndroidHostTest :androidApp:assembleRelease
+          :shared:core:testAndroidHostTest :shared:designsystem:testAndroidHostTest :shared:ui:testAndroidHostTest :shared:wearlink:testAndroidHostTest
+          :wearApp:testDebugUnitTest :androidApp:assembleRelease :wearApp:assembleRelease
           -PappVersion="${GITHUB_REF_NAME#v}" -PreleasesRepo="$GITHUB_REPOSITORY"
 
       - name: Draft release
@@ -60,11 +61,13 @@ jobs:
         # The universal APK keeps the name every release had; one APK per ABI, about a third of its size, goes
         # beside it after an underscore (herald-1.2.3_arm64-v8a.apk). GitHub lists assets by name and app versions
         # up to 0.5.1 offer the first APK listed, so the universal one must sort first: "." comes before "_".
+        # The Wear OS app is herald-wear-1.2.3.apk, which sorts after them all and which the app never offers.
         run: |
           v="${GITHUB_REF_NAME#v}"
           out=androidApp/build/outputs/apk/release
           cp "$out/androidApp-universal-release.apk" "herald-$v.apk"
           for abi in arm64-v8a armeabi-v7a x86_64 x86; do cp "$out/androidApp-$abi-release.apk" "herald-${v}_$abi.apk"; done
+          cp wearApp/build/outputs/apk/release/wearApp-release.apk "herald-wear-$v.apk"
           for apk in herald-*.apk; do sha256sum "$apk" > "$apk.sha256"; done
           # Above the generated changelog: which APK to take.
           cat > which-apk.md <<EOF
@@ -79,9 +82,12 @@ jobs:
           | Not sure | \`herald-$v.apk\`: runs on all of them, about 2.7× the size |
 
           Once Herald is installed, its update banner downloads the right one by itself.
+
+          **Wear OS watch:** \`herald-wear-$v.apk\`. Install it on the watch with \`adb install\` (Developer options → Wireless debugging); it pairs with Herald on the phone by itself. Update it the same way.
           EOF
           gh release create "$GITHUB_REF_NAME" "herald-$v.apk" "herald-$v.apk.sha256" --draft --generate-notes --notes-file which-apk.md --title "$GITHUB_REF_NAME"
           for abi in arm64-v8a armeabi-v7a x86_64 x86; do gh release upload "$GITHUB_REF_NAME" "herald-${v}_$abi.apk" "herald-${v}_$abi.apk.sha256"; done
+          gh release upload "$GITHUB_REF_NAME" "herald-wear-$v.apk" "herald-wear-$v.apk.sha256"
 
       - name: Remove the signing key
         if: always()
