@@ -163,7 +163,7 @@ internal class LiveConversation(
                             // The voice may well talk on instead of handing the answer over: a clear one is taken
                             // as it is.
                             val asked = asking ?: return@launch
-                            if (!judging.isLocked && answering != asked.id && VoiceAnswers.takesAsAnswer(asked, lastWords())) {
+                            if (!judging.isLocked && answering != asked.id && VoiceAnswers.takesAsAnswer(asked, lastWords(putToThem = true))) {
                                 taking = this@coroutineScope.launch { answerAsked(null, asked) }
                             }
                         }
@@ -353,9 +353,11 @@ internal class LiveConversation(
 
     /**
      * The person's last words in [heard], in the call's order: what they said after the voice last spoke before them.
-     * The voice answering them doesn't cut them short, even when its words came first.
+     * The voice answering them doesn't cut them short, even when its words came first. [putToThem]: only once the voice
+     * asked them something before those words. The end of what it said before it was given the question can still
+     * come in after, and a "yeah" to that isn't the answer.
      */
-    private fun lastWordsSaid(): List<LiveFragment> {
+    private fun lastWordsSaid(putToThem: Boolean = false): List<LiveFragment> {
         // Stable: pieces at the same time keep the order they came in.
         val inOrder = heard.sortedBy { it.second }.map { it.first }.filter { it.text.isNotBlank() }
         val last = inOrder.indexOfLast { it.speaker == LiveFragment.Speaker.User }
@@ -363,13 +365,14 @@ internal class LiveConversation(
         val voice = inOrder.subList(0, last).indexOfLast { it.speaker != LiveFragment.Speaker.User }
         // Only what's said after the voice asked: words from before it, late to come in, aren't the answer.
         if (voice < 0) return emptyList()
+        if (putToThem && inOrder.subList(0, voice + 1).none { it.speaker != LiveFragment.Speaker.User && '?' in it.text }) return emptyList()
         return inOrder.subList(voice + 1, last + 1)
     }
 
     /** Whether [fragment] says when in the call it was said. */
     private fun timed(fragment: LiveFragment) = fragment.startMs > 0 || fragment.endMs > 0
 
-    private fun lastWords(): String = lastWordsSaid().joinToString("") { it.text }
+    private fun lastWords(putToThem: Boolean = false): String = lastWordsSaid(putToThem).joinToString("") { it.text }
 
     /** Whether [request] still waits on an answer. */
     private fun waiting(request: InputRequest) = session.state.value.inputRequests.any { it.id == request.id }
@@ -414,7 +417,9 @@ internal class LiveConversation(
         if (request is InputRequest.Approval && lock.locked()) {
             return send(LiveCommands.commentary(nextId("say"), id, "The phone locked. Ask the user to unlock it, then to say it again."))
         }
-        val words = lastWordsSaid()
+        // Taken without a handover only once the voice asked: else it's the voice's to hand over.
+        val words = lastWordsSaid(putToThem = id == null)
+        if (id == null && words.isEmpty()) return
         val said = words.joinToString("") { it.text }.trim()
         val wasHeard = heard.toList()
         heard.clear()

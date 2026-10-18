@@ -104,6 +104,9 @@ class LiveConversationTest {
         /** When the voice says what it's handed, as the real one does; null for one whose transcript has no times. */
         var spokenAt: Long? = 1_000
 
+        /** What the voice says when it's handed a question. */
+        var asks = "Which one would you like?"
+
         override fun send(event: String): Boolean {
             val sent = Json.parseToJsonElement(event).jsonObject
             this.sent.update { it + sent }
@@ -111,7 +114,7 @@ class LiveConversationTest {
             val content = sent["content"]?.jsonPrimitive?.contentOrNull.orEmpty()
             if (content.startsWith("Hermes needs an answer")) {
                 val at = spokenAt?.let { ""","start_ms":$it,"end_ms":${it + 900}""" }.orEmpty()
-                receive("""{"type":"session.output_transcript.delta","delta":"Which one would you like?"$at}""")
+                receive("""{"type":"session.output_transcript.delta","delta":"$asks"$at}""")
             }
             return true
         }
@@ -490,6 +493,34 @@ class LiveConversationTest {
         call.receive("""{"type":"session.input_transcript.delta","delta":"No, don't.","start_ms":9000,"end_ms":9600}""")
         val answer = socket.answers.first { it.isNotEmpty() }.single()
         assertEquals("deny", answer["result"]!!.jsonObject["choice"]!!.jsonPrimitive.content)
+        voice.stopChat()
+    }
+
+    @Test
+    fun aYesBeforeTheVoiceAskedIsLeftToTheVoice() = runTest {
+        val (socket, _, call, voice) = callWithATurn()
+        // The end of what the voice said before it was given the approval: it hasn't asked yet.
+        call.asks = "Sure, I'll clean that up now."
+        socket.push("""{"jsonrpc":"2.0","id":"srq-1","method":"approval","params":{"session_id":"rt9","command":"rm -rf build","choices":["once","deny"]}}""")
+        call.sent.first { sent -> sent.any { it["content"]?.jsonPrimitive?.contentOrNull?.contains("rm -rf build") == true } }
+        call.receive("""{"type":"session.input_transcript.delta","delta":"Yeah.","start_ms":2000,"end_ms":2400}""")
+        delay(10_000)
+        assertTrue(socket.answers.value.isEmpty())
+        // The voice hands it over once it asked: then it's the answer.
+        call.receive("""{"type":"session.delegation.created","delegation":{"id":"d2"}}""")
+        val answer = socket.answers.first { it.isNotEmpty() }.single()
+        assertEquals("once", answer["result"]!!.jsonObject["choice"]!!.jsonPrimitive.content)
+        voice.stopChat()
+    }
+
+    @Test
+    fun aLoneOkayToAnApprovalIsLeftToTheVoice() = runTest {
+        val (socket, _, call, voice) = callWithATurn()
+        socket.push("""{"jsonrpc":"2.0","id":"srq-1","method":"approval","params":{"session_id":"rt9","command":"rm -rf build","choices":["once","deny"]}}""")
+        call.sent.first { sent -> sent.any { it["content"]?.jsonPrimitive?.contentOrNull?.contains("rm -rf build") == true } }
+        call.receive("""{"type":"session.input_transcript.delta","delta":"Okay.","start_ms":2000,"end_ms":2400}""")
+        delay(10_000)
+        assertTrue(socket.answers.value.isEmpty())
         voice.stopChat()
     }
 
