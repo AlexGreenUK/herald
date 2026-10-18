@@ -466,18 +466,26 @@ class VoiceController(
     /**
      * Reads [text] aloud piece by piece, synthesizing the next piece while the current one plays. [onError] hears
      * what went wrong: a piece the gateway couldn't voice ends it, one the player couldn't play is passed over.
+     * [kept] holds the pieces already voiced for this text, which play again as they are, and gets the new ones.
      */
-    private suspend fun voice(text: String, gateway: GatewayUrl, profile: String?, onError: (String) -> Unit) = coroutineScope {
+    private suspend fun voice(
+        text: String,
+        gateway: GatewayUrl,
+        profile: String?,
+        kept: MutableList<SpokenAudio>? = null,
+        onError: (String) -> Unit,
+    ) = coroutineScope {
         val clips = Channel<SpokenAudio>(capacity = 1)
         launch {
-            for (chunk in speechChunks(text)) {
-                when (val result = audio.speak(gateway, chunk, profile)) {
-                    is ApiResult.Success -> clips.send(result.value)
+            for ((i, chunk) in speechChunks(text).withIndex()) {
+                val clip = kept?.getOrNull(i) ?: when (val result = audio.speak(gateway, chunk, profile)) {
+                    is ApiResult.Success -> result.value.also { kept?.add(it) }
                     else -> {
                         onError(result.errorMessage ?: "Couldn't voice the reply.")
                         break
                     }
                 }
+                clips.send(clip)
             }
             clips.close()
         }
@@ -503,12 +511,13 @@ class VoiceController(
         val text = readAloudText(reply)
         if (text.isEmpty()) return
         _reading.value = ReadAloudState(key)
+        val kept = keptVoice("$gateway\n${profile.orEmpty()}\n$text")
         // Started once it's [readingJob], so its end can tell whether a newer one took over.
         val job = scope.launch(start = CoroutineStart.LAZY) {
             var error: String? = null
             try {
                 // The first thing that went wrong says why; what follows from it says less.
-                voice(text, gateway, profile) { if (error == null) error = it }
+                voice(text, gateway, profile, kept) { if (error == null) error = it }
             } finally {
                 // Stopped, or another reply started: that one keeps its own state.
                 if (readingJob === coroutineContext.job) {
@@ -519,6 +528,20 @@ class VoiceController(
         }
         readingJob = job
         job.start()
+    }
+
+    /**
+     * The voice already made for the last few replies read aloud, so one read again is the same take, from its
+     * start, without asking the gateway again: a voice like ElevenLabs says the same text differently each time.
+     */
+    private val readAloudVoices = LinkedHashMap<String, MutableList<SpokenAudio>>()
+
+    /** The pieces kept for [key], now the most recent; the oldest are let go past [READ_ALOUD_KEPT]. */
+    private fun keptVoice(key: String): MutableList<SpokenAudio> {
+        val kept = readAloudVoices.remove(key) ?: mutableListOf()
+        readAloudVoices[key] = kept
+        while (readAloudVoices.size > READ_ALOUD_KEPT) readAloudVoices.remove(readAloudVoices.keys.first())
+        return kept
     }
 
     /** Stops the reply being read aloud, and clears why the last one couldn't be. */
@@ -624,6 +647,8 @@ class VoiceController(
 
     private companion object {
         const val MAX_FAILURES = 3
+        /** Replies whose voice is kept for reading again; a long one's is about a megabyte. */
+        const val READ_ALOUD_KEPT = 5
         const val RETRY_PAUSE_MS = 1_000L
         const val TURN_START_MS = 15_000L
         const val DICTATION_SILENCE_MS = 3_000L

@@ -455,6 +455,38 @@ class VoiceControllerTest {
         assertEquals(listOf("Built it. All green."), said)
     }
 
+    /** The gateway's voice says the same text a little differently each time; read again, it's the same take. */
+    @Test
+    fun aReplyReadAgainPlaysTheSameVoiceWithoutAskingAgain() = runTest {
+        val said = mutableListOf<String>()
+        val player = HeldPlayer()
+        val voice = VoiceController(voiced(mutableListOf(), said = said), FakeRecorder(), player, backgroundScope, backgroundScope)
+
+        voice.readAloud("r1", "All green.", gateway, null)
+        voice.reading.first { it.key == null }
+        voice.readAloud("r1", "All green.", gateway, null)
+        voice.reading.first { it.key == null }
+
+        assertEquals(listOf("All green.", "All green."), player.played)
+        assertEquals(listOf("All green."), said)
+    }
+
+    @Test
+    fun aReplyStoppedAndReadAgainStartsOverWithTheSameVoice() = runTest {
+        val said = mutableListOf<String>()
+        val player = HeldPlayer(holds = true)
+        val voice = VoiceController(voiced(mutableListOf(), said = said), FakeRecorder(), player, backgroundScope, backgroundScope)
+
+        voice.readAloud("r1", "A long reply.", gateway, null)
+        assertEquals("A long reply.", player.started.receive())
+        voice.stopReading()
+        voice.readAloud("r1", "A long reply.", gateway, null)
+
+        assertEquals("A long reply.", player.started.receive())
+        assertEquals(listOf("A long reply."), said)
+        voice.stopReading()
+    }
+
     @Test
     fun anotherReplyStopsTheOneBeingRead() = runTest {
         val player = HeldPlayer(holds = true)
