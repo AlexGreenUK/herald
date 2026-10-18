@@ -67,9 +67,22 @@ internal fun createWidgetWebView(context: Context, name: String, document: () ->
         layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         setBackgroundColor(Color.TRANSPARENT)
         contentDescription = name
-        // Keep iframe scrolling and controls out of the transcript's drag gesture. WebView owns clicks.
+        // Keep iframe scrolling and controls out of the transcript's drag gesture, until what's under the finger has
+        // scrolled to its end that way (the widget reports its ends as the title): then the transcript scrolls on.
+        // Until the first report, as for content that doesn't scroll, both ends count as reached. WebView owns clicks.
+        var edges = "tb"
+        var lastY = 0f
         setOnTouchListener { view, event ->
-            view.parent?.requestDisallowInterceptTouchEvent(event.actionMasked != MotionEvent.ACTION_UP && event.actionMasked != MotionEvent.ACTION_CANCEL)
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> lastY = event.y
+                MotionEvent.ACTION_MOVE -> {
+                    val dy = event.y - lastY
+                    lastY = event.y
+                    // A finger moving down scrolls content up, towards its top end.
+                    val atEnd = if (dy > 0) 't' in edges else if (dy < 0) 'b' in edges else null
+                    if (atEnd != null) view.parent?.requestDisallowInterceptTouchEvent(!atEnd)
+                }
+            }
             false
         }
         settings.apply {
@@ -86,6 +99,10 @@ internal fun createWidgetWebView(context: Context, name: String, document: () ->
         }
         webChromeClient = object : WebChromeClient() {
             override fun onPermissionRequest(request: PermissionRequest) { request.deny() }
+
+            override fun onReceivedTitle(view: WebView, title: String?) {
+                if (title != null && title.startsWith(WIDGET_EDGES)) edges = title.removePrefix(WIDGET_EDGES)
+            }
         }
         webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean = true

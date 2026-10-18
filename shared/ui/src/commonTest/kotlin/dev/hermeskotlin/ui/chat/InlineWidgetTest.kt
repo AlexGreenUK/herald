@@ -82,6 +82,16 @@ class InlineWidgetTest {
     }
 
     @Test
+    fun theWidgetReportsItsScrollEndsOnlyThroughTheWrapperTitle() {
+        val result = widgetDocument("<p>tall</p>", theme, "")
+        // Inside the sandboxed document, ahead of the widget's own markup.
+        assertTrue(result.indexOf("parent.postMessage({heraldEdges:v},'*')") in 0 until result.indexOf("&lt;p&gt;tall"))
+        // The wrapper takes only a well-formed report from its own frame, and only as its title.
+        assertTrue(result.contains("e.source===f.contentWindow"))
+        assertTrue(result.contains("/^t?b?$/.test(v))document.title='$WIDGET_EDGES'+v"))
+    }
+
+    @Test
     fun loaderPreservesTheFileAndGatewayFailure() = runTest {
         val file = GatewayFile("/tmp/chart.html")
         val expected = FileLoad.Ready(FileText("<p>profile B</p>", 16, false, false))
