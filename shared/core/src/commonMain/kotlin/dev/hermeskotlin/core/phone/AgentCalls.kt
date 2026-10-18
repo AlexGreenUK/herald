@@ -16,6 +16,9 @@ enum class CallOutcome(val status: String) {
 
     /** Already on a call with Hermes: it didn't ring. */
     Busy("busy"),
+
+    /** Quiet hours on this phone: it didn't ring. */
+    Quiet("quiet"),
 }
 
 /**

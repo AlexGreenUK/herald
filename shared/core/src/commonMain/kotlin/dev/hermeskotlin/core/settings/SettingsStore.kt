@@ -117,6 +117,13 @@ data class AppSettings(
      * gateway talks live, since the watch has no chat to open instead.
      */
     val watchRings: Boolean = true,
+    /**
+     * Nothing rings from [quietFrom] to [quietUntil], minutes into the day on this phone's clock: the agent's calls
+     * don't get through, and an approval or a question is the usual notification (see `quietNow`).
+     */
+    val quietHours: Boolean = false,
+    val quietFrom: Int = 22 * 60,
+    val quietUntil: Int = 7 * 60,
     /** Ask GitHub, where the app is published, whether a newer release is out. */
     val checkForUpdates: Boolean = true,
     /** Ask for a fingerprint, face or the screen lock when Herald opens, and keep it out of Recents. */

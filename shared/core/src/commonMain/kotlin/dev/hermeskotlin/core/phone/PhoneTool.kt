@@ -44,6 +44,27 @@ fun AppSettings.enabledPhoneTools(): Set<PhoneTool> =
 /** An approval or a question rings this phone like a call: its own switch, under the Phone tools switch. */
 val AppSettings.ringsForAnswers: Boolean get() = phoneTools && phoneRings
 
+/** Whether [minuteOfDay] (0 to 1439, this phone's clock) falls in quiet hours, when they're on: nothing rings then. */
+fun AppSettings.quietNow(minuteOfDay: Int): Boolean = quietHours && inQuietWindow(quietFrom, quietUntil, minuteOfDay)
+
+/**
+ * Whether [minute] falls from [from] up to, not including, [until], all minutes into the day. A window whose end is
+ * earlier than its start crosses midnight (22:00 to 07:00); one that starts where it ends is empty.
+ */
+fun inQuietWindow(from: Int, until: Int, minute: Int): Boolean = when {
+    from == until -> false
+    from < until -> minute in from until until
+    else -> minute >= from || minute < until
+}
+
+/** "22:00", for [minuteOfDay]. */
+fun clockTime(minuteOfDay: Int): String {
+    val m = minuteOfDay.mod(MINUTES_A_DAY)
+    return "${(m / 60).toString().padStart(2, '0')}:${(m % 60).toString().padStart(2, '0')}"
+}
+
+const val MINUTES_A_DAY = 24 * 60
+
 /** Why a tool couldn't do what the agent asked, in words the agent passes on to the user. */
 class PhoneToolException(message: String) : Exception(message)
 
