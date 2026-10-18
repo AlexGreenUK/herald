@@ -165,7 +165,7 @@ internal class LiveConversation(
                             // The voice may well talk on instead of handing the answer over: a clear one is taken
                             // as it is.
                             val asked = asking ?: return@launch
-                            if (!judging.isLocked && answering != asked.id && VoiceAnswers.takesAsAnswer(asked, lastWords())) {
+                            if (!judging.isLocked && answering != asked.id && VoiceAnswers.takesAsAnswer(asked, lastWords(putToThem = true))) {
                                 taking = this@coroutineScope.launch { answerAsked(null, asked) }
                             }
                         }
@@ -362,9 +362,11 @@ internal class LiveConversation(
 
     /**
      * The person's last words in [heard], in the call's order: what they said after the voice last spoke before them.
-     * The voice answering them doesn't cut them short, even when its words came first.
+     * The voice answering them doesn't cut them short, even when its words came first. [putToThem]: only once the voice
+     * asked them something before those words. The end of what it said before it was given the question can still
+     * come in after, and a "yeah" to that isn't the answer.
      */
-    private fun lastWordsSaid(): List<LiveFragment> {
+    private fun lastWordsSaid(putToThem: Boolean = false): List<LiveFragment> {
         // Stable: pieces at the same time keep the order they came in.
         val inOrder = heard.sortedBy { it.second }.map { it.first }.filter { it.text.isNotBlank() }
         val last = inOrder.indexOfLast { it.speaker == LiveFragment.Speaker.User }
@@ -372,13 +374,26 @@ internal class LiveConversation(
         val voice = inOrder.subList(0, last).indexOfLast { it.speaker != LiveFragment.Speaker.User }
         // Only what's said after the voice asked: words from before it, late to come in, aren't the answer.
         if (voice < 0) return emptyList()
+        if (putToThem && !askedThem(inOrder.subList(0, voice + 1))) return emptyList()
         return inOrder.subList(voice + 1, last + 1)
+    }
+
+    /**
+     * Whether the voice, in [said], put the question to them: it asked something, and for an approval it offered an
+     * answer too. "Want me to keep you posted?", left over from before, isn't asking for the approval.
+     */
+    private fun askedThem(said: List<LiveFragment>): Boolean {
+        val voice = said.filter { it.speaker != LiveFragment.Speaker.User }.joinToString("") { it.text }
+        if ('?' !in voice) return false
+        if (asking !is InputRequest.Approval) return true
+        val words = voice.lowercase().split(NOT_A_WORD).toSet()
+        return APPROVAL_CUES.any { it in words }
     }
 
     /** Whether [fragment] says when in the call it was said. */
     private fun timed(fragment: LiveFragment) = fragment.startMs > 0 || fragment.endMs > 0
 
-    private fun lastWords(): String = lastWordsSaid().joinToString("") { it.text }
+    private fun lastWords(putToThem: Boolean = false): String = lastWordsSaid(putToThem).joinToString("") { it.text }
 
     /** Whether [request] still waits on an answer. */
     private fun waiting(request: InputRequest) = session.state.value.inputRequests.any { it.id == request.id }
@@ -423,7 +438,9 @@ internal class LiveConversation(
         if (request is InputRequest.Approval && lock.locked()) {
             return send(LiveCommands.commentary(nextId("say"), id, "The phone locked. Ask the user to unlock it, then to say it again."))
         }
-        val words = lastWordsSaid()
+        // Taken without a handover only once the voice asked: else it's the voice's to hand over.
+        val words = lastWordsSaid(putToThem = id == null)
+        if (id == null && words.isEmpty()) return
         val said = words.joinToString("") { it.text }.trim()
         val wasHeard = heard.toList()
         heard.clear()
@@ -516,6 +533,9 @@ internal class LiveConversation(
         /** How long a handover right after an answer waits for words of its own before it's taken as that answer. */
         const val NEW_WORDS_WAIT_MS = 4_000L
         const val LOCK_CHECK_MS = 1_000L
+        /** Words a voice asking for an approval offers as its answers. */
+        val APPROVAL_CUES = setOf("yes", "no", "approve", "allow", "deny")
+        val NOT_A_WORD = Regex("[^\\p{L}]+")
         const val ALREADY_ANSWERED = "Hermes already has that answer."
         const val WAITING_ELSEWHERE = "Hermes is waiting on an answer in the chat, so it can't take a new request until then."
         const val ASKING_INSTRUCTIONS = "When Hermes needs an answer from the user (an approval or a question), ask it in your own " +

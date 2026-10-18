@@ -36,15 +36,20 @@ object VoiceAnswers {
 
     /**
      * The approval said in [transcript], or null when it isn't clear (then it's asked again). A misheard yes runs a
-     * command, so anything doubtful isn't one: a negation anywhere denies; a question, a "but" or an "if" is asked
-     * again; and a grant counts only when it's all that was said ("yes, go ahead", "for this chat", "always"): a
-     * grant word in passing ("okay, let me think", "show it in the chat") is asked again.
+     * command, so anything doubtful isn't one: not knowing or a wait is asked again; a negation anywhere else denies;
+     * a question, a "but" or an "if" is asked again; and a grant counts only when it's all that was said ("yes, go
+     * ahead", "for this chat", "always"): a grant word in passing ("okay, let me think", "show it in the chat") is
+     * asked again.
      */
     fun approval(request: InputRequest.Approval, transcript: String): ApprovalChoice? {
         // "Um, yes" is yes; a lone "okay" is one too.
         val words = words(transcript).let { all -> all.dropWhile(::filler).ifEmpty { all } }
         if (words.isEmpty()) return null
+        val said = words.joinToString(" ")
         val choice = when {
+            // Not knowing or putting it off is said with a negation too ("I don't know what that does", "no, wait"):
+            // that's asked again, not a no.
+            HOLD_PHRASES.any { said.containsPhrase(it) } || words.any { it in HOLD_ON } -> return null
             words.any { it in DENY || it.endsWith("n't") } -> ApprovalChoice.Deny
             // Speech to text often drops the "?": "can you run it" is asked, not granted.
             '?' in transcript || words.any { it in HEDGES } || words.first() in QUESTION_STARTS -> return null
@@ -64,14 +69,14 @@ object VoiceAnswers {
      * Whether [transcript], said once [request] was asked, is its answer as it stands, to take without the voice
      * handing it over: a clear approval, or anything said to a question but a question back or a hedge ("which one is
      * faster", "hmm, wait", "I'm not sure"). The rest is left to the voice, which talks it through and hands the
-     * answer over.
+     * answer over: a lone "okay" too, which may only be "I heard you" and would run a command here.
      */
     fun takesAsAnswer(request: InputRequest, transcript: String): Boolean {
         // "Um, blue" is blue.
         val words = words(transcript).dropWhile(::filler)
         if ('?' in transcript) return false
-        // A lone "okay" grants an approval, and is no answer to a question.
-        if (words.isEmpty()) return request is InputRequest.Approval && approval(request, transcript) != null
+        // Fillers alone ("okay", "umm"): no answer to take yet.
+        if (words.isEmpty()) return false
         val said = " ${words.joinToString(" ")} "
         // "How about blue" offers an answer; "do I need to pick" asks.
         val asksBack = (words.first() in ASKS_BACK && !said.startsWith(" how about ")) ||

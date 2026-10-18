@@ -61,6 +61,19 @@ class VoiceAnswersTest {
     }
 
     @Test
+    fun notKnowingIsAskedAgainNotDenied() {
+        for (said in listOf(
+            "I don't know what that does", "I don’t know, what does it touch?", "not sure", "no wait, let me think",
+            "no idea", "hang on", "dunno", "hold on, no",
+        )) {
+            assertNull(VoiceAnswers.approval(approval, said), said)
+        }
+        // A plain no still is one.
+        assertEquals(ApprovalChoice.Deny, VoiceAnswers.approval(approval, "No, I don't want that"))
+        assertEquals(ApprovalChoice.Deny, VoiceAnswers.approval(approval, "no"))
+    }
+
+    @Test
     fun aGrantWordInPassingIsNoYes() {
         for (said in listOf("okay, let me think", "allow me a second", "I'm fine", "do it later", "close the session", "show it to me in the chat", "always for this chat",
             // A question that lost its "?" on the way.
@@ -158,7 +171,9 @@ class VoiceAnswersTest {
         // An approval only when it's clear.
         assertTrue(VoiceAnswers.takesAsAnswer(onceOnly, "yes"))
         assertTrue(VoiceAnswers.takesAsAnswer(onceOnly, "no, don't"))
-        assertTrue(VoiceAnswers.takesAsAnswer(onceOnly, "Okay"))
+        // A lone "okay" may only be "I heard you": the voice hands it over if it's the answer.
+        assertFalse(VoiceAnswers.takesAsAnswer(onceOnly, "Okay"))
+        assertFalse(VoiceAnswers.takesAsAnswer(onceOnly, "ok."))
         assertTrue(VoiceAnswers.takesAsAnswer(onceOnly, "um, yes"))
         assertTrue(VoiceAnswers.takesAsAnswer(onceOnly, "sorry, yes"))
         // Both steps judge it alike: what's taken is what's granted.
