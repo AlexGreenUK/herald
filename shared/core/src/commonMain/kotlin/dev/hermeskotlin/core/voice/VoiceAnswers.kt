@@ -49,7 +49,7 @@ object VoiceAnswers {
         val choice = when {
             // Not knowing or putting it off is said with a negation too ("I don't know what that does", "no, wait"):
             // that's asked again, not a no.
-            NOT_KNOWING.any { said.containsPhrase(it) } || words.any { it in PUT_OFF } -> return null
+            HOLD_PHRASES.any { said.containsPhrase(it) } || words.any { it in HOLD_ON } -> return null
             words.any { it in DENY || it.endsWith("n't") } -> ApprovalChoice.Deny
             // Speech to text often drops the "?": "can you run it" is asked, not granted.
             '?' in transcript || words.any { it in HEDGES } || words.first() in QUESTION_STARTS -> return null
@@ -69,14 +69,14 @@ object VoiceAnswers {
      * Whether [transcript], said once [request] was asked, is its answer as it stands, to take without the voice
      * handing it over: a clear approval, or anything said to a question but a question back or a hedge ("which one is
      * faster", "hmm, wait", "I'm not sure"). The rest is left to the voice, which talks it through and hands the
-     * answer over.
+     * answer over: a lone "okay" too, which may only be "I heard you" and would run a command here.
      */
     fun takesAsAnswer(request: InputRequest, transcript: String): Boolean {
         // "Um, blue" is blue.
         val words = words(transcript).dropWhile(::filler)
         if ('?' in transcript) return false
-        // A lone "okay" grants an approval, and is no answer to a question.
-        if (words.isEmpty()) return request is InputRequest.Approval && approval(request, transcript) != null
+        // Fillers alone ("okay", "umm"): no answer to take yet.
+        if (words.isEmpty()) return false
         val said = " ${words.joinToString(" ")} "
         // "How about blue" offers an answer; "do I need to pick" asks.
         val asksBack = (words.first() in ASKS_BACK && !said.startsWith(" how about ")) ||
@@ -156,13 +156,6 @@ object VoiceAnswers {
         "no", "not", "nope", "nah", "deny", "dont", "wont", "cant", "cannot", "shouldnt", "wouldnt", "reject", "refuse",
         "cancel", "never", "stop",
     )
-    /** Not knowing, which comes with a negation of its own. */
-    private val NOT_KNOWING = listOf(
-        "don't know", "dont know", "do not know", "not sure", "no idea", "no clue", "not certain", "don't remember",
-        "let me think",
-    )
-    /** Words that put the answer off. */
-    private val PUT_OFF = setOf("wait", "hold", "moment", "sec", "hang", "dunno", "idk", "unsure")
     /** Doubt or a question: asked again rather than taken as an answer. */
     private val HEDGES = setOf("but", "if", "what", "why", "how", "which", "when", "where", "who", "wait", "maybe", "unless", "first", "hold")
     private val QUESTION_STARTS = setOf("is", "can", "could", "would", "will", "should", "does", "are", "did", "shall", "may")

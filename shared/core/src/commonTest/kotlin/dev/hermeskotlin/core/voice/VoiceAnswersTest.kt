@@ -171,7 +171,9 @@ class VoiceAnswersTest {
         // An approval only when it's clear.
         assertTrue(VoiceAnswers.takesAsAnswer(onceOnly, "yes"))
         assertTrue(VoiceAnswers.takesAsAnswer(onceOnly, "no, don't"))
-        assertTrue(VoiceAnswers.takesAsAnswer(onceOnly, "Okay"))
+        // A lone "okay" may only be "I heard you": the voice hands it over if it's the answer.
+        assertFalse(VoiceAnswers.takesAsAnswer(onceOnly, "Okay"))
+        assertFalse(VoiceAnswers.takesAsAnswer(onceOnly, "ok."))
         assertTrue(VoiceAnswers.takesAsAnswer(onceOnly, "um, yes"))
         assertTrue(VoiceAnswers.takesAsAnswer(onceOnly, "sorry, yes"))
         // Both steps judge it alike: what's taken is what's granted.
