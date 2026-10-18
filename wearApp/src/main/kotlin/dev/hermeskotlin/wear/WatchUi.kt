@@ -73,6 +73,7 @@ import androidx.wear.compose.navigation.SwipeDismissableNavHost
 import androidx.wear.compose.navigation.composable
 import androidx.wear.compose.navigation.rememberSwipeDismissableNavController
 import dev.hermeskotlin.wearlink.ReplyPhase
+import dev.hermeskotlin.wearlink.WatchAccent
 import dev.hermeskotlin.wearlink.WatchChat
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
@@ -107,6 +108,14 @@ private val HeraldColors = ColorScheme(
     error = Danger,
 )
 
+internal fun watchColors(accent: WatchAccent?): ColorScheme =
+    if (accent == null) HeraldColors else HeraldColors.copy(
+        primary = Color(accent.text),
+        primaryDim = Color(accent.dim),
+        primaryContainer = Color(accent.fill),
+        onPrimaryContainer = Color(accent.onFill),
+    )
+
 private fun geist(size: Int, weight: FontWeight = FontWeight.Normal, color: Color = Text1, line: Int = 0) =
     TextStyle(fontFamily = Geist, fontSize = size.sp, fontWeight = weight, color = color, lineHeight = if (line > 0) line.sp else (size * 1.3f).sp)
 
@@ -120,7 +129,8 @@ fun HeraldWatchApp(
     onFinishRecording: () -> Unit,
     onDismissListeningError: () -> Unit,
 ) {
-    MaterialTheme(colorScheme = HeraldColors) {
+    val accent by store.accent.collectAsState()
+    MaterialTheme(colorScheme = watchColors(accent)) {
         AppScaffold(timeText = { EdgeStatus(link, store) }) {
             val nav = rememberSwipeDismissableNavController()
             SwipeDismissableNavHost(navController = nav, startDestination = TALK) {
@@ -241,7 +251,7 @@ private fun TalkScreen(
     LaunchedEffect(current?.askId) { if (current != null) listState.scrollToItem(0) }
 
     if (inCall) {
-        ScreenScaffold(modifier = Modifier.halo(mood)) {
+        ScreenScaffold(modifier = Modifier.halo(mood, MaterialTheme.colorScheme.primaryContainer)) {
             CallScreen(call, mood, onMute = link::toggleMute, onEnd = link::endCall)
         }
         return
@@ -283,7 +293,7 @@ private fun TalkScreen(
             }
         }
     }
-    ScreenScaffold(scrollState = listState, modifier = Modifier.halo(mood)) { contentPadding -> content(contentPadding) }
+    ScreenScaffold(scrollState = listState, modifier = Modifier.halo(mood, MaterialTheme.colorScheme.primaryContainer)) { contentPadding -> content(contentPadding) }
 }
 
 /**
@@ -509,7 +519,7 @@ private fun Caption(text: String?, mood: OrbMood) {
             OrbMood.Failed -> Danger
             OrbMood.Waiting -> Amber
             OrbMood.Idle -> Muted
-            else -> HeraldBlueText
+            else -> MaterialTheme.colorScheme.primary
         },
         label = "caption",
     )
@@ -561,15 +571,15 @@ private fun Notice(text: String, onClick: () -> Unit) {
     }
 }
 
-/** A Herald-blue light rising from the bottom of the screen, brighter while something happens; amber or red to warn. */
-private fun Modifier.halo(mood: OrbMood): Modifier = drawBehind {
+/** An [accent] light rising from the bottom of the screen, brighter while something happens; amber or red to warn. */
+private fun Modifier.halo(mood: OrbMood, accent: Color): Modifier = drawBehind {
     val strength = when (mood) {
         OrbMood.Idle -> 0.18f
         OrbMood.Failed -> 0.2f
         else -> 0.32f
     }
     val center = Offset(size.width / 2f, size.height * 1.08f)
-    drawRect(Brush.radialGradient(listOf(orbTint(mood).copy(alpha = strength), Color.Transparent), center = center, radius = size.width * 0.8f))
+    drawRect(Brush.radialGradient(listOf(orbTint(mood, accent).copy(alpha = strength), Color.Transparent), center = center, radius = size.width * 0.8f))
 }
 
 @Composable
@@ -579,7 +589,7 @@ private fun ChatsScreen(link: WatchLink, store: WatchStore, onPicked: () -> Unit
     val listState = rememberTransformingLazyColumnState()
     LaunchedEffect(Unit) { link.refreshChats() }
 
-    ScreenScaffold(scrollState = listState, modifier = Modifier.halo(OrbMood.Idle)) { contentPadding ->
+    ScreenScaffold(scrollState = listState, modifier = Modifier.halo(OrbMood.Idle, MaterialTheme.colorScheme.primaryContainer)) { contentPadding ->
         TransformingLazyColumn(state = listState, contentPadding = contentPadding, modifier = Modifier.fillMaxSize()) {
             item {
                 Text("Chats", modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp), style = geist(17, FontWeight.SemiBold), textAlign = TextAlign.Center)
@@ -593,9 +603,9 @@ private fun ChatsScreen(link: WatchLink, store: WatchStore, onPicked: () -> Unit
                             onPicked()
                         },
                         modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(containerColor = HeraldBlue, contentColor = Color.White),
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primaryContainer, contentColor = MaterialTheme.colorScheme.onPrimaryContainer),
                         label = {
-                            Text("New chat", modifier = Modifier.fillMaxWidth(), style = geist(15, FontWeight.Medium, Color.White), textAlign = TextAlign.Center, maxLines = 1)
+                            Text("New chat", modifier = Modifier.fillMaxWidth(), style = geist(15, FontWeight.Medium, MaterialTheme.colorScheme.onPrimaryContainer), textAlign = TextAlign.Center, maxLines = 1)
                         },
                     )
                     FilledIconButton(
@@ -637,7 +647,7 @@ private fun SettingsScreen(link: WatchLink, store: WatchStore) {
     val live by store.live.collectAsState()
     val liveVoice by link.liveVoice.collectAsState()
     val listState = rememberTransformingLazyColumnState()
-    ScreenScaffold(scrollState = listState, modifier = Modifier.halo(OrbMood.Idle)) { contentPadding ->
+    ScreenScaffold(scrollState = listState, modifier = Modifier.halo(OrbMood.Idle, MaterialTheme.colorScheme.primaryContainer)) { contentPadding ->
         TransformingLazyColumn(state = listState, contentPadding = contentPadding, modifier = Modifier.fillMaxSize()) {
             item {
                 Text("Settings", modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp), style = geist(17, FontWeight.SemiBold), textAlign = TextAlign.Center)
@@ -662,7 +672,7 @@ private fun VoiceSwitch(label: String, detail: String, checked: Boolean, onChang
     )
 }
 
-/** One chat: its title and how long ago it was active; the one the watch talks in has a blue dot. */
+/** One chat: its title and how long ago it was active; the one the watch talks in has an accent dot. */
 @Composable
 private fun ChatRow(chat: WatchChat, picked: Boolean, onClick: () -> Unit) {
     Button(
@@ -670,7 +680,7 @@ private fun ChatRow(chat: WatchChat, picked: Boolean, onClick: () -> Unit) {
         modifier = Modifier.fillMaxWidth(),
         colors = ButtonDefaults.buttonColors(containerColor = Surface2, contentColor = Text1, secondaryContentColor = Muted),
         icon = if (picked) {
-            { Box(Modifier.size(8.dp).background(HeraldBlueText, CircleShape)) }
+            { Box(Modifier.size(8.dp).background(MaterialTheme.colorScheme.primary, CircleShape)) }
         } else {
             null
         },

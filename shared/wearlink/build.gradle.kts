@@ -19,9 +19,12 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             api(libs.kotlinx.serialization.json)
+            // InOrder.skipGaps waits out a call's gaps.
+            implementation(libs.kotlinx.coroutines.core)
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)
+            implementation(libs.kotlinx.coroutines.test)
         }
     }
 }
