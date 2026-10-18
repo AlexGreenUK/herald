@@ -365,8 +365,20 @@ internal class LiveConversation(
         val voice = inOrder.subList(0, last).indexOfLast { it.speaker != LiveFragment.Speaker.User }
         // Only what's said after the voice asked: words from before it, late to come in, aren't the answer.
         if (voice < 0) return emptyList()
-        if (putToThem && inOrder.subList(0, voice + 1).none { it.speaker != LiveFragment.Speaker.User && '?' in it.text }) return emptyList()
+        if (putToThem && !askedThem(inOrder.subList(0, voice + 1))) return emptyList()
         return inOrder.subList(voice + 1, last + 1)
+    }
+
+    /**
+     * Whether the voice, in [said], put the question to them: it asked something, and for an approval it offered an
+     * answer too. "Want me to keep you posted?", left over from before, isn't asking for the approval.
+     */
+    private fun askedThem(said: List<LiveFragment>): Boolean {
+        val voice = said.filter { it.speaker != LiveFragment.Speaker.User }.joinToString("") { it.text }
+        if ('?' !in voice) return false
+        if (asking !is InputRequest.Approval) return true
+        val words = voice.lowercase().split(NOT_A_WORD).toSet()
+        return APPROVAL_CUES.any { it in words }
     }
 
     /** Whether [fragment] says when in the call it was said. */
@@ -512,6 +524,9 @@ internal class LiveConversation(
         /** How long a handover right after an answer waits for words of its own before it's taken as that answer. */
         const val NEW_WORDS_WAIT_MS = 4_000L
         const val LOCK_CHECK_MS = 1_000L
+        /** Words a voice asking for an approval offers as its answers. */
+        val APPROVAL_CUES = setOf("yes", "no", "approve", "allow", "deny")
+        val NOT_A_WORD = Regex("[^\\p{L}]+")
         const val ALREADY_ANSWERED = "Hermes already has that answer."
         const val WAITING_ELSEWHERE = "Hermes is waiting on an answer in the chat, so it can't take a new request until then."
         const val ASKING_INSTRUCTIONS = "When Hermes needs an answer from the user (an approval or a question), ask it in your own " +
