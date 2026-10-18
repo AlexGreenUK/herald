@@ -246,7 +246,8 @@ class ChatViewModel(
         .flatMapLatest { bound ->
             if (bound == null) flowOf(ChatTranscript()) else {
                 val (chat, owner) = bound
-                val files = WidgetFiles(owner, { previewFile(it, owner) }, { downloadFile(it, owner) })
+                // Keyed by whose files these are, so a new title or draft on the same chat doesn't reload its widgets.
+                val files = WidgetFiles(owner.gateway.gatewayUrl to owner.profile, { previewFile(it, owner) }, { downloadFile(it, owner) })
                 chat.state.map { ChatTranscript(it, files) }
             }
         }
@@ -428,6 +429,13 @@ class ChatViewModel(
         viewModelScope.launch { seen?.markLooked(target.gateway.gatewayUrl, id, newest, target.profile, running = state.running) }
     }
 
+    /** Opens [target]'s chat in the host, with the transcript's file callbacks bound to that target. */
+    private fun bind(target: ChatTarget) {
+        val chat = host.open(target.gateway.gatewayUrl, target.storedSessionId, target.title, target.profile, target.cwd)
+        session.value = chat
+        widgetSession.value = chat?.let { it to target }
+    }
+
     fun open(target: ChatTarget) {
         // The same chat, perhaps with a new read position (reopened from a notification): the screen places the
         // "New messages" line from the target; the chat itself, its draft and any voice chat stay as they are.
@@ -435,10 +443,7 @@ class ChatViewModel(
             this.target = target
             // An expired session or sign-out closes the host's chat; the same chat reopened after signing
             // back in needs a fresh session, not the stopped one this view model still holds.
-            if (session.value !== host.session.value) {
-                session.value = host.open(target.gateway.gatewayUrl, target.storedSessionId, target.title, target.profile, target.cwd)
-                widgetSession.value = session.value?.let { it to target }
-            }
+            if (session.value !== host.session.value) bind(target)
             return
         }
         markLooked()
@@ -455,8 +460,7 @@ class ChatViewModel(
         restoreDraft(target, typed)
         target.draft?.let(::takeDraft)
         if (target.storedSessionId == null) viewModelScope.launch { lastChats.set(target.gateway.gatewayUrl, null, target.profile) }
-        session.value = host.open(target.gateway.gatewayUrl, target.storedSessionId, target.title, target.profile, target.cwd)
-        widgetSession.value = session.value?.let { it to target }
+        bind(target)
         // The catalog marks the previous chat's model; a new chat must show the profile default instead.
         _picker.update { it.copy(catalog = null, confirm = null) }
         if (connectionState.value is ConnectionState.Connected) {

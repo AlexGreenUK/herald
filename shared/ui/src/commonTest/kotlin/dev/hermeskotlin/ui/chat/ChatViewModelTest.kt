@@ -171,13 +171,13 @@ class ChatViewModelTest {
             runCurrent()
             val newTranscript = vm.transcript.value
             assertEquals("same-id", newTranscript.state.storedSessionId)
-            assertEquals(next, assertNotNull(newTranscript.widgetFiles).identity)
+            assertEquals(next.gateway.gatewayUrl to next.profile, assertNotNull(newTranscript.widgetFiles).identity)
             // The screen may still hold this prior emission while the selected route has changed.
             assertTrue(loadWidget(oldFiles, file) is FileLoad.Ready)
             assertTrue(downloadWidget(oldFiles, file) is FileDownload.Ready)
         }
         assertEquals<List<Pair<String, String?>>>(List(4) { "hermes.example.ts.net" to "first" }, reads)
-        assertEquals(first, oldFiles.identity)
+        assertEquals(first.gateway.gatewayUrl to first.profile, oldFiles.identity)
         assertEquals("same-id", oldTranscript.state.storedSessionId)
     }
 
