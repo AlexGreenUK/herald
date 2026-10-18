@@ -10,6 +10,9 @@ import dev.hermeskotlin.android.phone.PhoneConfirmations
 import dev.hermeskotlin.android.push.PushListener
 import dev.hermeskotlin.core.phone.PhoneToolRunner
 import dev.hermeskotlin.core.phone.PhoneToolsBridge
+import dev.hermeskotlin.core.phone.quietNow
+import dev.hermeskotlin.core.settings.SettingsStore
+import java.time.LocalTime
 import dev.hermeskotlin.android.push.PushStore
 import dev.hermeskotlin.core.push.PushKeys
 import dev.hermeskotlin.core.push.PushSetup
@@ -28,6 +31,10 @@ val notifyModule = module {
         // one elsewhere waits as a notification, not rung over it.
         ChatNotifications(androidContext(), get()).apply {
             voiceOn = { koin.get<VoiceCallKeeper>().holding || koin.get<WatchRelay>().onCall }
+            quietUntil = {
+                val now = LocalTime.now()
+                koin.get<SettingsStore>().settings.value?.takeIf { it.quietNow(now.hour * 60 + now.minute) }?.quietUntil
+            }
         }
     }
     // Why the agent called, from the call picked up on the watch to the call the watch starts.

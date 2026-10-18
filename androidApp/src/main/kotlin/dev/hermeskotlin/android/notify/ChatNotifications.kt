@@ -116,6 +116,14 @@ class ChatNotifications(
     /** A voice chat or a call is on: nothing rings over it. */
     var voiceOn: () -> Boolean = { false }
 
+    /**
+     * When quiet hours end, in minutes into the day, while they're on now (Settings → Phone tools → Calls); else null.
+     * Nothing rings in them, here or on the watch.
+     */
+    var quietUntil: () -> Int? = { null }
+
+    private fun quietNow() = quietUntil() != null
+
     /** Somewhere else that rings along with this phone, Herald on the watch. */
     interface AlsoRings {
         /**
@@ -201,7 +209,7 @@ class ChatNotifications(
         talk: Boolean = false,
         quiet: Boolean = false,
     ): Boolean {
-        val rings = ring && !voiceOn() && (request is InputRequest.Approval || request is InputRequest.Clarify) && synchronized(rang) { request.id !in rang }
+        val rings = ring && !voiceOn() && !quietNow() && (request is InputRequest.Approval || request is InputRequest.Clarify) && synchronized(rang) { request.id !in rang }
         if (rings) return postCall(Ringing(request.id, storedSessionId, title, request, talk))
         val builder = base(CHANNEL_REQUESTS, storedSessionId, title)
             .setCategory(NotificationCompat.CATEGORY_REMINDER)
@@ -300,9 +308,11 @@ class ChatNotifications(
     /**
      * Rings for a call the agent placed ([dev.hermeskotlin.core.phone.PhoneTool.CallMe]) and waits for how it ends:
      * Answer puts Hermes on the line in [storedSessionId]'s chat (a new one when null), which opens with [reason].
-     * Never over a call or a voice chat already on: that's [CallOutcome.Busy]. Null when Herald may not ring.
+     * Never over a call or a voice chat already on: that's [CallOutcome.Busy]. Never in quiet hours either:
+     * [CallOutcome.Quiet]. Null when Herald may not ring.
      */
     suspend fun ringForAgent(storedSessionId: String?, title: String?, reason: CallReason): CallOutcome? {
+        if (quietNow()) return CallOutcome.Quiet
         val call = AgentCall(reason)
         val id = AGENT_CALL_PREFIX + UUID.randomUUID()
         val rings = withContext(Dispatchers.Main) {

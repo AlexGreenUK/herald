@@ -1,7 +1,9 @@
 package dev.hermeskotlin.android.phone
 
 import dev.hermeskotlin.android.notify.ChatNotifications
+import dev.hermeskotlin.core.phone.CallOutcome
 import dev.hermeskotlin.core.phone.CallReason
+import dev.hermeskotlin.core.phone.clockTime
 import dev.hermeskotlin.core.phone.PhoneToolException
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -23,6 +25,10 @@ internal class CallMeTool(private val notifications: ChatNotifications, private 
         val chat = target?.storedSessionId ?: session.takeIf { it.isNotBlank() }
         val outcome = notifications.ringForAgent(chat, target?.title, CallReason(reason, details))
             ?: throw PhoneToolException("Herald may not post notifications on this phone, so it can't ring.")
-        return buildJsonObject { put("status", outcome.status) }
+        return buildJsonObject {
+            put("status", outcome.status)
+            // When it may ring again, for the agent to send a reminder for then.
+            if (outcome == CallOutcome.Quiet) notifications.quietUntil()?.let { put("until", clockTime(it)) }
+        }
     }
 }
