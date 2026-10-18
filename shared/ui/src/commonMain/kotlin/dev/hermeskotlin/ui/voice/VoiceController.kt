@@ -123,6 +123,8 @@ class VoiceController(
     private var noSpeechStream: GatewayUrl? = null
     /** What of this turn's reply went to the speech socket, as it was written. */
     private var voicedSoFar = ""
+    /** The speech socket stopped because the turn waited on the user, so what came after it is read out. */
+    private var voicedUntilAsked = false
     private var dictationJob: Job? = null
     /** The recognizer the dictation in progress listens with; null when the gateway transcribes it. */
     private var dictating: DeviceDictation? = null
@@ -284,6 +286,7 @@ class VoiceController(
         _chat.update { it.copy(phase = VoicePhase.Thinking, caption = transcript.trim(), captionIsVoice = false) }
         val sentAt = session.state.value.messages.size
         voicedSoFar = ""
+        voicedUntilAsked = false
         val voiced = coroutineScope {
             // The speech socket opens while the prompt goes out, so the first words don't wait for it.
             val opening = async { openSpeech(gateway, profile) }
@@ -361,14 +364,15 @@ class VoiceController(
         val messages = session.state.value.messages
         val text = when {
             // All of it was voiced as it was written.
-            streamed && !stopped -> ""
-            // Voiced up to where it stopped to ask: the rest of it.
-            streamed -> unsentSpeech(voicedSoFar, speakableSoFar(replyText(messages, from), complete = true))
+            streamed && !stopped && !voicedUntilAsked -> ""
+            // Voiced up to where it stopped to ask: the rest of it, which the one-shot voice reads as plain text.
+            streamed -> speakableText(unsentSpeech(voicedSoFar, speakableSoFar(replyText(messages, from), complete = true)))
             else -> (messages.drop(from).lastOrNull { it is ChatMessage.Assistant } as? ChatMessage.Assistant)?.text?.let(::speakableText).orEmpty()
         }.trim()
         if (text.isEmpty()) return Turn.Done
 
-        _chat.update { it.copy(phase = VoicePhase.Speaking, caption = text, captionIsVoice = true) }
+        // An error left from asking (an unclear last try, answered elsewhere after) isn't this reading's.
+        _chat.update { it.copy(phase = VoicePhase.Speaking, caption = text, captionIsVoice = true, error = null) }
         speak(text, gateway, profile)
         // The voice couldn't be made or played (a provider's 429, say).
         return if (_chat.value.error == null) Turn.Done else Turn.Failed
@@ -595,7 +599,12 @@ class VoiceController(
     private suspend fun feedReply(stream: SpeechStream, session: ChatSession, sentAt: Int) {
         var sent = ""
         session.state
-            .transformWhile { emit(it); it.running && it.inputRequests.isEmpty() }
+            .transformWhile {
+                emit(it)
+                // Answered elsewhere while the voice still plays, the turn goes on unseen: what follows is read after.
+                if (it.inputRequests.isNotEmpty()) voicedUntilAsked = true
+                it.running && it.inputRequests.isEmpty()
+            }
             .map { replyText(it.messages, sentAt) to (!it.running || it.inputRequests.isNotEmpty()) }
             .distinctUntilChanged()
             // Behind a fast reply, only the latest of it matters.
