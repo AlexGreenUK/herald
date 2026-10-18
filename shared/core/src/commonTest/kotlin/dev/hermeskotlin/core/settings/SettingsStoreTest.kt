@@ -102,6 +102,54 @@ class SettingsStoreTest {
     }
 
     @Test
+    fun threadsStayOpenUntilFoldedAndRemembersIt() = runTest {
+        val disk = InMemoryKeyValueStore()
+        // Settings saved before the option existed show every thread, whatever Pinned does.
+        disk.put("settings.v1", """{"theme":"Dark","pinnedCollapsed":true}""")
+        val first = SettingsStore(disk, backgroundScope)
+        assertEquals(false, first.settings.filterNotNull().first().threadsCollapsed)
+
+        first.update { it.copy(threadsCollapsed = true) }
+        advanceUntilIdle()
+
+        val again = SettingsStore(disk, backgroundScope).settings.filterNotNull().first()
+        assertEquals(true, again.threadsCollapsed)
+        assertEquals(true, again.pinnedCollapsed)
+    }
+
+    @Test
+    fun projectsShowAsChipsUntilSwitchedToAListAndRemembersIt() = runTest {
+        val disk = InMemoryKeyValueStore()
+        // Settings saved before the option existed keep the chips.
+        disk.put("settings.v1", """{"theme":"Dark"}""")
+        val first = SettingsStore(disk, backgroundScope)
+        assertEquals(false, first.settings.filterNotNull().first().projectsAsDropdown)
+
+        first.update { it.copy(projectsAsDropdown = true) }
+        advanceUntilIdle()
+
+        assertEquals(true, SettingsStore(disk, backgroundScope).settings.filterNotNull().first().projectsAsDropdown)
+    }
+
+    @Test
+    fun linkPreviewsRequireOptInAndRememberTheChoice() = runTest {
+        assertEquals(false, AppSettings().showLinkPreviews)
+        val disk = InMemoryKeyValueStore().apply { put("settings.v1", """{"theme":"Dark"}""") }
+        val first = SettingsStore(disk, backgroundScope)
+        assertEquals(false, first.settings.filterNotNull().first().showLinkPreviews)
+
+        first.update { it.copy(showLinkPreviews = true) }
+        advanceUntilIdle()
+        val reopened = SettingsStore(disk, backgroundScope)
+        assertEquals(true, reopened.settings.filterNotNull().first().showLinkPreviews)
+        assertEquals(ThemeMode.Dark, reopened.settings.value?.theme)
+
+        reopened.update { it.copy(showLinkPreviews = false) }
+        advanceUntilIdle()
+        assertEquals(false, SettingsStore(disk, backgroundScope).settings.filterNotNull().first().showLinkPreviews)
+    }
+
+    @Test
     fun unreadableStoredSettingsFallBackToDefaults() = runTest {
         val disk = InMemoryKeyValueStore().apply { put("settings.v1", """{"theme":"Neon"}""") }
         assertEquals(AppSettings(), SettingsStore(disk, backgroundScope).settings.filterNotNull().first())

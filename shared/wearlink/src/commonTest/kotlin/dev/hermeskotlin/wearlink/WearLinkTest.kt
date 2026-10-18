@@ -1,5 +1,11 @@
 package dev.hermeskotlin.wearlink
 
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -8,6 +14,58 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class WearLinkTest {
+
+    @Test
+    fun phoneAccentSurvivesStatusSerialization() {
+        val wire = """{"signedIn":true,"connected":true,"accent":{"revision":"dark:Violet:1","fill":-5796870,"text":-5796870,"onFill":-16119284,"dim":-5796870}}"""
+        val status = WearJson.decode<PhoneStatus>(wire.encodeToByteArray())!!
+        val resent = WearJson.decode<JsonObject>(WearJson.encode(status))!!
+        assertEquals(Json.parseToJsonElement(wire).jsonObject["accent"], resent["accent"])
+    }
+
+    @Test
+    fun legacyPhoneStatusHasNoAccent() {
+        val old = WearJson.decode<PhoneStatus>("""{"signedIn":true,"connected":true}""".encodeToByteArray())!!
+        assertFalse("accent" in WearJson.decode<JsonObject>(WearJson.encode(old))!!)
+        assertTrue(old.connected)
+    }
+
+    @Test
+    fun accentRevisionSurvivesARequestAndLegacyRequestsHaveNone() {
+        val request = PhoneStatusRequest(accentRevision = "dark:Violet:1")
+        assertEquals(request, WearJson.decode<PhoneStatusRequest>(WearJson.encode(request)))
+        assertEquals(PhoneStatusRequest(), WearJson.decode<PhoneStatusRequest>("{}".encodeToByteArray()))
+        assertNull(WearJson.decode<PhoneStatusRequest>(ByteArray(0)))
+    }
+
+    @Test
+    fun matchingRevisionOmitsColorsFromWire() {
+        val purple = WatchAccent("dark:Violet:1", -5796870, -5796870, -16119284, -5796870)
+        val response = PhoneStatus(signedIn = true, connected = true, accent = purple.updateFor("dark:Violet:1"))
+        assertFalse("accent" in WearJson.decode<JsonObject>(WearJson.encode(response))!!)
+    }
+
+    @Test
+    fun missingOldOrNewPaletteVersionSendsColors() {
+        val purple = WatchAccent("dark:Violet:2", -5796870, -5796870, -16119284, -5796870)
+        for (cached in listOf(null, "dark:Teal:2", "dark:Violet:1")) {
+            assertEquals(purple, purple.updateFor(cached))
+        }
+    }
+
+    @Test
+    fun anAccentsRevisionChangesWithAnyOfItsColors() {
+        val purple = WatchAccent.of(-5796870, -5796870, -16119284, -5796870)
+        assertEquals(purple.revision, WatchAccent.of(-5796870, -5796870, -16119284, -5796870).revision)
+        val changed = listOf(
+            WatchAccent.of(-5796871, -5796870, -16119284, -5796870),
+            WatchAccent.of(-5796870, -5796871, -16119284, -5796870),
+            WatchAccent.of(-5796870, -5796870, -16119285, -5796870),
+            WatchAccent.of(-5796870, -5796870, -16119284, -5796871),
+        )
+        for (accent in changed) assertEquals(accent, accent.updateFor(purple.revision))
+        assertNull(purple.updateFor(purple.revision))
+    }
 
     @Test
     fun aRecordingCarriesItsAskAndItsAudioInOnePiece() {
@@ -82,7 +140,15 @@ class WearLinkTest {
     @Test
     fun anOlderPhoneSaysNothingOfLiveVoice() {
         val status = WearJson.decode<PhoneStatus>("""{"signedIn":true,"connected":true}""".encodeToByteArray())
-        assertEquals(PhoneStatus(signedIn = true, connected = true, failed = false, liveVoice = false), status)
+        assertEquals(PhoneStatus(signedIn = true, connected = true, failed = false, liveVoice = null), status)
+    }
+
+    @Test
+    fun aPhoneThatKnowsItsLiveVoiceSaysSoEitherWay() {
+        for (live in listOf(true, false)) {
+            val status = PhoneStatus(signedIn = true, connected = true, liveVoice = live)
+            assertEquals(live, WearJson.decode<PhoneStatus>(WearJson.encode(status))?.liveVoice)
+        }
     }
 
     @Test
@@ -102,6 +168,72 @@ class WearLinkTest {
         order.add(3, "too late")
         order.add(6, "f")
         assertEquals(listOf("a", "b", "d", "e", "f"), out)
+    }
+
+    @Test
+    fun pastOneSkippedGapAnotherStillWaitsToBeSkipped() {
+        val out = mutableListOf<String>()
+        val order = InOrder<String> { out += it }
+        order.add(2, "b")
+        order.add(4, "d")
+        order.skipGap()
+        assertEquals(listOf("b"), out)
+        // The callers skip again while this holds, so "d" doesn't wait on a batch that may never come.
+        assertTrue(order.waiting)
+        order.skipGap()
+        assertEquals(listOf("b", "d"), out)
+        assertFalse(order.waiting)
+    }
+
+    @Test
+    fun theMissingBatchMovesOnWhenItsGapFillsSoANewGapIsntSkippedEarly() {
+        val order = InOrder<String> {}
+        order.add(1, "a")
+        assertNull(order.missing)
+        order.add(3, "c")
+        assertEquals(2, order.missing)
+        order.add(2, "b")
+        order.add(5, "e")
+        // A new gap: the callers wait it out in full, rather than skip it on the old one's time.
+        assertEquals(4, order.missing)
+    }
+
+    @Test
+    fun aSecondGapIsSkippedWithoutAnotherBatchComing() = runTest {
+        val out = mutableListOf<String>()
+        val order = InOrder<String> { out += it }
+        order.add(3, "c")
+        order.add(5, "e")
+        val skipping = launch { order.skipGaps(gapMs = 100) }
+        advanceTimeBy(101)
+        assertEquals(listOf("c"), out)
+        // Nothing more comes, and 4 is skipped all the same.
+        advanceTimeBy(100)
+        assertEquals(listOf("c", "e"), out)
+        assertFalse(order.waiting)
+        skipping.join()
+    }
+
+    @Test
+    fun aGapThatOpensDuringAWaitGetsItsFullWait() = runTest {
+        val out = mutableListOf<String>()
+        val order = InOrder<String> { out += it }
+        order.add(1, "a")
+        order.add(3, "c")
+        val skipping = launch { order.skipGaps(gapMs = 100) }
+        advanceTimeBy(90)
+        // 2 fills its gap late, opening one at 4.
+        order.add(2, "b")
+        order.add(5, "e")
+        advanceTimeBy(20)
+        assertEquals(listOf("a", "b", "c"), out)
+        assertTrue(order.waiting)
+        // 4 would have been skipped here, 100 after the wait started, had its own wait not begun only now.
+        advanceTimeBy(80)
+        assertEquals(listOf("a", "b", "c"), out)
+        order.add(4, "d")
+        assertEquals(listOf("a", "b", "c", "d", "e"), out)
+        skipping.join()
     }
 
     @Test

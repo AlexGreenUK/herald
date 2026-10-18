@@ -29,6 +29,13 @@ import dev.hermeskotlin.core.rpc.RpcException
 import dev.hermeskotlin.core.sessions.SessionListFilter
 import dev.hermeskotlin.core.sessions.SessionSummary
 import dev.hermeskotlin.core.sessions.SessionsApi
+import dev.hermeskotlin.core.threads.ChatThread
+import dev.hermeskotlin.core.threads.FreshChat
+import dev.hermeskotlin.core.threads.ThreadsRepository
+import dev.hermeskotlin.core.threads.movedPast
+import dev.hermeskotlin.core.threads.ordered
+import dev.hermeskotlin.core.threads.renamed
+import dev.hermeskotlin.core.threads.withoutThread
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
@@ -47,6 +54,9 @@ import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
 import kotlin.time.Clock
 
@@ -119,6 +129,21 @@ data class RowStatus(val waiting: Waiting? = null, val unread: Boolean = false, 
     val needsAttention: Boolean get() = waiting != null || unread
 }
 
+/** The gateway and profile a list is of; null [profile] is the gateway's launch profile. */
+data class ListBinding(val gateway: SavedGateway, val profile: String?)
+
+/** A read of the list from the gateway, or the list no longer standing for the gateway's chats. */
+sealed interface ListRead {
+    /** Asked of [gateway] for [profile]'s chats in [filter]. */
+    data class Asked(val gateway: GatewayUrl, val profile: String?, val filter: SessionListFilter) : ListRead
+
+    /** The read of [filter] came back with the rows. */
+    data class Done(val filter: SessionListFilter) : ListRead
+
+    /** The link went: events may be missed meanwhile, so the list must be read again before it counts. */
+    data object Stale : ListRead
+}
+
 /**
  * Stored-session browser: list (REST, paged), search, and row actions. Refetches when the gateway
  * broadcasts `sessions.changed` / `session.title`, and after each reconnect (events may have been missed).
@@ -135,6 +160,8 @@ class SessionsViewModel(
     private val seenStore: SeenStore,
     private val drafts: DraftStore,
     private val projectsApi: ProjectsApi,
+    /** The threads, shared with the open chat so `/new` there starts its thread fresh. */
+    private val threadsRepo: ThreadsRepository,
     /** The list as last read, shown while the gateway can't be. */
     private val cache: OfflineCache? = null,
 ) : ViewModel() {
@@ -144,26 +171,39 @@ class SessionsViewModel(
 
     val connectionState: StateFlow<ConnectionState> = connection.state
 
+    /** The profile's threads, in their order. */
+    val threads: StateFlow<List<ChatThread>> = threadsRepo.threads
+
     private val bound = MutableStateFlow<Pair<GatewayUrl, String?>?>(null)
 
     private val _attentionFilter = MutableStateFlow(AttentionFilter.All)
     val attentionFilter: StateFlow<AttentionFilter> = _attentionFilter.asStateFlow()
 
-    private val seen: StateFlow<SeenChats?> = bound
+    /** What the user has read of the listed chats; null until bound. */
+    internal val seen: StateFlow<SeenChats?> = bound
         .flatMapLatest { scope -> scope?.let { (url, profile) -> seenStore.seen(url, profile) } ?: flowOf(null) }
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
+    /** How far [session] had been read before it is opened, when it has new messages since; read before [markSeen]. */
+    fun readUpTo(session: SessionSummary): Double? = seen.value?.readUpTo(session)
+
     private val waiting = attention.waiting
     private val running = attention.running
+    private val requestsByChat = attention.requestsByChat
 
     fun setAttentionFilter(filter: AttentionFilter) {
         _attentionFilter.value = filter
     }
 
-    /** The user has looked at [session] as it is now: its reply is read. */
+    /**
+     * The user has looked at [session] as it is now: its reply is read. A chat the gateway holds as unread is
+     * marked read there too, as Desktop does on opening one, so its other clients clear it as well.
+     */
     fun markSeen(session: SessionSummary) {
         val (url, profile) = bound.value ?: return
         viewModelScope.launch { seenStore.markSeen(url, session, profile) }
+        // Best effort: a failed write leaves the gateway's flag, which this phone's last look already outranks.
+        if (session.unread) viewModelScope.launch { api.setUnread(url, session.id, unread = false, profile = profile) }
     }
 
     private val _user = MutableStateFlow<AuthUser?>(null)
@@ -194,6 +234,16 @@ class SessionsViewModel(
             }.toMap()
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_AFTER_MS), emptyMap())
+
+    private val _binding = MutableStateFlow<ListBinding?>(null)
+
+    /** The gateway and profile whose chats are listed ([bind]); null until bound. */
+    val binding: StateFlow<ListBinding?> = _binding.asStateFlow()
+
+    private val _listReads = MutableSharedFlow<ListRead>(extraBufferCapacity = 16)
+
+    /** Each read of the list from the gateway, as it is asked for and once it has come back, and each time the link goes. */
+    val listReads: SharedFlow<ListRead> = _listReads.asSharedFlow()
 
     /** The list is on screen (the sidebar open or docked), or no longer is. */
     fun setVisible(shown: Boolean) {
@@ -229,6 +279,7 @@ class SessionsViewModel(
         this.gateway = gateway
         this.profile = profile
         bound.value = gateway.gatewayUrl to profile
+        threadsRepo.bind(gateway.gatewayUrl, profile)
         _state.value = SessionsUiState()
         savedShownAt = null
         // The last list's projects mean nothing here; ask afresh.
@@ -238,6 +289,7 @@ class SessionsViewModel(
         projectsAgain = false
         selectAfterLoad = null
         projectChangesMissing = false
+        _binding.value = ListBinding(gateway, profile)
         load(refresh = false)
         if (newGateway) {
             _user.value = null
@@ -577,6 +629,59 @@ class SessionsViewModel(
         },
     )
 
+    /** Makes [session] a thread at the end of the Threads section; its chat is pinned so the gateway keeps it. */
+    fun makeThread(session: SessionSummary) = threadAction("Couldn't make a thread.") {
+        threadsRepo.makeThread(session)
+        _state.update { state ->
+            fun List<SessionSummary>.pinnedRow() = map { if (it.id == session.id) it.copy(pinned = true) else it }
+            state.copy(sessions = state.sessions.pinnedRow(), projectSessions = state.projectSessions?.pinnedRow())
+        }
+    }
+
+    /** Takes [thread] out of the Threads section; its chat stays, as a pinned chat. */
+    fun removeThread(thread: ChatThread) = threadAction("Couldn't remove the thread.") {
+        threadsRepo.change { it.withoutThread(thread.id) }
+    }
+
+    /** Names [thread] [name]; its chat is retitled to match. */
+    fun renameThread(thread: ChatThread, name: String) = threadAction("Couldn't rename the thread.") {
+        threadsRepo.rename(thread, name.trim())
+        load(refresh = false)
+    }
+
+    /** Moves [thread] one place up or down, past [neighbour]: the thread next to it in the section as shown. */
+    fun moveThread(thread: ChatThread, neighbour: ChatThread) = threadAction("Couldn't move the thread.") {
+        threadsRepo.change { it.movedPast(thread.id, neighbour.id) }
+    }
+
+    /** Saves the threads in the order of [ids], as a drag left them. */
+    fun reorderThreads(ids: List<String>) = threadAction("Couldn't save the order.") {
+        threadsRepo.change { it.ordered(ids) }
+    }
+
+    /**
+     * Starts [thread] fresh: its chat is filed away in the archive under the thread's name and the time, and a new
+     * one takes its place, which [onOpened] opens.
+     */
+    fun startFresh(thread: ChatThread, onOpened: (FreshChat) -> Unit) = threadAction("Couldn't start the thread fresh.") {
+        val fresh = threadsRepo.startFresh(thread)
+        onOpened(fresh)
+        load(refresh = false)
+    }
+
+    /** Runs a thread change; a failure is said in the list's message, [fallback] when it has no words of its own. */
+    private fun threadAction(fallback: String, block: suspend () -> Unit) {
+        viewModelScope.launch {
+            try {
+                block()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _state.update { it.copy(message = e.message?.takeIf { m -> m.isNotBlank() } ?: fallback) }
+            }
+        }
+    }
+
     /** Optimistic row update: apply locally (list, search results, project), call the server, roll back on failure. */
     private fun mutate(
         apply: (List<SessionSummary>) -> List<SessionSummary>,
@@ -639,6 +744,11 @@ class SessionsViewModel(
             val limit = _state.value.sessions.size.coerceIn(SessionsApi.PAGE_SIZE, 100)
             val result = api.list(url, limit = limit, filter = filter, profile = profile)
             if (result is ApiResult.Success) cache?.saveList(url, profile, filter, result.value.sessions)
+            if (result is ApiResult.Success && filter == SessionListFilter.Recent) {
+                threadsRepo.noteRows(url, profile, result.value.sessions)
+                // Threads come over the socket; another device may have changed them.
+                if (connection.state.value is ConnectionState.Connected) viewModelScope.launch { threadsRepo.refresh(force = refresh) }
+            }
             _state.update { state ->
                 if (state.filter != filter) return@update state
                 if (result is ApiResult.Success) savedShownAt = null
@@ -662,7 +772,9 @@ class SessionsViewModel(
                     )
                 }
             }
+            if (result is ApiResult.Success) _listReads.tryEmit(ListRead.Done(filter))
         }
+        _listReads.tryEmit(ListRead.Asked(url, profile, filter))
     }
 
     @OptIn(FlowPreview::class)
@@ -677,12 +789,14 @@ class SessionsViewModel(
         viewModelScope.launch {
             connection.state.map { it is ConnectionState.Connected }.distinctUntilChanged().filter { it }.collect {
                 if (gateway != null && _state.value.filter == SessionListFilter.Recent) loadProjects(force = true)
+                if (gateway != null) launch { threadsRepo.refresh(force = true) }
             }
         }
         viewModelScope.launch {
             var wasConnected = true
             connection.state.collect { state ->
                 val connected = state is ConnectionState.Connected
+                if (!connected) _listReads.tryEmit(ListRead.Stale)
                 if (connected && !wasConnected) load(refresh = false)
                 wasConnected = connected
             }

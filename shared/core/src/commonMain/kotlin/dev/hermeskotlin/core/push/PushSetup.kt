@@ -143,7 +143,9 @@ class PushSetup(
                 return@withLock
             }
             api.registrationChanged()
-            _status.value = PushStatus(State.On, if (reply.watching) null else "Restart the gateway's dashboard to start sending.", ready.update)
+            _status.value = PushStatus(State.On, listOfNotNull(ready.detail,
+                if (reply.watching) null else "Restart the gateway's dashboard to start sending.",
+            ).joinToString("\n").ifEmpty { null }, ready.update)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

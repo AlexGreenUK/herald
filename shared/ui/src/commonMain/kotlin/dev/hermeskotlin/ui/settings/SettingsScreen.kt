@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
@@ -38,6 +39,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -71,6 +73,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.composables.icons.lucide.Activity
+import com.composables.icons.lucide.BellRing
+import com.composables.icons.lucide.PanelLeft
+import com.composables.icons.lucide.PanelTop
+import com.composables.icons.lucide.Vibrate
 import com.composables.icons.lucide.ArrowLeftRight
 import com.composables.icons.lucide.Brain
 import com.composables.icons.lucide.Cat
@@ -78,10 +84,12 @@ import com.composables.icons.lucide.Clock
 import com.composables.icons.lucide.Gauge
 import com.composables.icons.lucide.Globe
 import com.composables.icons.lucide.Image
+import com.composables.icons.lucide.LayoutGrid
 import com.composables.icons.lucide.Lock
 import com.composables.icons.lucide.LogOut
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.MessageCircle
+import com.composables.icons.lucide.MessagesSquare
 import com.composables.icons.lucide.Moon
 import com.composables.icons.lucide.RefreshCw
 import com.composables.icons.lucide.Send
@@ -178,8 +186,11 @@ fun SettingsScreen(
     )
     var checkOpen by remember { mutableStateOf(false) }
     var phoneToolsOpen by remember { mutableStateOf(false) }
+    var appIconOpen by remember { mutableStateOf(false) }
+    // Read again when the App icon page closes, so its row names the icon just applied.
+    val appIcons = key(appIconOpen) { rememberAppIcons() }
     LaunchedEffect(gateway) { viewModel.bind(gateway) }
-    PlatformBackHandler(enabled = !checkOpen && !phoneToolsOpen, onBack = onBack)
+    PlatformBackHandler(enabled = !checkOpen && !phoneToolsOpen && !appIconOpen, onBack = onBack)
     SettingsView(
         settings, info, gateway.url, viewModel::update, onBack, onSignOut, onOpenGateways,
         gatewayName = gateway.label,
@@ -201,8 +212,11 @@ fun SettingsScreen(
             viewModel.removeWallpaper()
         },
         onOpenPhoneTools = { phoneToolsOpen = true },
+        appIcon = appIcons.current,
+        onOpenAppIcon = { appIconOpen = true },
     )
     if (phoneToolsOpen) PhoneToolsScreen(onBack = { phoneToolsOpen = false })
+    if (appIconOpen) AppIconScreen(onBack = { appIconOpen = false })
     ConnectionCheckSheet(
         visible = checkOpen,
         results = check.results,
@@ -279,6 +293,8 @@ internal fun SettingsView(
     onChooseWallpaper: () -> Unit = {},
     onRemoveWallpaper: () -> Unit = {},
     onOpenPhoneTools: () -> Unit = {},
+    appIcon: AppIcon = AppIcon.Blue,
+    onOpenAppIcon: () -> Unit = {},
 ) {
     Box(
         Modifier
@@ -319,6 +335,8 @@ internal fun SettingsView(
                             onSelect = { palette -> onUpdate { it.copy(accent = palette.name) } },
                         )
                     }
+                    Divider()
+                    NavRow(title = "App icon", detail = appIcon.label, icon = Lucide.LayoutGrid, onClick = onOpenAppIcon)
                     Divider()
                     SwitchRow(
                         title = "Pure black",
@@ -375,6 +393,13 @@ internal fun SettingsView(
                             )
                         }
                     }
+                    Divider()
+                    SwitchRow(
+                        title = "Projects as a list",
+                        detail = "Show the chat list's projects as one button that opens a list, instead of a row of chips that scrolls sideways.",
+                        checked = settings.projectsAsDropdown,
+                        onCheckedChange = { on -> onUpdate { it.copy(projectsAsDropdown = on) } },
+                    )
                 }
 
                 Section("Chat") {
@@ -436,6 +461,14 @@ internal fun SettingsView(
                         checked = settings.showPet,
                         onCheckedChange = { on -> onUpdate { it.copy(showPet = on) } },
                         icon = Lucide.Cat,
+                    )
+                    Divider()
+                    SwitchRow(
+                        title = "Show link previews",
+                        detail = "A card for each web link in a finished reply. Herald opens the linked pages and their pictures itself, without your gateway's cookies.",
+                        checked = settings.showLinkPreviews,
+                        onCheckedChange = { on -> onUpdate { it.copy(showLinkPreviews = on) } },
+                        icon = Lucide.Globe,
                     )
                 }
 
@@ -501,6 +534,42 @@ internal fun SettingsView(
                         onCheckedChange = { on -> onUpdate { it.copy(notifyReplies = on) } },
                         icon = Lucide.MessageCircle,
                     )
+                    Divider()
+                    SwitchRow(
+                        title = "Notify for other chats while Herald is open",
+                        detail = "Replies and requests in chats other than the one on screen notify even while you're in Herald.",
+                        checked = settings.notifyOtherChatsInApp,
+                        onCheckedChange = { on -> onUpdate { it.copy(notifyOtherChatsInApp = on) } },
+                        icon = Lucide.BellRing,
+                    )
+                    Divider()
+                    SwitchRow(
+                        title = "Alerts for other chats",
+                        detail = "While you're in a chat, a dot on Sessions when another chat replies or waits on you. " +
+                            "Long-press Sessions for the next one.",
+                        checked = settings.otherChatsAlerts,
+                        onCheckedChange = { on -> onUpdate { it.copy(otherChatsAlerts = on) } },
+                        icon = Lucide.PanelLeft,
+                    )
+                    // What the alerts do, only while they're on.
+                    if (settings.otherChatsAlerts) {
+                        Divider()
+                        SwitchRow(
+                            title = "Banner for other chats",
+                            detail = "A card over the chat when another chat replies or waits on you, to open it from there.",
+                            checked = settings.otherChatsBanner,
+                            onCheckedChange = { on -> onUpdate { it.copy(otherChatsBanner = on) } },
+                            icon = Lucide.PanelTop,
+                        )
+                        Divider()
+                        SwitchRow(
+                            title = "Vibrate when another chat waits",
+                            detail = "A short buzz when another chat starts waiting on your approval or answer.",
+                            checked = settings.otherChatsVibrate,
+                            onCheckedChange = { on -> onUpdate { it.copy(otherChatsVibrate = on) } },
+                            icon = Lucide.Vibrate,
+                        )
+                    }
                     Divider()
                     SwitchRow(
                         title = "Notifications anywhere",
@@ -575,11 +644,22 @@ internal fun SettingsView(
                     UpdateBanner(Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
                     Divider()
                     InfoRow("Gateway", info.version?.let { "Hermes $it" } ?: "Checking…")
+                    Divider()
+                    val uriHandler = LocalUriHandler.current
+                    NavRow(
+                        title = "Join the Discord",
+                        detail = "Get help, report bugs, suggest features and hear about new releases.",
+                        icon = Lucide.MessagesSquare,
+                        onClick = { uriHandler.openUri(DISCORD_INVITE) },
+                    )
                 }
             }
         }
     }
 }
+
+/** The Herald community server; the invite never expires. */
+private const val DISCORD_INVITE = "https://discord.gg/wCtyvQ3KcM"
 
 /** The Phone tools row's line: off, or how many tools the agent may use. */
 private fun phoneToolsSummary(settings: AppSettings): String {
