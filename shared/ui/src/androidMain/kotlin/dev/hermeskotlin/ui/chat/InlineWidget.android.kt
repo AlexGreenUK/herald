@@ -84,7 +84,9 @@ internal fun createWidgetWebView(context: Context, name: String, document: () ->
                 MotionEvent.ACTION_DOWN -> {
                     downX = event.x
                     downY = event.y
-                    decided = false
+                    // A fast flick can pass the transcript's touch slop on its first move, before it's decided here.
+                    decided = widgetKeepsTouch(report, downX / density, downY / density)
+                    if (decided) view.parent?.requestDisallowInterceptTouchEvent(true)
                 }
                 MotionEvent.ACTION_POINTER_DOWN -> {
                     decided = true

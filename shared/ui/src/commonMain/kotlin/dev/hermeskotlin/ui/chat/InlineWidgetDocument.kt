@@ -40,32 +40,42 @@ internal fun cssColor(argb: Int): String {
 /**
  * The wrapper's title while a widget is shown: [WIDGET_REPORT], then `t` and/or `b` for the ends its page has
  * scrolled to (both when it doesn't scroll), `|`, and `x,y,w,h` areas (CSS px, `;` between) that keep every drag:
- * inner scrollers, canvases, sliders and `touch-action` controls. Kept current as the page changes, so it's already
+ * inner scrollers, sliders and `touch-action` controls (a drawing canvas needs one; a chart's lets the transcript
+ * scroll). Kept current as the page changes, so it's already
  * there when a finger comes down: a report sent from the touch itself arrives after the drag is decided.
  */
 internal const val WIDGET_REPORT = "widget:"
 
 /** No native bridge: the wrapper only turns a well-formed report from its own frame into its title. */
-private const val REPORT_SCRIPT = "<script>(function(){var last=null,queued=0,picks=[];" +
+private const val REPORT_SCRIPT = "<script>(function(){var last=null,queued=false,dirty=true,scanned=0,timer=0,picks=[]," +
+    // Per document: a reloaded widget's first report differs from the last one's, so the title changes.
+    "id=Math.random().toString(36).slice(2,8);" +
     "function over(n){return n.scrollHeight-n.clientHeight>1}" +
-    "function main(){var s=document.scrollingElement||document.documentElement,b=document.body;" +
-    "if(over(s)&&getComputedStyle(s).overflowY!=='hidden')return s;" +
-    "return b&&over(b)&&/auto|scroll/.test(getComputedStyle(b).overflowY)?b:null}" +
-    "function keeps(n){if(n.tagName==='CANVAS'||n.tagName==='INPUT'&&n.type==='range')return true;" +
-    "var s=getComputedStyle(n),t=s.touchAction;" +
+    "function oy(n){return getComputedStyle(n).overflowY}" +
+    // The page scroller: the viewport (unless hidden, also through body's overflow), else a scrolling body.
+    "function main(){var d=document.documentElement,s=document.scrollingElement||d,b=document.body;" +
+    "if(over(s)&&oy(d)!=='hidden'&&!(b&&oy(d)==='visible'&&oy(b)==='hidden'))return s;" +
+    "return b&&over(b)&&/auto|scroll/.test(oy(b))?b:null}" +
+    "function keeps(n){if(n.tagName==='INPUT'&&n.type==='range')return true;var s=getComputedStyle(n),t=s.touchAction;" +
     "return t!=='auto'&&t!=='manipulation'&&t.indexOf('pan-y')<0||/auto|scroll/.test(s.overflowY)&&over(n)}" +
     "function scan(){picks=[];var m=main(),all=document.querySelectorAll('body *');" +
     "for(var i=0;i<all.length&&picks.length<20;i++)if(all[i]!==m&&keeps(all[i]))picks.push(all[i])}" +
     "function report(){var m=main(),r=[];for(var i=0;i<picks.length;i++){var b=picks[i].getBoundingClientRect();" +
-    "if(b.width>0&&b.height>0&&b.bottom>0&&b.top<innerHeight)r.push([b.left,b.top,b.width,b.height].map(Math.round).join(','))}" +
-    "var v=(m?(m.scrollTop<=0?'t':'')+(m.scrollTop+m.clientHeight>=m.scrollHeight-1?'b':''):'tb')+'|'+r.join(';');" +
+    "if(b.width>0&&b.height>0&&b.bottom>0&&b.top<innerHeight&&b.right>0&&b.left<innerWidth)" +
+    "r.push([b.left,b.top,b.width,b.height].map(Math.round).join(','))}" +
+    "while(r.join(';').length>500)r.pop();" +
+    "var v=(m?(m.scrollTop<=0?'t':'')+(m.scrollTop+m.clientHeight>=m.scrollHeight-1?'b':''):'tb')+'|'+r.join(';')+'|'+id;" +
     "if(v!==last){last=v;parent.postMessage({heraldReport:v},'*')}}" +
-    "function soon(full){if(full)queued|=2;if(!(queued&1)){queued|=1;" +
-    "requestAnimationFrame(function(){if(queued&2)scan();queued=0;report()})}}" +
-    "addEventListener('scroll',function(){soon(false)},{capture:true,passive:true});" +
-    "addEventListener('resize',function(){soon(true)});addEventListener('load',function(){soon(true)});" +
-    "new MutationObserver(function(){soon(true)}).observe(document.documentElement," +
-    "{subtree:true,childList:true,attributes:true,characterData:true})})()</script>"
+    // Scrolling only moves the areas; a full scan (styles of every element) runs at most every 250 ms.
+    "function run(){queued=false;if(dirty){var wait=scanned+250-Date.now();" +
+    "if(wait<=0){dirty=false;scanned=Date.now();scan()}else if(!timer)timer=setTimeout(function(){timer=0;soon()},wait)}report()}" +
+    "function soon(){if(!queued){queued=true;requestAnimationFrame(run)}}" +
+    "function changed(){dirty=true;soon()}" +
+    "addEventListener('scroll',soon,{capture:true,passive:true});addEventListener('resize',changed);addEventListener('load',changed);" +
+    "new MutationObserver(changed).observe(document.documentElement," +
+    "{subtree:true,childList:true,attributes:true,attributeFilter:['style','class','hidden']});" +
+    "if(window.ResizeObserver){var ro=new ResizeObserver(changed);ro.observe(document.documentElement);" +
+    "addEventListener('DOMContentLoaded',function(){if(document.body)ro.observe(document.body)})}})()</script>"
 
 /** An area of a widget that keeps drags, in CSS px from the widget's top left. */
 internal data class WidgetArea(val x: Float, val y: Float, val width: Float, val height: Float) {
@@ -79,11 +89,15 @@ internal data class WidgetReport(val atTop: Boolean = true, val atBottom: Boolea
 internal fun widgetReport(title: String?): WidgetReport? {
     val value = title?.takeIf { it.startsWith(WIDGET_REPORT) }?.removePrefix(WIDGET_REPORT) ?: return null
     val ends = value.substringBefore('|')
-    val keeps = value.substringAfter('|', "").split(';').mapNotNull { area ->
+    // Then `|` and the document's token, only there to change the title.
+    val keeps = value.substringAfter('|', "").substringBefore('|').split(';').mapNotNull { area ->
         area.split(',').mapNotNull { it.toFloatOrNull() }.takeIf { it.size == 4 }?.let { WidgetArea(it[0], it[1], it[2], it[3]) }
     }
     return WidgetReport('t' in ends, 'b' in ends, keeps)
 }
+
+/** A touch at ([x], [y]) on an area that keeps drags, whichever way it then moves: held from the start, so a flick can't escape. */
+internal fun widgetKeepsTouch(report: WidgetReport, x: Float, y: Float): Boolean = report.keeps.any { it.contains(x, y) }
 
 /**
  * Whether a drag that came down at ([x], [y]) (CSS px) and has moved by ([dx], [dy]) stays in the widget instead of
@@ -91,7 +105,7 @@ internal fun widgetReport(title: String?): WidgetReport? {
  * Decided once per drag; the transcript can't take a drag over later.
  */
 internal fun widgetKeepsDrag(report: WidgetReport, x: Float, y: Float, dx: Float, dy: Float): Boolean = when {
-    report.keeps.any { it.contains(x, y) } -> true
+    widgetKeepsTouch(report, x, y) -> true
     abs(dx) > abs(dy) -> true
     // A finger moving down scrolls the page up, towards its top.
     dy > 0 -> !report.atTop
@@ -114,6 +128,6 @@ internal fun widgetDocument(html: String, theme: WidgetTheme, font: String): Str
         "frame-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'\">" +
         "<style>html,body{margin:0;height:100%;background:transparent}iframe{width:100%;height:100%;border:0}</style>" +
         "<script>addEventListener('message',function(e){var f=document.querySelector('iframe'),v=e.data&&e.data.heraldReport;" +
-        "if(f&&e.source===f.contentWindow&&typeof v==='string'&&/^t?b?\\|[0-9,;-]{0,600}$/.test(v))document.title='$WIDGET_REPORT'+v})</script>" +
+        "if(f&&e.source===f.contentWindow&&typeof v==='string'&&/^t?b?\\|[0-9,;-]{0,500}\\|[0-9a-z]{1,8}$/.test(v))document.title='$WIDGET_REPORT'+v})</script>" +
         "</head><body><iframe title=\"HTML widget\" sandbox=\"allow-scripts\" srcdoc=\"$content\"></iframe></body></html>"
 }

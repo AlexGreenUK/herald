@@ -88,16 +88,16 @@ class InlineWidgetTest {
         assertTrue(result.indexOf("parent.postMessage({heraldReport:v},'*')") in 0 until result.indexOf("&lt;p&gt;tall"))
         // The wrapper takes only a well-formed report from its own frame, and only as its title.
         assertTrue(result.contains("e.source===f.contentWindow"))
-        assertTrue(result.contains("/^t?b?\\|[0-9,;-]{0,600}$/.test(v))document.title='$WIDGET_REPORT'+v"))
+        assertTrue(result.contains("/^t?b?\\|[0-9,;-]{0,500}\\|[0-9a-z]{1,8}$/.test(v))document.title='$WIDGET_REPORT'+v"))
     }
 
     @Test
     fun aReportReadsItsEndsAndAreas() {
         assertEquals(WidgetReport(atTop = true, atBottom = false, keeps = listOf(WidgetArea(0f, 10f, 300f, 40f))),
-            widgetReport("${WIDGET_REPORT}t|0,10,300,40"))
+            widgetReport("${WIDGET_REPORT}t|0,10,300,40|k3x9a"))
         assertEquals(WidgetReport(atTop = false, atBottom = true, keeps = listOf(WidgetArea(-5f, 0f, 1f, 1f))),
-            widgetReport("${WIDGET_REPORT}b|-5,0,1,1;1,2,3;x,1,2,3"))
-        assertEquals(WidgetReport(), widgetReport("${WIDGET_REPORT}tb|"))
+            widgetReport("${WIDGET_REPORT}b|-5,0,1,1;1,2,3;x,1,2,3|k3x9a"))
+        assertEquals(WidgetReport(), widgetReport("${WIDGET_REPORT}tb||k3x9a"))
         assertNull(widgetReport("HTML widget"))
         assertNull(widgetReport(null))
     }
@@ -118,6 +118,9 @@ class InlineWidgetTest {
         val canvas = fixed.copy(keeps = listOf(WidgetArea(0f, 100f, 200f, 50f)))
         assertTrue(widgetKeepsDrag(canvas, 20f, 120f, 0f, 8f))
         assertFalse(widgetKeepsDrag(canvas, 20f, 160f, 0f, 8f))
+        // Held from the touch itself, before any movement.
+        assertTrue(widgetKeepsTouch(canvas, 20f, 120f))
+        assertFalse(widgetKeepsTouch(canvas, 20f, 160f))
     }
 
     @Test
