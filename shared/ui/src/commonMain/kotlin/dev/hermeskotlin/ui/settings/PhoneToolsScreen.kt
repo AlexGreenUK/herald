@@ -42,6 +42,7 @@ import com.composables.icons.lucide.Hourglass
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.MapPin
 import com.composables.icons.lucide.MapPinned
+import com.composables.icons.lucide.PhoneCall
 import com.composables.icons.lucide.PhoneIncoming
 import com.composables.icons.lucide.AudioLines
 import com.composables.icons.lucide.ShieldCheck
@@ -142,7 +143,7 @@ internal const val WATCH_RINGS_DETAIL =
 
 /** Under the switch: what rings, and that the agent never calls anyone. */
 internal const val RINGS_DETAIL =
-    "An approval or a question from a chat you're not looking at rings like a call. Decline it for the usual " +
+    "Every approval or question from a chat you're not looking at rings like a call. Decline it for the usual " +
         "notification. It only ever rings you: the agent never calls anyone from this phone."
 
 /** The page itself, stateless so previews can draw it. */
@@ -231,7 +232,8 @@ internal fun PhoneToolsView(
                 }
                 if (settings.phoneTools) {
                     Section("Tools") {
-                        PhoneTool.entries.forEachIndexed { i, tool ->
+                        // The agent's calls ring: they're under Calls.
+                        PhoneTool.entries.filter { it != PhoneTool.CallMe }.forEachIndexed { i, tool ->
                             if (i > 0) Divider()
                             val on = tool.id in settings.phoneToolsOn
                             // Only once it's on: a tool that's off needs nothing, and asking early would nag.
@@ -256,6 +258,20 @@ internal fun PhoneToolsView(
                         }
                     }
                     Section("Calls") {
+                        val callsMe = PhoneTool.CallMe.id in settings.phoneToolsOn
+                        val callNeeds = if (callsMe) ringsMissing() else null
+                        SwitchRow(
+                            title = PhoneTool.CallMe.title,
+                            detail = callNeeds ?: PhoneTool.CallMe.detail,
+                            checked = callsMe,
+                            onCheckedChange = { onTool(PhoneTool.CallMe, it) },
+                            icon = PhoneTool.CallMe.icon,
+                        )
+                        if (callNeeds != null) {
+                            Divider()
+                            ActionRow("Allow on this phone", Lucide.ShieldCheck, onAllowRings)
+                        }
+                        Divider()
                         val needs = if (settings.phoneRings) ringsMissing() else null
                         SwitchRow(
                             title = "Ring me for an answer",
@@ -277,6 +293,8 @@ internal fun PhoneToolsView(
                                 onCheckedChange = onRingsTalk,
                                 icon = Lucide.AudioLines,
                             )
+                        }
+                        if (settings.phoneRings || callsMe) {
                             Divider()
                             SwitchRow(
                                 title = "Ring my watch too",
@@ -510,4 +528,5 @@ internal val PhoneTool.icon: ImageVector
         PhoneTool.Calendar -> Lucide.CalendarDays
         PhoneTool.Contacts -> Lucide.Contact
         PhoneTool.Health -> Lucide.HeartPulse
+        PhoneTool.CallMe -> Lucide.PhoneCall
     }

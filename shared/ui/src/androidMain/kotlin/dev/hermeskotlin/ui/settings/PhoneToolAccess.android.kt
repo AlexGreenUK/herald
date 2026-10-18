@@ -86,6 +86,8 @@ private class AndroidPhoneToolAccess(
             "Allow location all the time: places are watched while Herald is closed. Choose \"Allow all the time\"."
         tool == PhoneTool.Calendar && (!granted(READ_CALENDAR) || !granted(WRITE_CALENDAR)) -> "Allow Herald to use your calendar."
         tool == PhoneTool.Contacts && !granted(READ_CONTACTS) -> "Allow Herald to read your contacts."
+        // A call from the agent rings as an approval does.
+        tool == PhoneTool.CallMe -> ringsMissing()
         tool == PhoneTool.Health -> when {
             health == null -> null
             health.status == HealthConnectClient.SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED -> "Update Health Connect, where the data comes from."
@@ -103,6 +105,7 @@ private class AndroidPhoneToolAccess(
 
     override fun request(tool: PhoneTool) {
         when {
+            tool == PhoneTool.CallMe -> requestRings()
             tool in ASKS && !notificationsOn() -> requestNotifications()
             // Both, so the prompt offers precise or approximate: the user picks.
             tool == PhoneTool.Location && !granted(FINE) && !granted(COARSE) -> prompt(FINE, COARSE)
