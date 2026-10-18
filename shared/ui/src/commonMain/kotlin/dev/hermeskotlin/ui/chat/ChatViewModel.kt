@@ -1,5 +1,7 @@
 package dev.hermeskotlin.ui.chat
 
+import dev.hermeskotlin.core.voice.ReadAloudVoices
+import dev.hermeskotlin.core.voice.InMemoryReadAloudVoices
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.text.input.clearText
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
@@ -198,6 +200,8 @@ class ChatViewModel(
     /** The threads, so `/new` in a thread's chat starts the thread fresh instead of leaving it. */
     private val threads: ThreadsRepository? = null,
     private val linkPreviews: LinkPreviews? = null,
+    /** Where the voice of replies read aloud is kept; in memory without one. */
+    readAloudVoices: ReadAloudVoices? = null,
 ) : ViewModel(), ChatActions {
 
     /** Dictation, voice chat and Read aloud for the open chat. */
@@ -205,6 +209,7 @@ class ChatViewModel(
         audioApi, recorder, player, viewModelScope, appScope, voiceKeepAlive, deviceDictation,
         speechStreams = speechStreams,
         liveCalls = liveCalls,
+        readAloudVoices = readAloudVoices ?: InMemoryReadAloudVoices(),
     )
 
     /** The profile's pet and its gallery. */

@@ -47,6 +47,7 @@ val uiModule = module {
             seen = getOrNull(),
             threads = getOrNull(),
             linkPreviews = get(),
+            readAloudVoices = getOrNull(),
         )
     }
     viewModelOf(::SettingsViewModel)
