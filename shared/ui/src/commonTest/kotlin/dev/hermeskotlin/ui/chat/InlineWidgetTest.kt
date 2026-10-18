@@ -74,6 +74,14 @@ class InlineWidgetTest {
     }
 
     @Test
+    fun themeColorsKeepTheirTransparency() {
+        // Herald's dark-theme line: white at 7%, which as #ffffff drew solid white widget borders.
+        assertEquals("#ffffff12", cssColor(0x12ffffff))
+        assertEquals("#16161aff", cssColor(0xff16161a.toInt()))
+        assertEquals("#00000000", cssColor(0))
+    }
+
+    @Test
     fun loaderPreservesTheFileAndGatewayFailure() = runTest {
         val file = GatewayFile("/tmp/chart.html")
         val expected = FileLoad.Ready(FileText("<p>profile B</p>", 16, false, false))

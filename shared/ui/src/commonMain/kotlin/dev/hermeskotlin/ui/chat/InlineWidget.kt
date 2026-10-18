@@ -77,7 +77,7 @@ internal fun InlineWidget(item: ReplyMedia, file: GatewayFile, files: WidgetFile
     var attempt by remember { mutableIntStateOf(0) }
     var failed by remember(attempt) { mutableStateOf<String?>(null) }
     val loaded by key(attempt) { produceState<FileLoad>(FileLoad.Loading) { value = loadWidget(files, file) } }
-    fun css(color: Color) = "#" + (color.toArgb().toLong() and 0xffffff).toString(16).padStart(6, '0')
+    fun css(color: Color) = cssColor(color.toArgb())
     val theme = WidgetTheme(
         css(Theme[colors][text]), css(Theme[colors][textTertiary]), css(Theme[colors][accent]),
         css(Theme[colors][stroke]), css(Theme[colors][surface]), Theme[colors][background].luminance() < 0.5f,

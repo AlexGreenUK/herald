@@ -30,6 +30,12 @@ internal data class WidgetTheme(
     val fontSize: Float,
 )
 
+/** A CSS `#rrggbbaa` color for [argb]: Herald's lines and muted text are translucent, and lose that as `#rrggbb`. */
+internal fun cssColor(argb: Int): String {
+    val value = argb.toLong() and 0xffffffff
+    return "#" + (((value and 0xffffff) shl 8) or (value ushr 24)).toString(16).padStart(8, '0')
+}
+
 /** A separate, opaque-origin document: HTML cannot escape srcdoc into the app-owned wrapper. */
 internal fun widgetDocument(html: String, theme: WidgetTheme, font: String): String {
     val prelude = "<meta http-equiv=\"Content-Security-Policy\" content=\"frame-src 'none'\">" +
