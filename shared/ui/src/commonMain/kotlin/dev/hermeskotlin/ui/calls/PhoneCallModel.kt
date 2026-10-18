@@ -79,6 +79,9 @@ class PhoneCallModel(
     private var counted = false
     private var cleared = false
 
+    /** The agent's call being put on the line; until it is, closing the screen ends it as declined. */
+    private var placing: AgentCall? = null
+
     fun pickUp(call: PickedUpCall) {
         if (_state.value == null) pickingUp = call
     }
@@ -88,6 +91,7 @@ class PhoneCallModel(
         val call = pickingUp ?: return
         if (_state.value != null || cleared) return
         pickingUp = null
+        placing = call.agent
         _state.value = PhoneCallState(call.caller)
         // Counted from here, so the gateway link stays up and the chat's turns aren't notified over the call.
         relay.callStarted()
@@ -131,6 +135,10 @@ class PhoneCallModel(
 
     override fun onCleared() {
         cleared = true
+        // Picked up but never on the line (swiped away while unlocking or connecting): the agent hears it now,
+        // not when its time runs out. One already answered stays answered.
+        pickingUp?.agent?.end(CallOutcome.Declined)
+        placing?.end(CallOutcome.Declined)
         voice.stopAll()
         if (counted) relay.callEnded()
     }
