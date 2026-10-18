@@ -123,6 +123,16 @@ class PushApi(private val connection: GatewayConnection) {
      */
     val updates: StateFlow<Int> = _updates.asStateFlow()
 
+    private val _registrations = MutableStateFlow(0)
+
+    /**
+     * Counts this phone's push registrations made or given up: phone tools tell the gateway the push id a call can
+     * ring through, so one made after the tools were reported reaches the gateway too.
+     */
+    val registrations: StateFlow<Int> = _registrations.asStateFlow()
+
+    fun registrationChanged() = _registrations.update { it + 1 }
+
     /** The plugin's state, or null when it isn't installed (or is off) on this gateway. */
     suspend fun info(): PushPluginReply? = command("info")
 

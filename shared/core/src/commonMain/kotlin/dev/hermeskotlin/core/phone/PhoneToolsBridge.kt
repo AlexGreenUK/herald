@@ -109,8 +109,9 @@ class PhoneToolsBridge(
         scope.launch {
             val client = connection.state.map { (it as? ConnectionState.Connected)?.client }.distinctUntilChanged()
             val enabled = settings.settings.filterNotNull().map { it.enabledPhoneTools() }.distinctUntilChanged()
-            // A plugin update from Notifications anywhere: look again, so the page doesn't still offer it.
-            combine(client, enabled, setUps, api.updates) { c, on, setUp, _ -> Triple(c, on, setUp) }.collectLatest { (c, on, setUp) ->
+            // A plugin update from Notifications anywhere: look again, so the page doesn't still offer it. Turned on
+            // (or off) after the tools were reported: report again, so a call rings through the push off the network.
+            combine(client, enabled, setUps, api.updates, api.registrations) { c, on, setUp, _, _ -> Triple(c, on, setUp) }.collectLatest { (c, on, setUp) ->
                 refuseSwitchedOff(on)
                 serve(c, on, setUp)
             }
@@ -357,6 +358,7 @@ class PhoneToolsBridge(
     }
 
     private suspend fun handle(request: PhoneRequest) {
+        val started = now()
         val tool = PhoneTool.byId(request.tool)
         // Up to the gateway's own deadline, less a margin: the phone may look late (a poll, Doze), and an Allow
         // the agent would never hear of must not change the phone. Measured on the gateway's clock, so a phone
@@ -390,7 +392,8 @@ class PhoneToolsBridge(
         if (tool != null && error != SWITCHED_OFF) _recent.update { (listOf(PhoneToolUse(tool, now(), error)) + it).take(MAX_RECENT) }
         // Out of the running list before answering: switching the tool off now can't send a second answer.
         if (!finish(request.id)) return
-        answer(request.id, result, error)
+        // Until the gateway stops waiting: a call declined off the network gets there once the way back is up.
+        answer(request.id, result, error, wait = (started + limit + DEADLINE_MARGIN_MS - now()).coerceAtLeast(ANSWER_WAIT_MS))
     }
 
     /** Takes [requestId] out of the running list; false when switching off already did (and answered it). */
@@ -417,12 +420,17 @@ class PhoneToolsBridge(
         for (id in stopped) scope.launch { answer(id, null, SWITCHED_OFF) }
     }
 
-    private suspend fun answer(requestId: String, result: JsonElement?, error: String?) {
+    private suspend fun answer(requestId: String, result: JsonElement?, error: String?, wait: Long = ANSWER_WAIT_MS) {
         try {
-            // A call rung from a push may end while Herald can't reach the gateway: the answer waits a little for it.
+            // A call rung from a push may end while Herald can't reach the gateway: the answer waits for it, trying
+            // again every few seconds rather than sitting out a long backoff once the network is back.
             if (connection.state.value !is ConnectionState.Connected) {
-                connection.retry()
-                withTimeoutOrNull(ANSWER_WAIT_MS) { connection.state.first { it is ConnectionState.Connected } } ?: return
+                withTimeoutOrNull(wait) {
+                    while (connection.state.value !is ConnectionState.Connected) {
+                        connection.retry()
+                        withTimeoutOrNull(ANSWER_RETRY_MS) { connection.state.first { it is ConnectionState.Connected } }
+                    }
+                } ?: return
             }
             val me = identity()
             api.phoneAnswer(me.id, me.key, requestId, result, error)
@@ -478,8 +486,11 @@ class PhoneToolsBridge(
         /** Stopped this long before the gateway's deadline, for the answer to get there. */
         const val DEADLINE_MARGIN_MS = 8_000L
 
-        /** How long an answer waits for the way to the gateway, when there's none. */
+        /** The least an answer waits for the way to the gateway, when there's none. */
         const val ANSWER_WAIT_MS = 20_000L
+
+        /** How often a waiting answer asks the connection to try again. */
+        const val ANSWER_RETRY_MS = 3_000L
 
         /** How far the phone's clock may be off the gateway's before a ring push counts as late. */
         const val PUSH_SKEW_S = 30L

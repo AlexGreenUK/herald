@@ -57,7 +57,7 @@ private const val GATEWAY_NOW = 1_800_000_000L
 class PhoneToolsBridgeTest {
 
     /** A push identity, registered with [pinnedTo] when set. */
-    private class Keys(val pinnedTo: String? = null) : PushKeys {
+    private class Keys(var pinnedTo: String? = null) : PushKeys {
         override val deviceId = "0b6f2c1e-1111-4222-8333-944445555666"
         override fun registration(name: String) = PushRegistration(deviceId, name, "https://ntfy.sh", "hp-a", "hp-b", "E", "S")
         override fun pinned(gatewayUrl: String): PushGateway? = null
@@ -228,7 +228,7 @@ class PhoneToolsBridgeTest {
         }
     }
 
-    private class Setup(val bridge: PhoneToolsBridge, val connection: GatewayConnection, val settings: SettingsStore, val store: KeyValueStore)
+    private class Setup(val bridge: PhoneToolsBridge, val connection: GatewayConnection, val settings: SettingsStore, val store: KeyValueStore, val api: PushApi)
 
     private val transports = ArrayDeque<FakeTransport>()
 
@@ -247,11 +247,12 @@ class PhoneToolsBridgeTest {
         settings.settings.filterNotNull().first()
         settings.update { it.copy(phoneTools = all, phoneToolsOn = on.map { t -> t.id }, pushAnywhere = pushAnywhere) }
         val gateways = GatewayRepository(InMemoryKeyValueStore()).apply { save(SavedGateway(URL)) }
+        val api = PushApi(connection)
         val bridge = PhoneToolsBridge(
-            PushApi(connection), keys, store, connection, gateways, settings, runner, backgroundScope, { "Pixel" }, { currentTime },
+            api, keys, store, connection, gateways, settings, runner, backgroundScope, { "Pixel" }, { currentTime },
         )
         bridge.start()
-        return Setup(bridge, connection, settings, store)
+        return Setup(bridge, connection, settings, store, api)
     }
 
     private suspend fun TestScope.connect(s: Setup, plugin: Plugin): FakeTransport {
@@ -541,6 +542,23 @@ class PhoneToolsBridgeTest {
     }
 
     @Test
+    fun aCallDeclinedOffTheNetworkGetsBackOnceTheGatewayIsReachedInTime() = runTest {
+        val runner = CallRunner().apply { ringing.complete(Unit) }
+        val s = setup(runner, on = listOf(PhoneTool.CallMe))
+        val id = "e".repeat(32)
+        s.bridge.ring(ringPush(id))
+        until { runner.calls.isNotEmpty() }
+        // Back on the network well past the least wait, still before the gateway gives up: the answer goes through.
+        delay(40_000)
+        val plugin = Plugin()
+        plugin.call(id, PhoneTool.CallMe.id, expires = GATEWAY_NOW + 75)
+        connect(s, plugin)
+        until { plugin.answers.containsKey(id) }
+        assertEquals("""{"status":"declined"}""", plugin.answers[id]!!["result"].toString())
+        assertEquals(1, runner.calls.size)
+    }
+
+    @Test
     fun aRingInAPushAndOnTheGatewayRingsOnceAndItsEndGoesBack() = runTest {
         val runner = CallRunner()
         val s = setup(runner, on = listOf(PhoneTool.CallMe))
@@ -613,6 +631,22 @@ class PhoneToolsBridgeTest {
         connect(other, second)
         until { second.reports.isNotEmpty() }
         assertNull(second.reportBodies.single()["push_id"])
+    }
+
+    @Test
+    fun notificationsAnywhereTurnedOnLaterTellTheGatewayWhereACallCanRing() = runTest {
+        val keys = Keys()
+        val s = setup(Runner(), on = listOf(PhoneTool.CallMe), keys = keys)
+        val plugin = Plugin()
+        connect(s, plugin)
+        until { plugin.reports.isNotEmpty() }
+        assertNull(plugin.reportBodies.last()["push_id"])
+        // Registered for push afterwards, on the same connection: the gateway hears of it without a reconnect.
+        s.settings.update { it.copy(pushAnywhere = true) }
+        keys.pinnedTo = URL
+        s.api.registrationChanged()
+        until { plugin.reportBodies.lastOrNull()?.get("push_id") != null }
+        assertEquals(keys.deviceId, plugin.reportBodies.last()["push_id"]?.jsonPrimitive?.content)
     }
 
     @Test
