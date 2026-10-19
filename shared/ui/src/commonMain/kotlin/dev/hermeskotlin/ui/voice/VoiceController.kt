@@ -508,13 +508,14 @@ class VoiceController(
                 _chat.update { it.copy(phase = VoicePhase.Transcribing, level = 0f, hearing = false) }
                 (audio.transcribe(gateway, it.bytes, it.mimeType, profile) as? ApiResult.Success)?.value?.trim()
             }.orEmpty()
-            // Its own words, heard back. Off the main thread: it compares every stretch of the reply.
-            val echo = transcript.isNotBlank() && withContext(Dispatchers.Default) { isTtsEcho(transcript, overVoice) }
+            // Its own words heard back, compared with every stretch of the reply: off the main thread.
+            suspend fun echo(words: String) = withContext(Dispatchers.Default) { isTtsEcho(words, overVoice) }
+            // "Stop" said over the voice can come after some of its own words, and be over before it held.
+            val stop = isVoiceStopCommand(transcript) ||
+                isVoiceStopCommand(transcript.substringAfterLast(' ')) && echo(transcript.substringBeforeLast(' '))
             // A voice that held stops its echo with it, so someone went on talking; one that couldn't hold is told by
             // its words.
-            val someone = transcript.isNotBlank() && (held || !echo)
-            // "Stop" said over the voice can come after some of its own words, and be over before it held.
-            val stop = isVoiceStopCommand(transcript) || !echo && isVoiceStopCommand(transcript.substringAfterLast(' '))
+            val someone = !stop && transcript.isNotBlank() && (held || !echo(transcript))
             if (!stop && !someone) {
                 _chat.update { it.copy(phase = phase, level = 0f, hearing = false) }
                 return null
@@ -522,11 +523,10 @@ class VoiceController(
             reply.cancelAndJoin()
             playing.value = false
             _chat.update { it.copy(working = null) }
-            val end = stop && (!someone || isVoiceStopCommand(transcript))
             // A cut-in's prompt stops the turn itself (stopAndSubmit), in order: a second stop sent alongside could land
             // after it and stop the new turn, or drop the prompt where it was queued behind the old one.
-            if (end && session.state.value.running) appScope.launch { session.interrupt() }
-            return if (end) Turn.End else Turn.CutIn(Interjection(transcript))
+            if (stop && session.state.value.running) appScope.launch { session.interrupt() }
+            return if (stop) Turn.End else Turn.CutIn(Interjection(transcript))
         } finally {
             player.hold(false)
         }

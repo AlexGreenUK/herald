@@ -361,6 +361,52 @@ class StreamedSpeechTest {
         setup.voice.stopChat()
     }
 
+    /** Over a loudspeaker, "stop" can come with some of the voice's own words before it: that still ends the chat. */
+    @Test
+    fun stopSaidAfterItsOwnWordsEndsTheChat() = runTest {
+        val recorder = CutsIn()
+        val stream = Stream()
+        val setup = chat(recorder = recorder, transcripts = listOf("How was your day?", "first the meeting ran over. Stop!")) { stream }
+
+        setup.socket.event("message.start")
+        setup.socket.event("message.delta", """{"text":"It was a long day. First the meeting ran over. "}""")
+        stream.appended.first { it.isNotEmpty() }
+        stream.gateway.send(SpeechStreamEvent.Start(sampleRate = 24_000))
+        stream.gateway.send(SpeechStreamEvent.Audio(byteArrayOf(1, 0, 2, 0)))
+        setup.voice.chat.first { it.phase == VoicePhase.Speaking }
+        recorder.listening.first { it >= 1 }
+        recorder.cut.complete(Unit)
+
+        setup.voice.chat.first { it.phase == VoicePhase.Off }
+        assertTrue(stream.closed)
+        // The agent stops with the chat, and nothing is sent.
+        setup.socket.calls.first { "session.interrupt" in it }
+        assertEquals(1, setup.socket.submits.value.size)
+    }
+
+    /** A request that only ends in "stop" is a request, not the end of the chat. */
+    @Test
+    fun aCutInEndingInStopIsSent() = runTest {
+        val recorder = CutsIn()
+        val stream = Stream()
+        val setup = chat(recorder = recorder, transcripts = listOf("How was your day?", "Take me to the bus stop")) { stream }
+
+        setup.socket.event("message.start")
+        setup.socket.event("message.delta", """{"text":"It was a long day. First the meeting ran over. "}""")
+        stream.appended.first { it.isNotEmpty() }
+        stream.gateway.send(SpeechStreamEvent.Start(sampleRate = 24_000))
+        stream.gateway.send(SpeechStreamEvent.Audio(byteArrayOf(1, 0, 2, 0)))
+        setup.voice.chat.first { it.phase == VoicePhase.Speaking }
+        recorder.listening.first { it >= 1 }
+        recorder.cut.complete(Unit)
+        setup.socket.calls.first { "session.interrupt" in it }
+        setup.socket.event("message.complete", """{"text":"It was a long day.","status":"interrupted"}""")
+
+        setup.socket.submits.first { it.size == 2 }
+        assertEquals("Take me to the bus stop", setup.socket.submits.value[1]["params"]!!.jsonObject["text"]!!.jsonPrimitive.content)
+        setup.voice.stopChat()
+    }
+
     /**
      * A speaker turned right up trips it with its own voice. The voice holds; nobody goes on talking, since its
      * echo stopped with it, so it goes on where it held, whatever the words: nothing sent, nothing stopped.
