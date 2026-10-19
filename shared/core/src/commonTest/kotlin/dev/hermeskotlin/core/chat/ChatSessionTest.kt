@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
@@ -190,6 +191,80 @@ class ChatSessionTest {
         assertFalse(user.pending)
         // Dated when this device sent it.
         assertEquals(1_700_000_000.0, user.timestamp)
+    }
+
+    @Test
+    fun aNewChatStartsWithTheStartingInstructionAsAHiddenRow() = runTest {
+        val (connection, transport) = setup(
+            backgroundScope,
+            mapOf(
+                "session.create" to """{"session_id":"rt9","stored_session_id":"stored-9","message_count":0,"messages":[],"info":{}}""",
+                "prompt.submit" to """{"status":"streaming"}""",
+            ),
+        )
+        connection.state.first { it is ConnectionState.Connected }
+        var instruction: String? = "Keep replies short."
+        val chat = ChatSession(url, null, null, connection, SessionsApi(client()), backgroundScope, startInstruction = { instruction })
+        chat.start()
+        // Read when the chat is created, not when it opens.
+        instruction = "I'm on my phone: keep replies short."
+
+        assertTrue(chat.send("hi"))
+
+        val create = transport.awaitSent { it.isCall("session.create") }
+        val seeded = create["params"]!!.jsonObject["messages"]!!.jsonArray.single().jsonObject
+        assertEquals("user", seeded["role"]?.jsonPrimitive?.content)
+        assertEquals("hidden", seeded["display_kind"]?.jsonPrimitive?.content)
+        val content = seeded["content"]!!.jsonPrimitive.content
+        assertTrue(content.endsWith("\n\nI'm on my phone: keep replies short."), content)
+        // The prompt itself goes as usual; the instruction isn't in it or on screen.
+        assertEquals("hi", transport.awaitSent { it.isCall("prompt.submit") }.param("text"))
+        assertEquals(listOf("hi"), chat.state.value.messages.map { it.textOf() })
+    }
+
+    @Test
+    fun aNewChatWithoutAStartingInstructionSeedsNothing() = runTest {
+        val (connection, transport) = setup(
+            backgroundScope,
+            mapOf(
+                "session.create" to """{"session_id":"rt9","stored_session_id":"stored-9","message_count":0,"messages":[],"info":{}}""",
+                "prompt.submit" to """{"status":"streaming"}""",
+            ),
+        )
+        connection.state.first { it is ConnectionState.Connected }
+        val chat = ChatSession(url, null, null, connection, SessionsApi(client()), backgroundScope, startInstruction = { null })
+        chat.start()
+
+        assertTrue(chat.send("hi"))
+
+        val create = transport.awaitSent { it.isCall("session.create") }
+        assertNull(create["params"]!!.jsonObject["messages"])
+    }
+
+    @Test
+    fun aChatSeededWithAStartingInstructionResumesItsRowOnReconnect() = runTest {
+        val (connection, transports) = reconnectingSetup(
+            backgroundScope,
+            mapOf(
+                "session.create" to """{"session_id":"rt9","stored_session_id":"stored-1","info":{}}""",
+                "session.resume" to """{"session_id":"rt9","running":false}""",
+                "prompt.submit" to SILENT,
+            ),
+        )
+        connection.state.first { it is ConnectionState.Connected }
+        val chat = ChatSession(url, null, null, connection, SessionsApi(client()), backgroundScope, startInstruction = { "Keep replies short." })
+        chat.start()
+        historyFails = true
+        val sending = backgroundScope.async { chat.submit("deploy it") }
+        transports.last().awaitSent { it.isCall("prompt.submit") }
+        val dropped = transports.last()
+        dropped.serverClose(1006)
+        assertEquals(SendOutcome.Unsettled, sending.await())
+
+        // The seeded row was stored on create, so the next link resumes it instead of making a second chat.
+        chat.state.first { it.runtimeSessionId != null && transports.last() !== dropped }
+        assertTrue(transports.last().sent.value.any { it.isCall("session.resume") })
+        assertEquals(1, transports.sumOf { socket -> socket.sent.value.count { it.isCall("session.create") } })
     }
 
     @Test

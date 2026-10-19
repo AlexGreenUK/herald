@@ -499,7 +499,7 @@ class WatchRelay(
         sessionScope = childScope
         sessionGateway = gateway
         sessionProfile = profile
-        return ChatSession(gateway, chatId, null, connection, sessions, childScope, profile).also {
+        return ChatSession(gateway, chatId, null, connection, sessions, childScope, profile, startInstruction = host.startInstruction).also {
             it.start()
             _session.value = it
         }
