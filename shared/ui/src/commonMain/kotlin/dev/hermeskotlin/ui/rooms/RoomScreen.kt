@@ -29,6 +29,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.input.TextFieldLineLimits
 import androidx.compose.foundation.text.selection.LocalTextSelectionColors
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.ui.semantics.isTraversalGroup
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.traversalIndex
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -304,9 +307,19 @@ private fun TranscriptList(lines: List<RoomLine>, listState: LazyListState, face
 internal fun UserLine(line: RoomLine.Message) {
     val shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp, bottomEnd = 6.dp, bottomStart = 20.dp)
     Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Box(Modifier.fillMaxWidth(0.84f), contentAlignment = Alignment.CenterEnd) {
+        // Copy sits beside the bubble, at its foot, so it takes no height of its own. A screen reader still
+        // reads the message first, as on a bot's line.
+        Row(
+            Modifier.fillMaxWidth(0.84f).semantics { isTraversalGroup = true },
+            horizontalArrangement = Arrangement.spacedBy(2.dp, Alignment.End),
+            verticalAlignment = Alignment.Bottom,
+        ) {
+            if (copyable(line.text)) {
+                CopyButton(line.text, Modifier.semantics { traversalIndex = 1f }, label = copyLabel(null))
+            }
             Box(
                 Modifier
+                    .weight(1f, fill = false)
                     .clip(shape)
                     .background(Theme[colors][userBubble], shape)
                     .border(1.dp, Theme[colors][userBubbleStroke], shape)
@@ -329,6 +342,7 @@ internal fun UserLine(line: RoomLine.Message) {
 internal fun MemberLine(line: RoomLine.Message, continued: Boolean, faces: BotFaces) {
     val bot = remember(line.profile, faces) { faces.roomBot(line.profile) }
     val tint = bot.roomColor()
+    val name = line.speaker ?: bot.label
     val shape = RoundedCornerShape(topStart = 6.dp, topEnd = 20.dp, bottomEnd = 20.dp, bottomStart = 20.dp)
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         Box(Modifier.size(FACE)) {
@@ -338,7 +352,7 @@ internal fun MemberLine(line: RoomLine.Message, continued: Boolean, faces: BotFa
             if (!continued) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        line.speaker ?: bot.label,
+                        name,
                         style = Theme[typography][caption].copy(fontSize = 12.sp, fontWeight = FontWeight.SemiBold),
                         // The bot's own color, drawn toward the text color so it reads on either theme: further on a
                         // light one, where a yellow or cyan name would wash out.
@@ -350,21 +364,32 @@ internal fun MemberLine(line: RoomLine.Message, continued: Boolean, faces: BotFa
                     MessageTimeLabel(line.createdAt)
                 }
             }
-            Box(
-                Modifier
-                    .clip(shape)
-                    .background(Theme[colors][surface], shape)
-                    .border(1.dp, Theme[colors][stroke], shape)
-                    .padding(horizontal = 13.dp, vertical = 9.dp),
-            ) {
-                SelectionContainer {
-                    MarkdownText(line.text)
+            // Copy sits beside the bubble, at its foot, so a bot's run of lines stays packed.
+            Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.Bottom) {
+                Box(
+                    Modifier
+                        .weight(1f, fill = false)
+                        .clip(shape)
+                        .background(Theme[colors][surface], shape)
+                        .border(1.dp, Theme[colors][stroke], shape)
+                        .padding(horizontal = 13.dp, vertical = 9.dp),
+                ) {
+                    SelectionContainer {
+                        MarkdownText(line.text)
+                    }
                 }
+                if (copyable(line.text)) CopyButton(line.text, label = copyLabel(name))
             }
-            CopyButton(line.text, Modifier.align(Alignment.End))
         }
     }
 }
+
+/** Whether a line has text worth a Copy button. */
+internal fun copyable(text: String): Boolean = text.isNotBlank()
+
+/** What a screen reader hears for a line's Copy: whose message it copies, the user's when [speaker] is null. */
+internal fun copyLabel(speaker: String?): String =
+    if (speaker == null) "Copy your message" else "Copy $speaker's message"
 
 /** A line the gateway wrote: centred and quiet between the messages. */
 @Composable
