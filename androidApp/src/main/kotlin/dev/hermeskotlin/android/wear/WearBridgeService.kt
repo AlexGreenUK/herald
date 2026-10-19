@@ -14,6 +14,8 @@ import dev.hermeskotlin.wearlink.CallEvents
 import dev.hermeskotlin.wearlink.CallStart
 import dev.hermeskotlin.wearlink.PhoneStatusRequest
 import dev.hermeskotlin.wearlink.RecordedAsk
+import dev.hermeskotlin.wearlink.RingEnd
+import dev.hermeskotlin.wearlink.RingOn
 import dev.hermeskotlin.wearlink.WatchAsk
 import dev.hermeskotlin.wearlink.WatchStop
 import dev.hermeskotlin.wearlink.WearJson
@@ -41,9 +43,11 @@ class WearBridgeService : WearableListenerService() {
     private val calls: WatchCalls by inject()
     private val scope: CoroutineScope by inject()
     private val notifier: ChatNotifier by inject()
+    private val ringer: WatchRinger by inject()
 
     override fun onMessageReceived(event: MessageEvent) {
         val node = event.sourceNodeId
+        ringer.heardFrom(node)
         when (event.path) {
             WearPaths.ASK -> WearJson.decode<WatchAsk>(event.data)?.let {
                 relay.ask(node, it)
@@ -56,6 +60,8 @@ class WearBridgeService : WearableListenerService() {
             }
             WearPaths.CALL_EVENTS -> WearJson.decode<CallEvents>(event.data)?.let { calls.events(node, it) }
             WearPaths.CALL_END -> WearJson.decode<CallEnd>(event.data)?.let(calls::end)
+            WearPaths.RING_END -> WearJson.decode<RingEnd>(event.data)?.let { ringer.endedOnWatch(node, it) }
+            WearPaths.RING_ON -> WearJson.decode<RingOn>(event.data)?.let(ringer::ringsOn)
             WearPaths.CHATS -> relay.chats(node)
             WearPaths.STATUS -> {
                 val cached = WearJson.decode<PhoneStatusRequest>(event.data)?.accentRevision
