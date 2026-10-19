@@ -238,7 +238,7 @@ class VoiceController(
         bargeIn = settings
         cantListenOver = false
         var failures = 0
-        var cutIn: Interjection? = null
+        var cutIn: String? = null
         try {
             if (opener != null) {
                 val said = opener.spokenOpener()
@@ -251,7 +251,7 @@ class VoiceController(
                 when (turn) {
                     is Turn.CutIn -> {
                         failures = 0
-                        cutIn = turn.interjection
+                        cutIn = turn.transcript
                     }
                     Turn.End -> break
                     Turn.Done -> failures = 0
@@ -351,7 +351,7 @@ class VoiceController(
         gateway: GatewayUrl,
         profile: String?,
         activity: VoiceActivity,
-        cutIn: Interjection?,
+        cutIn: String?,
     ): Turn {
         // Hermes already waits on an answer (the chat opened from a call for one): that comes first, then the rest of
         // its turn, whose reply follows the last prompt.
@@ -360,7 +360,7 @@ class VoiceController(
             return finishTurn(session, from, gateway, profile, activity, streamed = false)
         }
         // What was said over the last reply was heard and written down already.
-        val transcript = cutIn?.transcript ?: when (val heard = hear(gateway, profile, activity)) {
+        val transcript = cutIn ?: when (val heard = hear(gateway, profile, activity)) {
             Heard.Broken -> return Turn.End
             Heard.Silence -> return Turn.Quiet
             Heard.Unclear -> return Turn.Failed
@@ -534,7 +534,7 @@ class VoiceController(
             // A cut-in's prompt stops the turn itself (stopAndSubmit), in order: a second stop sent alongside could land
             // after it and stop the new turn, or drop the prompt where it was queued behind the old one.
             if (stop && session.state.value.running) appScope.launch { session.interrupt() }
-            return if (stop) Turn.End else Turn.CutIn(Interjection(transcript))
+            return if (stop) Turn.End else Turn.CutIn(transcript)
         } finally {
             player.hold(false)
         }
@@ -1096,12 +1096,9 @@ private sealed interface Turn {
     data object Failed : Turn
     /** The chat ends: "stop" was said, or the microphone can't be used. */
     data object End : Turn
-    /** Someone talked over the reply; what they said is the next turn. */
-    class CutIn(val interjection: Interjection) : Turn
+    /** Someone talked over the reply; what they said, [transcript], is the next turn. */
+    class CutIn(val transcript: String) : Turn
 }
-
-/** What someone said over a reply, and what the voice was saying then ([overVoice]), to tell it from an echo. */
-private class Interjection(val transcript: String)
 
 /** How a stretch with the microphone open over it went: it came to [Done.value], or someone talked [Over] it. */
 private sealed interface Cut<out T> {
