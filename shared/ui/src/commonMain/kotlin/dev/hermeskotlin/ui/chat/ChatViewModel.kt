@@ -57,6 +57,7 @@ import dev.hermeskotlin.core.voice.SpeechPlayer
 import dev.hermeskotlin.core.voice.SpeechStreams
 import dev.hermeskotlin.core.voice.VoiceRecorder
 import dev.hermeskotlin.core.voice.DeviceDictation
+import dev.hermeskotlin.core.voice.DeviceLock
 import dev.hermeskotlin.ui.voice.VoiceController
 import kotlinx.coroutines.CoroutineScope
 import dev.hermeskotlin.core.slash.SlashApi
@@ -198,12 +199,15 @@ class ChatViewModel(
     /** The threads, so `/new` in a thread's chat starts the thread fresh instead of leaving it. */
     private val threads: ThreadsRepository? = null,
     private val linkPreviews: LinkPreviews? = null,
+    /** An approval is only taken by voice while the phone is unlocked. */
+    deviceLock: DeviceLock = DeviceLock.None,
 ) : ViewModel(), ChatActions {
 
     /** Dictation and voice chat for the open chat. */
     val voice = VoiceController(
         audioApi, recorder, player, viewModelScope, appScope, voiceKeepAlive, deviceDictation,
         speechStreams = speechStreams,
+        deviceLock = deviceLock,
         liveCalls = liveCalls,
     )
 
