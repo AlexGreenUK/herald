@@ -1140,14 +1140,41 @@ class ChatSession(
             showCommandOutput("/branch", "Nothing to branch yet. Send a message first.", failed = true)
             return null
         }
+        // The gateway's count takes in the hidden rows (a starting instruction, compaction wrappers) the chat doesn't show.
+        val keep = count?.let {
+            if (!loadAllHistory()) return null
+            withHiddenRows(it)
+        }
+        return branchKeeping(keep)
+    }
+
+    /**
+     * "Branch from here": a new chat with this one up to and with the message [key], a reply with all its steps.
+     * Counted on the stored rows, as the gateway counts them: a reply split by its tool calls is one message here
+     * but a row per step there, and hidden rows show nowhere. Null when it failed.
+     */
+    suspend fun branchFrom(key: String): Pair<String, String?>? {
+        if (!rowExists) return branch(null)
+        // Counted from the first row, so the pages not scrolled back to yet are read first.
+        if (!loadAllHistory()) return null
+        val messages = _state.value.messages
+        val index = messages.indexOfFirst { it.key == key }
+        if (index < 0) return null
+        // Up to the row the next message starts at; the last message keeps every row.
+        val next = messages.drop(index + 1).firstNotNullOfOrNull { message -> storedRowId(message.key) }
+        val end = next?.let { id -> rows.indexOfFirst { it.id == id } }?.takeIf { it >= 0 } ?: rows.size
+        return branchKeeping(rows.take(end).count { it.countsInBranch })
+    }
+
+    private suspend fun branchKeeping(keep: Int?): Pair<String, String?>? {
         var branched: Pair<String, String?>? = null
         runOnGateway("/branch") { client, runtimeId ->
             val params = buildJsonObject {
                 put("session_id", runtimeId)
-                count?.let { put("count", it) }
+                keep?.let { put("count", it) }
             }
             val result = try {
-                client.request(if (count == null) "session.branch_whole" else "session.branch", params) as? JsonObject
+                client.request(if (keep == null) "session.branch_whole" else "session.branch", params) as? JsonObject
             } catch (e: RpcException) {
                 // Gateways older than branch_whole only have session.branch.
                 if (e.code != METHOD_NOT_FOUND) throw e
@@ -1160,6 +1187,29 @@ class ChatSession(
         }
         return branched
     }
+
+    /**
+     * How many stored user and assistant rows with text the first [visible] shown ones reach, as `session.branch`
+     * counts them (`_visible_branch_history`): with the hidden rows among them.
+     */
+    private fun withHiddenRows(visible: Int): Int {
+        var seen = 0
+        var counted = 0
+        for (row in rows) {
+            if (seen == visible) break
+            if (!row.countsInBranch) continue
+            counted++
+            if (!row.isHidden) seen++
+        }
+        return counted + (visible - seen)
+    }
+
+    /** A row `session.branch` counts (`_visible_branch_history`): a user or assistant one with text, hidden or not. */
+    private val SessionMessage.countsInBranch: Boolean
+        get() = (role == "user" || role == "assistant") && text.isNotBlank()
+
+    /** The stored row id a message's key names (`row-12`, or `row-12-0` for one of its parts); null for a live one. */
+    private fun storedRowId(key: String): Long? = ROW_KEY.matchEntire(key)?.groupValues?.get(1)?.toLongOrNull()
 
     /**
      * `/handoff <platform>`: queues this chat for a messaging platform's home channel and waits for the
@@ -2037,6 +2087,9 @@ class ChatSession(
     private fun connectedClient(): JsonRpcClient? = (connection.state.value as? ConnectionState.Connected)?.client
 
     private companion object {
+        /** A message key made from a stored row (`historyToMessages`): `row-<id>`, or `row-<id>-<n>` for one of its events. */
+        val ROW_KEY = Regex("row-(\\d+)(?:-\\d+)?")
+
         /**
          * The surface the agent is told it's on (agent/prompt_builder.py PLATFORM_HINTS). "desktop", like
          * Hermes Desktop and the dashboard chat: Markdown renders and files come back as `MEDIA:` paths,

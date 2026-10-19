@@ -1444,6 +1444,47 @@ class ChatSessionTest {
         assertEquals("rt1", transport.sent.value.first { it.isCall("session.branch_whole") }.param("session_id"))
     }
 
+    @Test
+    fun branchingCountsTheHiddenRowsTheGatewayCountsToo() = runTest {
+        history = """{"session_id":"stored-1","messages":[
+            {"id":1,"role":"user","content":"[A standing instruction…]\n\nKeep replies short.","display_kind":"hidden"},
+            {"id":2,"role":"user","content":"one"},{"id":3,"role":"assistant","content":"First"},
+            {"id":4,"role":"user","content":"two"},{"id":5,"role":"assistant","content":"Second"}]}"""
+        val (chat, transport) = resumedChat(
+            backgroundScope,
+            mapOf("session.branch" to """{"session_id":"rt2","stored_session_id":"stored-2","title":"Greeting #2"}"""),
+        )
+        assertEquals(listOf("one", "First", "two", "Second"), chat.state.value.messages.map { it.textOf() })
+
+        // Up to "First": two shown, three stored with the instruction.
+        assertEquals("stored-2" to "Greeting #2", chat.branch(2))
+        assertEquals("3", transport.sent.value.first { it.isCall("session.branch") }.param("count"))
+    }
+
+    @Test
+    fun branchingFromAReplyKeepsEveryStepOfIt() = runTest {
+        history = """{"session_id":"stored-1","messages":[
+            {"id":1,"role":"user","content":"Keep replies short.","display_kind":"hidden"},
+            {"id":2,"role":"user","content":"one","timestamp":10},
+            {"id":3,"role":"assistant","content":"Checking.","timestamp":11,"tool_calls":[{"id":"c1","function":{"name":"terminal","arguments":"{}"}}]},
+            {"id":4,"role":"tool","tool_call_id":"c1","content":"ok","timestamp":12},
+            {"id":5,"role":"assistant","content":"Done.","timestamp":13},
+            {"id":6,"role":"user","content":"two","timestamp":20},{"id":7,"role":"assistant","content":"Second","timestamp":21}]}"""
+        val (chat, transport) = resumedChat(
+            backgroundScope,
+            mapOf("session.branch" to """{"session_id":"rt2","stored_session_id":"stored-2","title":"Greeting #2"}"""),
+        )
+        // The first reply shows as one message, from its first step's row.
+        assertEquals(listOf("row-2", "row-3", "row-6", "row-7"), chat.state.value.messages.map { it.key })
+
+        // Up to the next prompt: the instruction, "one" and both steps of the reply.
+        assertEquals("stored-2" to "Greeting #2", chat.branchFrom("row-3"))
+        assertEquals("4", transport.sent.value.last { it.isCall("session.branch") }.param("count"))
+        // From a prompt: the instruction and the prompt.
+        chat.branchFrom("row-2")
+        assertEquals("2", transport.sent.value.last { it.isCall("session.branch") }.param("count"))
+    }
+
     private val threeTurns = """{"session_id":"stored-1","messages":[
         {"id":1,"role":"user","content":"one"},{"id":2,"role":"assistant","content":"First"},
         {"id":3,"role":"user","content":"two"},{"id":4,"role":"assistant","content":"Second"},
