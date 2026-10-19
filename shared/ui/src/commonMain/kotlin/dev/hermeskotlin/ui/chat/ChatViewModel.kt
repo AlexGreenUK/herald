@@ -1,5 +1,7 @@
 package dev.hermeskotlin.ui.chat
 
+import dev.hermeskotlin.core.voice.ReadAloudVoices
+import dev.hermeskotlin.core.voice.InMemoryReadAloudVoices
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.text.input.clearText
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
@@ -200,16 +202,19 @@ class ChatViewModel(
     /** The threads, so `/new` in a thread's chat starts the thread fresh instead of leaving it. */
     private val threads: ThreadsRepository? = null,
     private val linkPreviews: LinkPreviews? = null,
+    /** Where the voice of replies read aloud is kept; in memory without one. */
+    readAloudVoices: ReadAloudVoices? = null,
     /** An approval is only taken by voice while the phone is unlocked. */
     deviceLock: DeviceLock = DeviceLock.None,
 ) : ViewModel(), ChatActions {
 
-    /** Dictation and voice chat for the open chat. */
+    /** Dictation, voice chat and Read aloud for the open chat. */
     val voice = VoiceController(
         audioApi, recorder, player, viewModelScope, appScope, voiceKeepAlive, deviceDictation,
         speechStreams = speechStreams,
         deviceLock = deviceLock,
         liveCalls = liveCalls,
+        readAloudVoices = readAloudVoices ?: InMemoryReadAloudVoices(),
     )
 
     /** The profile's pet and its gallery. */
@@ -1229,6 +1234,15 @@ class ChatViewModel(
     override fun dismissVoiceChatError() = voice.dismissChatError()
 
     override fun dismissDictationError() = voice.dismissDictationError()
+
+    override fun readAloud(key: String, text: String) {
+        val target = target ?: return
+        voice.readAloud(key, text, target.gateway.gatewayUrl, target.profile)
+    }
+
+    override fun stopReading() = voice.stopReading()
+
+    override fun dismissReadAloudError() = voice.dismissReadAloudError()
 
     fun showTitle(title: String?) = session.value?.showTitle(title)
 

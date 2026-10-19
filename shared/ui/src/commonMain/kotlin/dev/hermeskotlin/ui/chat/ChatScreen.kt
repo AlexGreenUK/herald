@@ -185,6 +185,7 @@ import com.composables.icons.lucide.Users
 import com.composables.icons.lucide.Plus
 import com.composables.icons.lucide.RefreshCw
 import com.composables.icons.lucide.Square
+import com.composables.icons.lucide.Volume2
 import com.composables.icons.lucide.SquarePen
 import com.composables.icons.lucide.FileDiff
 import com.composables.icons.lucide.ShieldAlert
@@ -239,11 +240,13 @@ import dev.hermeskotlin.ui.pet.PetSheet
 import dev.hermeskotlin.ui.pet.PetView
 import dev.hermeskotlin.ui.pet.rememberPetState
 import dev.hermeskotlin.ui.voice.DictationState
+import dev.hermeskotlin.ui.voice.ReadAloudState
 import dev.hermeskotlin.ui.voice.VoiceChatState
 import dev.hermeskotlin.ui.voice.VoicePanel
 import dev.hermeskotlin.ui.voice.VoicePhase
 import dev.hermeskotlin.ui.voice.VoiceScreen
 import dev.hermeskotlin.ui.voice.briefError
+import dev.hermeskotlin.core.voice.readAloudText
 import dev.hermeskotlin.core.voice.speakableText
 import androidx.compose.runtime.saveable.rememberSaveable
 import dev.hermeskotlin.ui.voice.rememberMicrophonePermission
@@ -300,6 +303,8 @@ import dev.hermeskotlin.designsystem.display
 import dev.hermeskotlin.designsystem.typography
 import dev.hermeskotlin.designsystem.warning
 import dev.hermeskotlin.ui.LocalAppSettings
+import dev.hermeskotlin.ui.KeepScreenOn
+import dev.hermeskotlin.ui.rememberChangingConfigurations
 import dev.hermeskotlin.ui.components.EmptyState
 import dev.hermeskotlin.ui.components.messageTime
 import dev.hermeskotlin.ui.components.uses24HourClock
@@ -372,16 +377,24 @@ fun ChatScreen(
             viewModel.toggleDictation()
         }
     }
+    // Turning the phone rebuilds the screen without leaving it: the voice the chat owns plays on through it.
+    val changingConfigurations = rememberChangingConfigurations()
     // Dictation stops when the app leaves the screen; a voice chat goes on like a call (VoiceController.onBackground).
     LifecycleEventEffect(Lifecycle.Event.ON_STOP) {
-        viewModel.voice.onBackground()
+        if (!changingConfigurations()) viewModel.voice.onBackground()
         viewModel.onScreen(false)
         // What's on screen now counts as read, so a reply that comes in while away is new.
         viewModel.markLooked()
     }
     LifecycleEventEffect(Lifecycle.Event.ON_START) { viewModel.onScreen(true) }
-    // A room replacing the chat takes it off screen without a stop.
-    DisposableEffect(viewModel) { onDispose { viewModel.onScreen(false) } }
+    // A room replacing the chat takes it off screen without a stop; a reply read aloud stops with it, but not
+    // with a turn of the phone.
+    DisposableEffect(viewModel) {
+        onDispose {
+            viewModel.onScreen(false)
+            if (!changingConfigurations()) viewModel.stopReading()
+        }
+    }
     LaunchedEffect(viewModel) {
         viewModel.requests.collect { request ->
             when (request) {
@@ -428,6 +441,7 @@ fun ChatScreen(
         comments = viewModel.comments.collectAsStateWithLifecycle().value,
         voiceChat = viewModel.voice.chat.collectAsStateWithLifecycle().value,
         dictation = viewModel.voice.dictation.collectAsStateWithLifecycle().value,
+        readAloud = viewModel.voice.reading.collectAsStateWithLifecycle().value,
         suggestions = viewModel.suggestions.collectAsStateWithLifecycle().value,
         mentions = mentions,
         onMention = { bot ->
@@ -566,6 +580,8 @@ internal fun ChatView(
     comments: List<PendingComment> = emptyList(),
     voiceChat: VoiceChatState,
     dictation: DictationState,
+    /** The reply being read aloud, and why the last one couldn't be. */
+    readAloud: ReadAloudState = ReadAloudState(),
     suggestions: List<SlashSuggestion>,
     /** Bots matching the `@word` being typed, to pick one to mention. */
     mentions: List<Bot> = emptyList(),
@@ -619,6 +635,14 @@ internal fun ChatView(
         val voiceOn = voiceChat.phase != VoicePhase.Off
         val voiceFull = voiceOn && !voiceFolded
         LaunchedEffect(voiceOn) { if (!voiceOn) voiceFolded = false }
+        // A reply read aloud plays to its end with the phone put down, and stops if it leaves the chat
+        // (regenerated, or a reload that keys it anew), so its Stop is never gone while it plays.
+        KeepScreenOn(readAloud.key != null)
+        // A chat whose transcript hasn't loaded yet hasn't lost it.
+        LaunchedEffect(readAloud.key, state.messages, state.historyLoaded) {
+            val key = readAloud.key ?: return@LaunchedEffect
+            if (state.historyLoaded && state.messages.none { it.key == key }) actions.stopReading()
+        }
         Column(
             Modifier
                 .widthIn(max = 760.dp)
@@ -709,6 +733,9 @@ internal fun ChatView(
                                 canChange = state.canChangeChat(connected && state.savedCopyAt == null),
                                 editing = editing,
                                 readUpTo = readUpTo,
+                                reading = readAloud.key,
+                                // The voice chat and dictation have the speaker and the microphone.
+                                canReadAloud = !voiceOn && !dictation.active,
                             )
                         }
                     } else Box(Modifier.fillMaxSize().padding(bottom = dockInset)) {
@@ -783,6 +810,7 @@ internal fun ChatView(
                         attachmentError = attachmentError,
                         voiceChat = voiceChat,
                         dictation = dictation,
+                        readAloud = readAloud,
                         suggestions = suggestions,
                         mentions = mentions,
                         onMention = onMention,
@@ -853,6 +881,7 @@ private fun ColumnScope.Dock(
     attachmentError: String?,
     voiceChat: VoiceChatState,
     dictation: DictationState,
+    readAloud: ReadAloudState,
     suggestions: List<SlashSuggestion>,
     mentions: List<Bot>,
     onMention: (Bot) -> Unit,
@@ -893,6 +922,7 @@ private fun ColumnScope.Dock(
     attachmentError?.let { Banner(it, actionLabel = null, onAction = actions::dismissAttachmentError) }
     voiceChat.error?.let { Banner(briefError(it), actionLabel = null, onAction = actions::dismissVoiceChatError) }
     dictation.error?.let { Banner(briefError(it), actionLabel = null, onAction = actions::dismissDictationError) }
+    readAloud.error?.let { Banner(briefError(it), actionLabel = null, onAction = actions::dismissReadAloudError) }
     AnimatedVisibility(visible = notice != null) { NoticeLine(notice.orEmpty()) }
     // One place says what's happening: the current action, with the status text and plan folded beneath.
     AnimatedVisibility(visible = state.running, enter = fadeIn(), exit = fadeOut()) {
@@ -1245,6 +1275,10 @@ private fun Messages(
     editing: String?,
     /** How far the chat had been read when it was opened (epoch seconds); later messages are marked new. */
     readUpTo: Double? = null,
+    /** The reply being read aloud, by its key. */
+    reading: String? = null,
+    /** Replies offer Read aloud. */
+    canReadAloud: Boolean = true,
 ) {
     var confirm by remember { mutableStateOf<Pair<MessageChange, String>?>(null) }
     val lastPrompt = messages.lastOrNull { it is ChatMessage.User }?.key
@@ -1409,6 +1443,9 @@ private fun Messages(
                                     },
                                     last = message.key == lastReply,
                                     unservable = unservable,
+                                    reading = message.key == reading,
+                                    onReadAloud = if (canReadAloud) ({ text -> actions.readAloud(message.key, text) }) else null,
+                                    onStopReading = actions::stopReading,
                                 )
                             }
                             // An answer to another bot's message folds under it; never while it's still being written.
@@ -1993,6 +2030,11 @@ private fun AssistantReply(
     last: Boolean,
     /** The chat's generated pictures' paths that can't be loaded, taken out wherever they're repeated. */
     unservable: List<GeneratedImage> = emptyList(),
+    /** This reply is being read aloud: Stop shows in place of Read aloud. */
+    reading: Boolean = false,
+    /** Reads the reply's text, as shown, aloud; null when it can't be now. */
+    onReadAloud: ((String) -> Unit)? = null,
+    onStopReading: () -> Unit = {},
 ) {
     val settings = LocalAppSettings.current
     val showReasoning = settings.showReasoning && message.reasoning.isNotBlank()
@@ -2046,6 +2088,8 @@ private fun AssistantReply(
         }
         val usage = message.usage?.takeIf { settings.showUsage && !message.streaming }
         val actionable = !message.streaming && text.isNotBlank()
+        // A reply of only code or files has nothing to say.
+        val speakable = if (actionable) remember(text) { readAloudText(text).isNotEmpty() } else false
         if (actionable || usage != null) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 usage?.let {
@@ -2059,10 +2103,14 @@ private fun AssistantReply(
                 Spacer(Modifier.weight(1f))
                 if (actionable) {
                     // On the end, under the thumb of the hand holding the phone; Copy, the one used most, sits last.
-                    // Copy's padding trimmed off the end lines its icon up with the reply's edge; all three lose 4dp on top to sit close under it.
+                    // Copy's padding trimmed off the end lines its icon up with the reply's edge; all of them lose 4dp on top to sit close under it.
                     val action = Modifier.trimEndTop(end = 0.dp, top = 4.dp)
                     onBranch?.let { ReplyAction(Lucide.GitBranch, "Branch from here", it, action) }
                     onRegenerate?.let { ReplyAction(Lucide.RefreshCw, "Regenerate", it, action) }
+                    when {
+                        reading -> ReplyAction(Lucide.Square, "Stop reading", onStopReading, action)
+                        speakable && onReadAloud != null -> ReplyAction(Lucide.Volume2, "Read aloud", { onReadAloud(text) }, action)
+                    }
                     CopyButton(text, Modifier.trimEndTop(end = 16.dp, top = 4.dp).size(MinTouchTarget))
                 }
             }

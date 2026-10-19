@@ -48,6 +48,7 @@ val uiModule = module {
             seen = getOrNull(),
             threads = getOrNull(),
             linkPreviews = get(),
+            readAloudVoices = getOrNull(),
             // Only Android says whether the phone is locked.
             deviceLock = getOrNull() ?: DeviceLock.None,
         )

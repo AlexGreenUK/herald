@@ -15,6 +15,8 @@ import dev.hermeskotlin.core.voice.DeviceDictation
 import dev.hermeskotlin.core.voice.DeviceLock
 import android.app.KeyguardManager
 import dev.hermeskotlin.core.voice.AndroidSpeechPlayer
+import dev.hermeskotlin.core.voice.ReadAloudVoices
+import dev.hermeskotlin.core.voice.FileReadAloudVoices
 import dev.hermeskotlin.core.voice.LiveCalls
 import dev.hermeskotlin.core.voice.AndroidVoiceRecorder
 import dev.hermeskotlin.core.voice.SpeechPlayer
@@ -31,6 +33,7 @@ actual val platformModule: Module = module {
     single { WallpaperStore(AndroidBlobFile(File(androidContext().filesDir, "wallpaper.jpg")), get()) }
     factory<VoiceRecorder> { AndroidVoiceRecorder() }
     single<SpeechPlayer> { AndroidSpeechPlayer(androidContext()) }
+    single<ReadAloudVoices> { FileReadAloudVoices(File(androidContext().cacheDir, "read-aloud")) }
     // One per screen, like the recorder: the chat and the assistant panel each stop only their own.
     factory<DeviceDictation> { AndroidDeviceDictation(androidContext()) }
     single { LiveCalls { AndroidLiveCall(androidContext()) } }
