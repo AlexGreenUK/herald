@@ -100,6 +100,7 @@ import dev.hermeskotlin.ui.sessions.NewProjectDialog
 import dev.hermeskotlin.ui.settings.ConnectionCheckSheet
 import dev.hermeskotlin.ui.settings.GatewayInfo
 import dev.hermeskotlin.ui.settings.SettingsView
+import dev.hermeskotlin.ui.settings.StartInstructionView
 import androidx.compose.ui.tooling.preview.Preview
 import com.composeunstyled.theme.ColorScheme
 import dev.hermeskotlin.core.chat.ChatState
@@ -140,6 +141,7 @@ enum class PreviewScene(val label: String) {
     NewRoom("A new room"),
     BotEditor("Editing a bot"),
     Settings("Settings"),
+    StartInstruction("The starting instruction for new chats"),
     Gateways("Saved gateways"),
     Journey("What the agent has learned"),
     Insights("Insights"),
@@ -553,6 +555,11 @@ fun HeraldPreview(scene: PreviewScene, dark: Boolean = true, accent: String = DE
                     onSignOut = {},
                     onOpenGateways = {},
                 )
+                PreviewScene.StartInstruction -> StartInstructionView(
+                    text = "I'm on my phone: keep replies short and skip long tables.",
+                    onChange = {},
+                    onBack = {},
+                )
                 PreviewScene.ConnectionCheck -> Box(Modifier.fillMaxSize()) {
                     SettingsView(
                         settings = AppSettings(theme = if (dark) ThemeMode.Dark else ThemeMode.Light, glow = glow),
@@ -717,6 +724,10 @@ private fun ThreadsPreview() = HeraldPreview(PreviewScene.Threads)
 @Preview(widthDp = 412, heightDp = 892)
 @Composable
 private fun SettingsPreview() = HeraldPreview(PreviewScene.Settings)
+
+@Preview(widthDp = 412, heightDp = 892)
+@Composable
+private fun StartInstructionPreview() = HeraldPreview(PreviewScene.StartInstruction)
 
 @Preview(widthDp = 412, heightDp = 892)
 @Composable
