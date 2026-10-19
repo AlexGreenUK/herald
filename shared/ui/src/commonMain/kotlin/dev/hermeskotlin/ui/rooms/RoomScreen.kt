@@ -440,7 +440,7 @@ private fun RoomComposer(room: OpenRoom, viewModel: RoomActions) {
         )
     }
     AttachSheet(attachOpen, onDismiss = { attachOpen = false }, picker = picker,
-        subtitle = "Up to 8 files, 15 MB each, 25 MB per message")
+        subtitle = RoomAttachment.LIMITS)
     val shape = RoundedCornerShape(Theme[radii][radiusLarge])
     var focused by remember { mutableStateOf(false) }
     Column(
@@ -455,7 +455,9 @@ private fun RoomComposer(room: OpenRoom, viewModel: RoomActions) {
             .padding(start = 4.dp, end = 6.dp, top = 14.dp, bottom = 6.dp),
     ) {
         if (room.attachments.isNotEmpty()) ComposerTray(room.attachments, onRemove = viewModel::removeAttachment)
-        if (room.attachmentRetry) Text("Send again to confirm the previous message.", style = Theme[typography][caption], color = Theme[colors][textTertiary])
+        if (room.attachmentRetry) Text(
+            if (room.retryText.isBlank()) "Send again to confirm the previous message."
+            else "Send again to confirm the previous message: “${room.retryText}”", style = Theme[typography][caption], color = Theme[colors][textTertiary])
         UnstyledTextField(
             state = viewModel.composer,
             enabled = !room.attachmentRetry,

@@ -168,7 +168,7 @@ private val AttachmentKind.label: String
 
 /** The + button's choices. */
 @Composable
-internal fun AttachSheet(visible: Boolean, onDismiss: () -> Unit, picker: AttachmentPicker, subtitle: String = "Up to ${OutgoingAttachment.MAX_COUNT} photos or files, 25 MB each") {
+internal fun AttachSheet(visible: Boolean, onDismiss: () -> Unit, picker: AttachmentPicker, subtitle: String = "Up to ${OutgoingAttachment.MAX_COUNT} photos or files, ${OutgoingAttachment.MAX_BYTES / (1024 * 1024)} MB each") {
     fun pick(action: () -> Unit) {
         onDismiss()
         action()

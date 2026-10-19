@@ -90,6 +90,8 @@ data class OpenRoom(
     val draftKey: Int = 0,
     /** An unknown send outcome must be retried with the original payload. */
     val attachmentRetry: Boolean = false,
+    /** The words that retry sends, which the composer may no longer show. */
+    val retryText: String = "",
     /** The log goes back further than what's read: scrolling up reads more. */
     val canLoadEarlier: Boolean = false,
     /** Older lines are being read right now. */
@@ -231,10 +233,12 @@ class RoomsViewModel(
     fun open(room: Room) {
         if (_opened.value?.room?.roomId == room.roomId && roomJob?.isActive == true) return
         close()
-        val pending = (unansweredFiles[room.roomId] ?: unansweredSend)?.takeIf { it.roomId == room.roomId && it.files.isNotEmpty() && it.submitted }
+        // Files left on their way out come back: still a draft before Send, locked to a retry once it went.
+        val pending = unansweredFiles[room.roomId]?.takeIf { it.files.isNotEmpty() }
         _opened.value = OpenRoom(room = room, draftKey = openGeneration,
             attachmentsSupported = _state.value.attachmentsSupported,
-            attachments = pending?.files.orEmpty(), attachmentRetry = pending != null)
+            attachments = pending?.files.orEmpty(), attachmentRetry = pending?.submitted == true,
+            retryText = pending?.text.orEmpty())
         pending?.let { composer.setTextAndPlaceCursorAtEnd(it.text) }
         roomJob = viewModelScope.launch {
             while (true) {
@@ -250,8 +254,23 @@ class RoomsViewModel(
 
     /** Leaves the open room; its polling stops. */
     fun close() {
-        // A late file-send answer must not retire a retry restored in a newer opening.
-        unansweredSend?.takeIf { it.files.isNotEmpty() && it.submitted }?.let { unansweredFiles[it.roomId] = it }
+        // A file send stops with its room, so a late answer can't retire a retry restored in a newer opening.
+        // What it carried is kept for that opening, uploads and all: always while it's on its way (Send was
+        // tapped, whatever is typed since), otherwise while the composer still holds it.
+        _opened.value?.let { open ->
+            val roomId = open.room.roomId
+            val pending = unansweredSend?.takeIf { it.roomId == roomId } ?: unansweredFiles[roomId]
+            val kept = pending?.takeIf {
+                it.files.isNotEmpty() && it.files == open.attachments &&
+                    (it.submitted || open.sending || composer.text.toString().trim() == it.text)
+            }
+            if (kept != null) {
+                kept.markUnknown()
+                unansweredFiles[roomId] = kept
+            } else if (unansweredFiles[roomId]?.submitted != true) {
+                unansweredFiles.remove(roomId)
+            }
+        }
         fileSendJob?.cancel()
         fileSendJob = null
         roomJob?.cancel()
@@ -335,11 +354,16 @@ class RoomsViewModel(
         val open = _opened.value ?: return
         if (open.draftKey != draftKey || open.sending || open.attachmentRetry) return
         val files = open.attachments + picked
+        // A file whose bytes went after an earlier Send counts by its upload receipt.
+        val receipts = (unansweredFiles[open.room.roomId] ?: unansweredSend)?.takeIf { it.roomId == open.room.roomId }?.uploaded.orEmpty()
+        fun size(file: OutgoingAttachment) = if (file.bytes.isEmpty()) receipts[file.id]?.size ?: 0 else file.bytes.size
         val error = when {
             !open.attachmentsSupported -> "This gateway doesn't support room attachments. Update Hermes to use them."
-            files.size > RoomAttachment.MAX_COUNT -> "Up to 8 attachments per room message."
-            files.any { it.bytes.isEmpty() || it.bytes.size > RoomAttachment.MAX_BYTES } -> "Room files must be between 1 byte and 15 MB."
-            files.sumOf { it.bytes.size.toLong() } > RoomAttachment.MAX_TOTAL_BYTES -> "Up to 25 MB of room attachments per message."
+            files.size > RoomAttachment.MAX_COUNT -> "Up to ${RoomAttachment.MAX_COUNT} attachments per room message."
+            picked.any { it.bytes.isEmpty() || it.bytes.size > RoomAttachment.MAX_BYTES } ->
+                "Room files must be between 1 byte and ${RoomAttachment.MAX_BYTES / 1_000_000} MB."
+            files.sumOf { size(it).toLong() } > RoomAttachment.MAX_TOTAL_BYTES ->
+                "Up to ${RoomAttachment.MAX_TOTAL_BYTES / 1_000_000} MB of room attachments per message."
             else -> null
         }
         _opened.update { it?.copy(attachments = if (error == null) files else open.attachments, notice = error) }
@@ -368,41 +392,66 @@ class RoomsViewModel(
         fun stillOpen() = gateway.value == url && openGeneration == generation &&
             _opened.value?.room?.roomId == roomId
         fun canSend() = stillOpen() && connection.state.value == socket
-        val attempt = (unansweredFiles[roomId] ?: unansweredSend)?.takeIf { it.roomId == roomId &&
-            ((it.files.isNotEmpty() && it.submitted) || (it.text == text && it.files == open.attachments)) }
-            ?: UnansweredSend(roomId, text, newId("message"), readThrough, open.attachments)
+        val previous = (unansweredFiles[roomId] ?: unansweredSend)?.takeIf { it.roomId == roomId }
+        val attempt = previous?.takeIf { (it.files.isNotEmpty() && it.submitted) || (it.text == text && it.files == open.attachments) }
+            ?: UnansweredSend(roomId, text, newId("message"), readThrough, open.attachments).also { next ->
+                // Files an unsent try already uploaded go out with this one rather than up again. The gateway
+                // binds an upload to one event once it's sent, so only a try that surely didn't post is free.
+                previous?.takeUnless { it.mayHavePosted }?.uploaded
+                    ?.filterKeys { id -> next.files.any { it.id == id } }?.let(next.uploaded::putAll)
+            }
+        // Files whose bytes went after a send that may have posted can't go out in another message.
+        val lost = attempt.files.filter { it.bytes.isEmpty() && it.id !in attempt.uploaded }
+        if (lost.isNotEmpty()) {
+            _opened.update { it?.copy(attachments = it.attachments.filterNot { file -> file in lost },
+                notice = "Add ${lost.joinToString { it.name }} again to send it in a new message.") }
+            return
+        }
         unansweredSend = attempt
+        // A newer message in this room replaces an older unsent selection.
+        if (unansweredFiles[roomId] !== attempt) unansweredFiles.remove(roomId)
         _opened.update { it?.copy(sending = true, notice = null) }
+        // The socket changed under the uploads: nothing was posted, so the selection stays to send again.
+        fun interrupted() {
+            if (stillOpen()) _opened.update { it?.copy(notice = "The connection changed before the message went out. Send again.") }
+        }
         val job = viewModelScope.launch {
             try {
                 for (file in attempt.files) {
-                    if (!canSend()) return@launch
+                    if (!canSend()) return@launch interrupted()
                     if (file.id !in attempt.uploaded) {
                         attempt.uploaded[file.id] = api.upload(roomId, "${attempt.eventId}-${file.id}", file)
                     }
                 }
-                if (!canSend()) return@launch
+                if (!canSend()) return@launch interrupted()
                 attempt.submitted = true
                 val event = api.send(roomId, attempt.text, MAIN_THREAD, attempt.eventId, attempt.files.map { attempt.uploaded.getValue(it.id) })
                 if (unansweredSend === attempt) unansweredSend = null
                 if (unansweredFiles[roomId] === attempt) unansweredFiles.remove(roomId)
-                if (!stillOpen()) return@launch
+                // The room may have been left and opened again meanwhile: that opening shows the message too.
+                if (gateway.value != url || _opened.value?.room?.roomId != roomId) return@launch
                 if (composer.text.toString().trim() == attempt.text) composer.clearText()
                 openEvents = mergeRoomEvents(openEvents, listOf(event))
-                _opened.update { it?.copy(attachments = emptyList(), attachmentRetry = false,
-                    lines = roomLines(openEvents, it.room.members), waiting = waitingFor(openEvents, it.room.members)) }
+                _opened.update {
+                    val left = it?.attachments.orEmpty().filterNot { file -> file in attempt.files }
+                    it?.copy(attachments = left, attachmentRetry = it.attachmentRetry && left.isNotEmpty(),
+                        lines = roomLines(openEvents, it.room.members), waiting = waitingFor(openEvents, it.room.members))
+                }
                 readRoomSoon(roomId)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 // Polling may already have confirmed this send while its reply was lost.
                 if (unansweredSend !== attempt && unansweredFiles[roomId] !== attempt) return@launch
-                // A server refusal is known; a lost answer after Send may already be a posted message.
+                // A server refusal is known; a lost answer after Send may already be a posted message, and so
+                // may an answer this app couldn't read (code 0). A refused send's uploads stay free for the next.
                 if (e is RpcException && e.code != 0) attempt.submitted = false
-                if (attempt.files.isNotEmpty() && attempt.submitted) unansweredFiles[roomId] = attempt
-                else unansweredFiles.remove(roomId)
-                if (stillOpen()) _opened.update { it?.copy(attachmentRetry = attempt.files.isNotEmpty() && attempt.submitted,
-                    notice = "Couldn't send. ${e.message.orEmpty()}".trim()) }
+                if (attempt.files.isNotEmpty()) {
+                    attempt.markUnknown()
+                    unansweredFiles[roomId] = attempt
+                }
+                if (stillOpen()) _opened.update { it?.copy(attachments = attempt.files, attachmentRetry = attempt.files.isNotEmpty() && attempt.submitted,
+                    retryText = attempt.text, notice = "Couldn't send. ${e.message.orEmpty()}".trim()) }
             } finally {
                 if (stillOpen()) _opened.update { it?.copy(sending = false) }
             }
@@ -647,11 +696,15 @@ class RoomsViewModel(
                 pages++
             } while (page.hasMore && advanced && pages < MAX_PAGES_PER_READ)
             // An unanswered send that shows up in the log did land: the same words later are a new message.
-            (unansweredFiles[roomId] ?: unansweredSend)?.takeIf { it.roomId == roomId }?.let { pending ->
+            // A file send is known by its uploads' ids, which only it can carry; the gateway may keep its text
+            // differently (absent when empty).
+            val files = unansweredFiles[roomId]
+            listOfNotNull(files, unansweredSend?.takeIf { it !== files }).filter { it.roomId == roomId }.forEach { pending ->
+                val ids = pending.files.map { pending.uploaded[it.id]?.attachmentId }
                 val landed = openEvents.any {
-                    it.seq > pending.sentAfter && it.kind == "message.user" && it.messageText?.trim() == pending.text &&
-                        (pending.files.isEmpty() || (pending.uploaded.size == pending.files.size &&
-                            it.messageAttachments == pending.files.map { file -> pending.uploaded.getValue(file.id) }))
+                    it.seq > pending.sentAfter && it.kind == "message.user" &&
+                        if (pending.files.isEmpty()) it.messageText?.trim() == pending.text
+                        else it.messageAttachments.map { file -> file.attachmentId } == ids
                 }
                 if (landed) {
                     if (unansweredSend === pending) unansweredSend = null
@@ -691,9 +744,25 @@ class RoomsViewModel(
     private fun newId(what: String): String = "$what-${Uuid.random()}"
 
     /** A send with no answer back: [sentAfter] is the log seq read through when it went out. */
-    private data class UnansweredSend(val roomId: String, val text: String, val eventId: String, val sentAfter: Int,
-        val files: List<OutgoingAttachment> = emptyList(),
-        val uploaded: MutableMap<String, RoomAttachment> = mutableMapOf(), var submitted: Boolean = false)
+    private class UnansweredSend(val roomId: String, val text: String, val eventId: String, val sentAfter: Int,
+        var files: List<OutgoingAttachment> = emptyList(),
+        val uploaded: MutableMap<String, RoomAttachment> = mutableMapOf(), var submitted: Boolean = false) {
+
+        /** Send went out without a known answer at least once, so it may be in the room; a later refusal doesn't undo that. */
+        var mayHavePosted = false
+            private set
+
+        /**
+         * Records a Send whose answer is unknown. Every file is uploaded by then, and a retry needs only the
+         * receipts, so the bytes can go.
+         */
+        fun markUnknown() {
+            if (!submitted) return
+            mayHavePosted = true
+            if (files.any { it.id !in uploaded }) return
+            files = files.map { if (it.bytes.isEmpty()) it else OutgoingAttachment(it.id, it.name, it.mimeType, ByteArray(0), it.thumbnail) }
+        }
+    }
 
     private companion object {
         /** The roster's fallback read; rooms change on other clients too, and send no event here. */

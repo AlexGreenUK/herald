@@ -411,9 +411,194 @@ class RoomsViewModelTest {
             vm.open(roomB); vm.open(roomA)
             vm.addAttachments(listOf(picked("late")), original)
             held.complete(Unit); runCurrent()
-            assertTrue(vm.opened.value!!.attachments.isEmpty())
+            // The unsent selection comes back as a draft; the late pick from the old opening doesn't.
+            assertEquals(listOf("report"), vm.opened.value!!.attachments.map { it.id })
+            assertFalse(vm.opened.value!!.attachmentRetry)
             assertTrue(socket.sent("groups.send").isEmpty())
         } finally { vm.close(); vm.setVisible(false) }
+    }
+
+    @Test
+    fun leavingMidUploadKeepsTheSelectionAndItsUploadsForTheNextOpening() = runTest(dispatcher) {
+        val held = CompletableDeferred<Unit>()
+        var heldOnce = false
+        val socket = RoomsGateway(CoroutineScope(dispatcher)) { m, p ->
+            if (m == "groups.attachment.upload" && p["name"]!!.jsonPrimitive.content == "second.csv" && !heldOnce) {
+                heldOnce = true; held.await()
+            }
+            attachmentReply(m, p) ?: "{}"
+        }
+        val vm = attachmentRoom(socket)
+        try {
+            vm.composer.setTextAndPlaceCursorAtEnd("both files")
+            vm.addAttachments(listOf(picked("first"), picked("second")), vm.opened.value!!.draftKey); vm.send()
+            vm.open(roomB); vm.open(roomA)
+            assertEquals(listOf("first", "second"), vm.opened.value!!.attachments.map { it.id })
+            assertFalse(vm.opened.value!!.attachmentRetry)
+            assertEquals("both files", vm.composer.text.toString())
+            vm.send(); vm.opened.first { it?.lines?.isNotEmpty() == true }
+            val uploads = socket.sent("groups.attachment.upload")
+            assertEquals(listOf("first.csv", "second.csv", "second.csv"), uploads.map { it["name"]!!.jsonPrimitive.content })
+            assertEquals(uploads[1]["upload_id"], uploads[2]["upload_id"])
+            assertEquals(1, socket.sent("groups.send").size)
+        } finally { vm.close(); vm.setVisible(false); held.complete(Unit) }
+    }
+
+    @Test
+    fun typingAfterSendThenLeavingStillKeepsTheSentFiles() = runTest(dispatcher) {
+        val held = CompletableDeferred<Unit>()
+        val socket = RoomsGateway(CoroutineScope(dispatcher)) { m, p ->
+            if (m == "groups.attachment.upload") held.await()
+            attachmentReply(m, p) ?: "{}"
+        }
+        val vm = attachmentRoom(socket)
+        try {
+            vm.composer.setTextAndPlaceCursorAtEnd("first")
+            vm.addAttachments(listOf(picked("photo")), vm.opened.value!!.draftKey); vm.send()
+            vm.composer.setTextAndPlaceCursorAtEnd("second thought")
+            vm.open(roomB); vm.open(roomA)
+            assertEquals("photo", vm.opened.value!!.attachments.single().id)
+            assertEquals("first", vm.composer.text.toString())
+        } finally { vm.close(); vm.setVisible(false); held.complete(Unit) }
+    }
+
+    @Test
+    fun leavingWhileSendIsOnItsWayLocksTheReopenedRoomToTheSameEvent() = runTest(dispatcher) {
+        val held = CompletableDeferred<Unit>()
+        var sends = 0
+        val socket = RoomsGateway(CoroutineScope(dispatcher)) { m, p ->
+            if (m == "groups.send" && sends++ == 0) held.await()
+            attachmentReply(m, p) ?: "{}"
+        }
+        val vm = attachmentRoom(socket)
+        try {
+            vm.composer.setTextAndPlaceCursorAtEnd("first")
+            vm.addAttachments(listOf(picked("report")), vm.opened.value!!.draftKey); vm.send(); runCurrent()
+            vm.open(roomB); vm.open(roomA)
+            assertTrue(vm.opened.value!!.attachmentRetry)
+            assertEquals("first", vm.opened.value!!.retryText)
+            vm.send(); vm.opened.first { it?.lines?.isNotEmpty() == true }
+            assertEquals(socket.sent("groups.send")[0], socket.sent("groups.send")[1])
+            assertEquals(1, socket.sent("groups.attachment.upload").size)
+        } finally { vm.close(); vm.setVisible(false); held.complete(Unit) }
+    }
+
+    @Test
+    fun aRefusalAfterAnUnknownSendDoesNotReuseItsUploadsForANewMessage() = runTest(dispatcher) {
+        val held = CompletableDeferred<Unit>()
+        var sends = 0
+        val socket = RoomsGateway(CoroutineScope(dispatcher)) { m, p ->
+            when {
+                m == "groups.send" && sends == 0 -> { sends++; held.await(); attachmentReply(m, p)!! }
+                m == "groups.send" && sends == 1 -> { sends++; "!Busy" }
+                else -> attachmentReply(m, p) ?: "{}"
+            }
+        }
+        val vm = attachmentRoom(socket)
+        try {
+            vm.composer.setTextAndPlaceCursorAtEnd("first")
+            vm.addAttachments(listOf(picked("report")), vm.opened.value!!.draftKey); vm.send()
+            advanceTimeBy(60_001); runCurrent()
+            vm.send(); runCurrent()
+            assertFalse(vm.opened.value!!.attachmentRetry)
+            vm.composer.setTextAndPlaceCursorAtEnd("edited")
+            vm.send(); runCurrent()
+            assertEquals(2, socket.sent("groups.send").size)
+            assertTrue(vm.opened.value!!.attachments.isEmpty())
+            assertTrue(vm.opened.value!!.notice!!.contains("report.csv"))
+        } finally { vm.close(); vm.setVisible(false); held.complete(Unit) }
+    }
+
+    @Test
+    fun aClearedDraftIsNotRestoredOnTheNextOpening() = runTest(dispatcher) {
+        val socket = RoomsGateway(CoroutineScope(dispatcher)) { m, p ->
+            if (m == "groups.attachment.upload") "!Upload failed" else attachmentReply(m, p) ?: "{}"
+        }
+        val vm = attachmentRoom(socket)
+        try {
+            vm.addAttachments(listOf(picked("report")), vm.opened.value!!.draftKey)
+            vm.send(); vm.opened.first { it?.notice != null }
+            vm.removeAttachment("report")
+            vm.open(roomB); vm.open(roomA)
+            assertTrue(vm.opened.value!!.attachments.isEmpty())
+        } finally { vm.close(); vm.setVisible(false) }
+    }
+
+    @Test
+    fun aChangedSelectionAfterAFailedUploadKeepsTheFilesAlreadyUploaded() = runTest(dispatcher) {
+        val socket = RoomsGateway(CoroutineScope(dispatcher)) { m, p ->
+            if (m == "groups.attachment.upload" && p["name"]!!.jsonPrimitive.content == "bad.csv") "!Upload failed"
+            else attachmentReply(m, p) ?: "{}"
+        }
+        val vm = attachmentRoom(socket)
+        try {
+            vm.addAttachments(listOf(picked("good"), picked("bad")), vm.opened.value!!.draftKey)
+            vm.send(); vm.opened.first { it?.notice != null }
+            vm.removeAttachment("bad")
+            vm.send(); vm.opened.first { it?.lines?.isNotEmpty() == true }
+            assertEquals(listOf("good.csv", "bad.csv"), socket.sent("groups.attachment.upload").map { it["name"]!!.jsonPrimitive.content })
+            val manifest = socket.sent("groups.send").single()["payload"]!!.jsonObject["attachments"].toString()
+            assertTrue("good.csv" in manifest)
+        } finally { vm.close(); vm.setVisible(false) }
+    }
+
+    @Test
+    fun aFileOnlySendTheLogKeptWithoutTextStillCountsAsLanded() = runTest(dispatcher) {
+        val held = CompletableDeferred<Unit>()
+        var posted: JsonObject? = null
+        val socket = RoomsGateway(CoroutineScope(dispatcher)) { m, p ->
+            when {
+                m == "groups.send" -> { posted = p["payload"]!!.jsonObject; held.await(); attachmentReply(m, p)!! }
+                m == "groups.state" && posted != null -> """{"room":{"room_id":"a","name":"A","latest_seq":1}}"""
+                // The gateway's copy has no text and a normalized mime: only the ids are the same.
+                m == "groups.log" && posted != null -> {
+                    val id = posted!!["attachments"]!!.toString().substringAfter("\"attachment_id\":\"").substringBefore('"')
+                    """{"events":[{"room_id":"a","seq":1,"event_id":"user:x","kind":"message.user","actor":{"kind":"user","id":"u"},"payload":{"thread_id":"main","attachments":[{"attachment_id":"$id","kind":"file","name":"report.csv","mime":"text/csv; charset=utf-8","size":3}]}}],"cursor":1,"latest_seq":1}"""
+                }
+                else -> attachmentReply(m, p) ?: "{}"
+            }
+        }
+        val vm = attachmentRoom(socket)
+        try {
+            vm.addAttachments(listOf(picked("report")), vm.opened.value!!.draftKey); vm.send()
+            advanceTimeBy(60_001); runCurrent()
+            assertTrue(vm.opened.value!!.attachments.isEmpty())
+            assertFalse(vm.opened.value!!.attachmentRetry)
+            assertEquals("report.csv", (vm.opened.value!!.lines.single() as RoomLine.Message).attachments.single().name)
+        } finally { vm.close(); vm.setVisible(false); held.complete(Unit) }
+    }
+
+    @Test
+    fun aTextSendAnsweredAfterReopeningShowsInTheNewOpening() = runTest(dispatcher) {
+        val held = CompletableDeferred<Unit>()
+        val socket = RoomsGateway(CoroutineScope(dispatcher)) { m, p ->
+            if (m == "groups.send") held.await()
+            attachmentReply(m, p) ?: "{}"
+        }
+        val vm = attachmentRoom(socket)
+        try {
+            vm.composer.setTextAndPlaceCursorAtEnd("hi"); vm.send()
+            vm.open(roomB); vm.open(roomA); vm.opened.first { it?.loading == false }
+            held.complete(Unit); runCurrent()
+            assertEquals("hi", (vm.opened.value!!.lines.single() as RoomLine.Message).text)
+        } finally { vm.close(); vm.setVisible(false) }
+    }
+
+    @Test
+    fun anUnknownFileSendKeepsOnlyReceiptsNotTheBytes() = runTest(dispatcher) {
+        val held = CompletableDeferred<Unit>()
+        val socket = RoomsGateway(CoroutineScope(dispatcher)) { m, p ->
+            if (m == "groups.send") held.await()
+            attachmentReply(m, p) ?: "{}"
+        }
+        val vm = attachmentRoom(socket)
+        try {
+            vm.addAttachments(listOf(picked("report")), vm.opened.value!!.draftKey); vm.send()
+            advanceTimeBy(60_001); runCurrent()
+            assertTrue(vm.opened.value!!.attachmentRetry)
+            assertTrue(vm.opened.value!!.attachments.single().bytes.isEmpty())
+            assertEquals("report", vm.opened.value!!.attachments.single().id)
+        } finally { vm.close(); vm.setVisible(false); held.complete(Unit) }
     }
 
     @Test
