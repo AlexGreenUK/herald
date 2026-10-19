@@ -507,6 +507,29 @@ class StreamedSpeechTest {
         setup.voice.stopChat()
     }
 
+    /**
+     * Over the agent at work nothing plays, so there's no echo for a hold to stop: a word too quick to go on past the
+     * hold ("no, wait") is still someone cutting in, told by what they said.
+     */
+    @Test
+    fun aQuickWordOverTheAgentAtWorkIsSent() = runTest {
+        val recorder = CutsIn(goneOn = false)
+        val player = Player(canHold = true)
+        val setup = chat(player = player, recorder = recorder, transcripts = listOf("How was your day?", "No, wait")) { null }
+
+        setup.socket.event("message.start")
+        setup.voice.chat.first { it.phase == VoicePhase.Thinking }
+        recorder.listening.first { it >= 1 }
+        recorder.cut.complete(Unit)
+        setup.socket.calls.first { "session.interrupt" in it }
+        setup.socket.event("message.complete", """{"text":"","status":"interrupted"}""")
+
+        setup.socket.submits.first { it.size == 2 }
+        assertEquals("No, wait", setup.socket.submits.value[1]["params"]!!.jsonObject["text"]!!.jsonPrimitive.content)
+        assertEquals(listOf(true, false), player.holds)
+        setup.voice.stopChat()
+    }
+
     @Test
     fun withBargeInOffTheMicrophoneStaysClosedOverTheReply() = runTest {
         val recorder = CutsIn()

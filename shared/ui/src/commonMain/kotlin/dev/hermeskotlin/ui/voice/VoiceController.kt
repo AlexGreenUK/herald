@@ -477,13 +477,12 @@ class VoiceController(
             null
         } finally {
             if (detector.roomFloor > 0f) roomFloor = detector.roomFloor
+            // Not offered once the microphone is closed again, as while a question is asked aloud.
+            _chat.update { it.copy(bargeIn = false) }
         }
         // The microphone wouldn't listen over the voice: the reply goes on as without barge-in, and doesn't offer it,
         // this turn or the next.
-        if (heard == null) {
-            cantListenOver = true
-            _chat.update { it.copy(bargeIn = false) }
-        }
+        if (heard == null) cantListenOver = true
         return heard
     }
 
@@ -496,7 +495,9 @@ class VoiceController(
      */
     private suspend fun heardOver(session: ChatSession, gateway: GatewayUrl, profile: String?, reply: Deferred<*>, over: Deferred<Recording?>): Turn? {
         val overVoice = voiced
-        val held = player.hold(true)
+        // Held even when nothing plays, so a voice due to start waits; but only a voice that was sounding has an echo
+        // that stops with it. Over the agent at work, what they said tells it.
+        val held = player.hold(true) && playing.value
         val phase = _chat.value.phase
         _chat.update { it.copy(phase = VoicePhase.Listening, level = 0f, hearing = true) }
         try {
@@ -536,6 +537,8 @@ class VoiceController(
             if (stop && session.state.value.running) appScope.launch { session.interrupt() }
             return if (stop) Turn.End else Turn.CutIn(transcript)
         } finally {
+            // Ended mid-hold (the chat stopped): the voice stops first, so letting go of it doesn't play a moment more.
+            if (!currentCoroutineContext().isActive) withContext(NonCancellable) { reply.cancelAndJoin() }
             player.hold(false)
         }
     }
@@ -556,10 +559,16 @@ class VoiceController(
         val pointedAt = mutableSetOf<String>()
         var stopped = false
         while (true) {
-            // The microphone listens over the agent at work, but not while it asks: that takes the microphone itself.
-            val chat = when (val cut = overVoice(session, gateway, profile, activity) { nextStop(session, pointedAt) }) {
-                is Cut.Over -> return cut.turn
-                is Cut.Done -> cut.value
+            // The microphone listens over the agent at work, but not while it asks: that takes the microphone itself. Nor
+            // while the turn waits on something said to be answered elsewhere ("unlock the phone"): what's said then
+            // is about that, and a cut-in would stop the turn that's waiting.
+            val chat = if (session.state.value.inputRequests.isNotEmpty()) {
+                nextStop(session, pointedAt)
+            } else {
+                when (val cut = overVoice(session, gateway, profile, activity) { nextStop(session, pointedAt) }) {
+                    is Cut.Over -> return cut.turn
+                    is Cut.Done -> cut.value
+                }
             }
             val request = askable(chat)
             if (request != null) {
