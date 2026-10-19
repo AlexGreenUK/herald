@@ -153,6 +153,7 @@ uses. The protocol itself is described in [hermes-protocol-research.md](hermes-p
 - [x] Text size on top of the system font scale
 - [x] Chat background: a photo behind the conversation (frosted under the composer), with how strongly it shows
 - [x] Show or hide reasoning and tool activity in the chat
+- [x] Starting instruction (Settings › Chat): text every new chat started in Herald (chats, threads, the watch, the assistant) tells the agent first, such as "I'm on my phone: keep replies short". It goes into `session.create` as a hidden seed row (`display_kind: "hidden"`), so no client shows it
 - [x] Account (sign out, change gateway) and about (app and gateway versions, update check)
 - [x] Manage several saved gateways: add, rename, remove (signs out of it), choose a primary (listed first, taken over when the gateway in use is removed). Switching keeps each one signed in and reopens where you left off on it; the app opens on the last one used
 

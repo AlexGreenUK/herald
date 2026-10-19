@@ -94,6 +94,11 @@ data class AppSettings(
     val dictationEngine: DictationEngine = DictationEngine.Device,
     /** What tapping Send does while a reply is running; a long press on Send picks another for one message. */
     val runningSend: RunningSend = RunningSend.Steer,
+    /**
+     * What every new chat started here tells the agent first, out of sight (`putStartInstruction`), such as "I'm on
+     * my phone: keep replies short". Blank: nothing. Chats already going keep what they started with.
+     */
+    val startInstruction: String = "",
     /** Notify when a turn finishes while the app is in the background. */
     val notifyReplies: Boolean = true,
     /** Notify when the agent waits on an approval or a question while the app is in the background. */
@@ -155,6 +160,9 @@ data class AppSettings(
     /** The sidebar shows its projects as one button that opens a list, not a row of chips that scrolls sideways. */
     val projectsAsDropdown: Boolean = false,
 )
+
+/** The [AppSettings.startInstruction] a new chat starts with, trimmed; null when there is none or the settings aren't read yet. */
+fun SettingsStore.startInstruction(): String? = settings.value?.startInstruction?.trim()?.takeIf { it.isNotEmpty() }
 
 /**
  * Holds [AppSettings]: null until the stored copy is read, so the first frame can wait for the

@@ -89,6 +89,7 @@ import com.composables.icons.lucide.Lock
 import com.composables.icons.lucide.LogOut
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.MessageCircle
+import com.composables.icons.lucide.MessageSquarePlus
 import com.composables.icons.lucide.MessagesSquare
 import com.composables.icons.lucide.Moon
 import com.composables.icons.lucide.RefreshCw
@@ -187,10 +188,11 @@ fun SettingsScreen(
     var checkOpen by remember { mutableStateOf(false) }
     var phoneToolsOpen by remember { mutableStateOf(false) }
     var appIconOpen by remember { mutableStateOf(false) }
+    var startInstructionOpen by remember { mutableStateOf(false) }
     // Read again when the App icon page closes, so its row names the icon just applied.
     val appIcons = key(appIconOpen) { rememberAppIcons() }
     LaunchedEffect(gateway) { viewModel.bind(gateway) }
-    PlatformBackHandler(enabled = !checkOpen && !phoneToolsOpen && !appIconOpen, onBack = onBack)
+    PlatformBackHandler(enabled = !checkOpen && !phoneToolsOpen && !appIconOpen && !startInstructionOpen, onBack = onBack)
     SettingsView(
         settings, info, gateway.url, viewModel::update, onBack, onSignOut, onOpenGateways,
         gatewayName = gateway.label,
@@ -214,8 +216,16 @@ fun SettingsScreen(
         onOpenPhoneTools = { phoneToolsOpen = true },
         appIcon = appIcons.current,
         onOpenAppIcon = { appIconOpen = true },
+        onOpenStartInstruction = { startInstructionOpen = true },
     )
     if (phoneToolsOpen) PhoneToolsScreen(onBack = { phoneToolsOpen = false })
+    if (startInstructionOpen) {
+        StartInstructionScreen(
+            text = settings.startInstruction,
+            onChange = { text -> viewModel.update { it.copy(startInstruction = text) } },
+            onBack = { startInstructionOpen = false },
+        )
+    }
     if (appIconOpen) AppIconScreen(onBack = { appIconOpen = false })
     ConnectionCheckSheet(
         visible = checkOpen,
@@ -295,6 +305,7 @@ internal fun SettingsView(
     onOpenPhoneTools: () -> Unit = {},
     appIcon: AppIcon = AppIcon.Blue,
     onOpenAppIcon: () -> Unit = {},
+    onOpenStartInstruction: () -> Unit = {},
 ) {
     Box(
         Modifier
@@ -414,6 +425,14 @@ internal fun SettingsView(
                             optionLabel = { it.label },
                         )
                     }
+                    Divider()
+                    NavRow(
+                        title = "Starting instruction",
+                        detail = settings.startInstruction.trim().ifEmpty { "None. Tell each new chat something first, like to keep replies short." },
+                        icon = Lucide.MessageSquarePlus,
+                        onClick = onOpenStartInstruction,
+                        detailLines = 2,
+                    )
                     Divider()
                     SwitchRow(
                         title = "Show reasoning",

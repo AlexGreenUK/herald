@@ -39,6 +39,7 @@ import dev.hermeskotlin.core.inbox.InboxStore
 import dev.hermeskotlin.core.push.PushApi
 import dev.hermeskotlin.core.profiles.ProfilesApi
 import dev.hermeskotlin.core.settings.SettingsStore
+import dev.hermeskotlin.core.settings.startInstruction
 import dev.hermeskotlin.core.rpc.openGatewaySocket
 import dev.hermeskotlin.core.sessions.SessionsApi
 import dev.hermeskotlin.core.slash.SlashApi
@@ -107,7 +108,7 @@ val coreModule = module {
     }
     single { ToolRiskStore(get()) }
     single { OfflineCache(get<OfflineDatabase>().dao(), get()) { getTimeMillis() } }
-    single { ChatHost(get(), get(), get(), get(), get()) }
+    single { ChatHost(get(), get(), get(), get(), get(), get()) }
     single { ActiveSessions(get(), get()) }
     single(createdAtStart = true) { AttentionTracker(get(), get(), get(), get()) }
     single(createdAtStart = true) { SessionWatcher(get(), get(), get(), get(), get()) }
@@ -119,7 +120,10 @@ val coreModule = module {
     single { BotsApi(get()) }
     single { ProjectsApi(get()) }
     single { ThreadsApi(get()) }
-    single { ThreadsRepository(get(), get(), get(), get()) }
+    single {
+        val settings = get<SettingsStore>()
+        ThreadsRepository(get(), get(), get(), get(), startInstruction = { settings.startInstruction() })
+    }
     single { BotChats(get<BotsApi>()) }
     single { RoomsApi(get()) }
     single { RoomSeenStore(get()) }

@@ -14,6 +14,7 @@ import dev.hermeskotlin.core.sessions.SessionsApi
 import dev.hermeskotlin.core.settings.AppSettings
 import dev.hermeskotlin.core.settings.DictationEngine
 import dev.hermeskotlin.core.settings.SettingsStore
+import dev.hermeskotlin.core.settings.startInstruction
 import dev.hermeskotlin.core.voice.AudioApi
 import dev.hermeskotlin.core.voice.DeviceDictation
 import dev.hermeskotlin.core.voice.SpeechPlayer
@@ -359,7 +360,10 @@ class AssistantPanelModel(
         sessionScope?.cancel()
         val childScope = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
         sessionScope = childScope
-        _session.value = ChatSession(saved.gatewayUrl, null, null, connection, sessions, childScope, profile).also { it.start() }
+        _session.value = ChatSession(
+            saved.gatewayUrl, null, null, connection, sessions, childScope, profile,
+            startInstruction = { settings?.startInstruction() },
+        ).also { it.start() }
     }
 
     /** The screen once the platform has handed it all over, or as much as came within a moment. */

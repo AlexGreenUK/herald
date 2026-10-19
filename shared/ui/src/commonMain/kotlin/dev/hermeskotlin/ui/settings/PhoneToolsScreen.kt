@@ -611,7 +611,7 @@ private fun UseRow(use: PhoneToolUse, nowMillis: Long) {
 
 /** A row that opens a page: [detail] under the title, a chevron at the end. */
 @Composable
-internal fun NavRow(title: String, detail: String, icon: ImageVector, onClick: () -> Unit) {
+internal fun NavRow(title: String, detail: String, icon: ImageVector, onClick: () -> Unit, detailLines: Int = Int.MAX_VALUE) {
     Row(
         Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 13.dp),
         horizontalArrangement = Arrangement.spacedBy(14.dp),
@@ -620,7 +620,13 @@ internal fun NavRow(title: String, detail: String, icon: ImageVector, onClick: (
         IconTile(icon)
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
             Text(title, style = Theme[typography][body], color = Theme[colors][text])
-            Text(detail, style = Theme[typography][bodySmall], color = Theme[colors][textTertiary])
+            Text(
+                detail,
+                style = Theme[typography][bodySmall],
+                color = Theme[colors][textTertiary],
+                maxLines = detailLines,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
         UnstyledIcon(Lucide.ChevronRight, contentDescription = null, tint = Theme[colors][textTertiary], modifier = Modifier.size(16.dp))
     }
