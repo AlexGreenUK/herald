@@ -232,6 +232,7 @@ uses. The protocol itself is described in [hermes-protocol-research.md](hermes-p
 - [x] Share-to-bot: bots show in the share sheet; a share opens the bot's chat with the content after what was typed there (nothing sends until you do). Shortcuts follow the roster, so a removed or renamed bot leaves the share sheet, and a share to one that's gone opens a new chat instead
 - [ ] "Ask <bot>" by voice, a Settings switch for bot notifications
 - [x] Rooms: Desktop rooms read-only from the `hermes-bots-groups` mirror; hosted rooms (`groups.*`) to take part
+- [x] Rooms: attach photos and files on gateways advertising `groups.attachment.upload` (8 files, 15 MB each, 25 MB per message)
 - [x] Rooms: select message text to copy a passage, or copy a bot's whole message with its Markdown; also in read-only Desktop rooms
 - [x] Rooms: gateway file links open in the existing viewer, with Save and Share through the speaking bot's profile
 - [x] Rooms: scroll up for older messages (`groups.log` read back a window at a time, the reader's place kept)

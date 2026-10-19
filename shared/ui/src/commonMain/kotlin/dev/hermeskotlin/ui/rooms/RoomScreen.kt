@@ -35,6 +35,7 @@ import androidx.compose.ui.semantics.traversalIndex
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.runtime.key
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -77,6 +78,15 @@ import com.composeunstyled.TextInput
 import com.composeunstyled.UnstyledTextField
 import com.composeunstyled.theme.Theme
 import androidx.compose.foundation.text.input.TextFieldState
+import dev.hermeskotlin.core.chat.OutgoingAttachment
+import dev.hermeskotlin.core.chat.ShownAttachment
+import dev.hermeskotlin.core.chat.AttachmentKind
+import dev.hermeskotlin.core.rooms.RoomAttachment
+import dev.hermeskotlin.ui.chat.rememberAttachmentPicker
+import dev.hermeskotlin.ui.chat.AttachSheet
+import dev.hermeskotlin.ui.chat.ComposerTray
+import dev.hermeskotlin.ui.chat.SentAttachments
+import com.composables.icons.lucide.Paperclip
 import dev.hermeskotlin.core.chat.linkFileUris
 import dev.hermeskotlin.core.gateway.GatewayUrl
 import dev.hermeskotlin.core.media.GatewayFile
@@ -151,6 +161,9 @@ fun RoomScreen(
 interface RoomActions {
     /** What the user is typing to the room. */
     val composer: TextFieldState
+    fun addAttachments(picked: List<OutgoingAttachment>, draftKey: Int) {}
+    fun removeAttachment(id: String) {}
+    fun attachmentError(message: String, draftKey: Int) {}
     fun send()
     fun stop()
     fun loadEarlier()
@@ -321,9 +334,16 @@ private fun TranscriptList(lines: List<RoomLine>, listState: LazyListState, face
 internal fun UserLine(line: RoomLine.Message) {
     val shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp, bottomEnd = 6.dp, bottomStart = 20.dp)
     Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        if (line.attachments.isNotEmpty()) SentAttachments(remember(line.attachments) {
+            line.attachments.map { file -> ShownAttachment(file.attachmentId, file.name, when (file.kind) {
+                "image" -> AttachmentKind.Image
+                "pdf" -> AttachmentKind.Pdf
+                else -> AttachmentKind.File
+            }) }
+        })
         // Copy sits beside the bubble, at its foot, so it takes no height of its own. A screen reader still
-        // reads the message first, as on a bot's line.
-        Row(
+        // reads the message first, as on a bot's line. Files sent alone have no bubble.
+        if (line.text.isNotBlank()) Row(
             Modifier.fillMaxWidth(0.84f).semantics { isTraversalGroup = true },
             horizontalArrangement = Arrangement.spacedBy(2.dp, Alignment.End),
             verticalAlignment = Alignment.Bottom,
@@ -461,7 +481,18 @@ private fun PendingActions(room: OpenRoom, onApprove: (RoomPendingAction, String
  */
 @Composable
 private fun RoomComposer(room: OpenRoom, viewModel: RoomActions) {
-    val hasText = viewModel.composer.text.isNotBlank()
+    val hasText = viewModel.composer.text.isNotBlank() || room.attachments.isNotEmpty()
+    var attachOpen by remember(room.draftKey) { mutableStateOf(false) }
+    // A file read belongs to this opening, even if another room opens while it finishes.
+    val picker = key(viewModel, room.draftKey) {
+        val draftKey = room.draftKey
+        rememberAttachmentPicker(
+            onPicked = { viewModel.addAttachments(it, draftKey) },
+            onError = { viewModel.attachmentError(it, draftKey) },
+        )
+    }
+    AttachSheet(attachOpen, onDismiss = { attachOpen = false }, picker = picker,
+        subtitle = RoomAttachment.LIMITS)
     val shape = RoundedCornerShape(Theme[radii][radiusLarge])
     var focused by remember { mutableStateOf(false) }
     Column(
@@ -475,8 +506,13 @@ private fun RoomComposer(room: OpenRoom, viewModel: RoomActions) {
             .onFocusChanged { focused = it.hasFocus }
             .padding(start = 4.dp, end = 6.dp, top = 14.dp, bottom = 6.dp),
     ) {
+        if (room.attachments.isNotEmpty()) ComposerTray(room.attachments, onRemove = viewModel::removeAttachment)
+        if (room.attachmentRetry) Text(
+            if (room.retryText.isBlank()) "Send again to confirm the previous message."
+            else "Send again to confirm the previous message: “${room.retryText}”", style = Theme[typography][caption], color = Theme[colors][textTertiary])
         UnstyledTextField(
             state = viewModel.composer,
+            enabled = !room.attachmentRetry,
             textStyle = Theme[typography][body],
             textColor = Theme[colors][text],
             cursorBrush = SolidColor(Theme[colors][accent]),
@@ -493,6 +529,10 @@ private fun RoomComposer(room: OpenRoom, viewModel: RoomActions) {
             )
         }
         Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            BarButton(Lucide.Paperclip, "Add photos or files", onClick = {
+                if (room.attachmentsSupported) attachOpen = true
+                else viewModel.attachmentError("This gateway doesn't support room attachments. Update Hermes to use them.", room.draftKey)
+            }, enabled = !room.sending && !room.attachmentRetry && room.attachments.size < RoomAttachment.MAX_COUNT)
             // Who answers first, by the gateway's own @ rule: everyone, unless the message names someone.
             val members = room.room.members
             val recipients by remember(members) { derivedStateOf { roomRecipients(viewModel.composer.text.toString(), members) } }
@@ -508,7 +548,7 @@ private fun RoomComposer(room: OpenRoom, viewModel: RoomActions) {
                     // Over a selection, the cursor goes after the @ rather than selecting it.
                     placeCursorBeforeCharAt(at.start + before.length)
                 }
-            })
+            }, enabled = !room.attachmentRetry)
             Text(
                 if (recipients.size == members.size) members.joinToString(" · ") { it.label }
                 else "To ${recipients.joinToString(", ") { it.label }}",
@@ -545,11 +585,12 @@ private fun RoomMentions(room: OpenRoom, viewModel: RoomActions, faces: BotFaces
             member.handle?.let { MentionChoice(member.label, it, faces.roomBot(member.profile ?: member.memberId)) }
         }
     }
-    AnimatedVisibility(visible = choices.isNotEmpty(), enter = fadeIn(), exit = fadeOut()) {
+    AnimatedVisibility(visible = !room.attachmentRetry && choices.isNotEmpty(), enter = fadeIn(), exit = fadeOut()) {
         // Kept through the fade-out, so the list doesn't empty before it leaves.
         var shown by remember { mutableStateOf(choices) }
         if (choices.isNotEmpty()) shown = choices
         MentionSuggestions(shown, hazeState = null) { choice ->
+            if (room.attachmentRetry) return@MentionSuggestions
             val typed = mention ?: return@MentionSuggestions
             viewModel.composer.edit { replace(typed.start, typed.end, "@${choice.handle} ") }
         }
