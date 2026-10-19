@@ -470,7 +470,8 @@ class VoiceController(
     /**
      * Reads [text] aloud piece by piece, synthesizing the next piece while the current one plays. [onError] hears
      * what went wrong: a piece the gateway couldn't voice ends it, one the player couldn't play is passed over.
-     * [keptAs]: the pieces already voiced under it in [readAloudVoices] play again as they are, and new ones are kept.
+     * [keptAs]: the pieces already voiced under it in [readAloudVoices] play again as they are, and new ones are kept,
+     * each by its own words.
      */
     private suspend fun voice(
         text: String,
@@ -481,9 +482,9 @@ class VoiceController(
     ) = coroutineScope {
         val clips = Channel<SpokenAudio>(capacity = 1)
         launch {
-            for ((i, chunk) in speechChunks(text).withIndex()) {
-                val clip = keptAs?.let { readAloudVoices.piece(it, i) } ?: when (val result = audio.speak(gateway, chunk, profile)) {
-                    is ApiResult.Success -> result.value.also { made -> keptAs?.let { readAloudVoices.keep(it, i, made) } }
+            for (chunk in speechChunks(text)) {
+                val clip = keptAs?.let { readAloudVoices.piece(it, chunk) } ?: when (val result = audio.speak(gateway, chunk, profile)) {
+                    is ApiResult.Success -> result.value.also { made -> keptAs?.let { readAloudVoices.keep(it, chunk, made) } }
                     else -> {
                         onError(result.errorMessage ?: "Couldn't voice the reply.")
                         break
