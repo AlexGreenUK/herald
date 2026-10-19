@@ -121,6 +121,25 @@ data class AppSettings(
     val phoneTools: Boolean = false,
     /** The phone tools switched on, by gateway name (`PhoneTool.id`). Each starts off. */
     val phoneToolsOn: List<String> = emptyList(),
+    /**
+     * An approval or a question from a chat out of sight rings like an incoming call instead of a plain notification.
+     * Only with [phoneTools] on (see [ringsForAnswers]). It only ever rings this phone: the agent never calls anyone.
+     */
+    val phoneRings: Boolean = false,
+    /** Answering such a call puts Hermes on the line to ask it aloud, with no chat on screen; off, Answer opens the chat. */
+    val phoneRingsTalk: Boolean = true,
+    /**
+     * Such a call rings Herald on the watch too, where answering puts Hermes on the line in a live call. Only when the
+     * gateway talks live, since the watch has no chat to open instead.
+     */
+    val watchRings: Boolean = true,
+    /**
+     * Nothing rings from [quietFrom] to [quietUntil], minutes into the day on this phone's clock: the agent's calls
+     * don't get through, and an approval or a question is the usual notification (see `quietNow`).
+     */
+    val quietHours: Boolean = false,
+    val quietFrom: Int = 22 * 60,
+    val quietUntil: Int = 7 * 60,
     /** Ask GitHub, where the app is published, whether a newer release is out. */
     val checkForUpdates: Boolean = true,
     /** Ask for a fingerprint, face or the screen lock when Herald opens, and keep it out of Recents. */
