@@ -105,7 +105,13 @@ class AndroidVoiceRecorder : VoiceRecorder {
      * someone cuts in, the recording goes on from there until they pause.
      */
     @SuppressLint("MissingPermission") // Only during a voice chat, which asked for RECORD_AUDIO.
-    override suspend fun listenOver(bargeIn: BargeIn, playing: () -> Boolean, onTrip: () -> Unit, onLevel: (Float) -> Unit): Recording? =
+    override suspend fun listenOver(
+        bargeIn: BargeIn,
+        playing: () -> Boolean,
+        onTrip: () -> Unit,
+        onLevel: (Float) -> Unit,
+        onListening: () -> Unit,
+    ): Recording? =
         withContext(Dispatchers.IO) {
             finishRequested = false
             val minBuffer = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
@@ -138,6 +144,7 @@ class AndroidVoiceRecorder : VoiceRecorder {
                 effects.forEach { runCatching { it.enabled = true } }
                 record.startRecording()
                 if (record.recordingState != AudioRecord.RECORDSTATE_RECORDING) return@withContext null
+                onListening()
                 while (true) {
                     ensureActive()
                     val read = record.read(frame, 0, frame.size)

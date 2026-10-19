@@ -137,8 +137,15 @@ class StreamedSpeechTest {
 
         override fun finish() = Unit
 
-        override suspend fun listenOver(bargeIn: BargeIn, playing: () -> Boolean, onTrip: () -> Unit, onLevel: (Float) -> Unit): Recording? {
+        override suspend fun listenOver(
+            bargeIn: BargeIn,
+            playing: () -> Boolean,
+            onTrip: () -> Unit,
+            onLevel: (Float) -> Unit,
+            onListening: () -> Unit,
+        ): Recording? {
             listening.update { it + 1 }
+            onListening()
             if (heardCut) awaitCancellation()
             cut.await()
             heardCut = true
@@ -382,6 +389,23 @@ class StreamedSpeechTest {
         // The agent stops with the chat, and nothing is sent.
         setup.socket.calls.first { "session.interrupt" in it }
         assertEquals(1, setup.socket.submits.value.size)
+    }
+
+    /** Talk over it to cut in is offered only where the microphone listens over the voice, not wherever it's on. */
+    @Test
+    fun cuttingInIsntOfferedWhereTheMicrophoneDoesntListen() = runTest {
+        val stream = Stream()
+        val setup = chat(stream)
+
+        setup.socket.event("message.start")
+        setup.socket.event("message.delta", """{"text":"It was a long day. "}""")
+        stream.appended.first { it.isNotEmpty() }
+        stream.gateway.send(SpeechStreamEvent.Start(sampleRate = 24_000))
+        stream.gateway.send(SpeechStreamEvent.Audio(byteArrayOf(1, 0, 2, 0)))
+        setup.voice.chat.first { it.phase == VoicePhase.Speaking }
+        testScheduler.advanceUntilIdle()
+        assertFalse(setup.voice.chat.value.bargeIn)
+        setup.voice.stopChat()
     }
 
     /** A request that only ends in "stop" is a request, not the end of the chat. */

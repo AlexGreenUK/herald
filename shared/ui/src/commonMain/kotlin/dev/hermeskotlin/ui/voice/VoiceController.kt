@@ -176,6 +176,8 @@ class VoiceController(
     private var voiced = ""
     /** The chained chat's barge-in settings, read once per chat; null outside one. */
     private var bargeIn: Deferred<BargeInSettings>? = null
+    /** The microphone wouldn't listen over the voice in this chat; it isn't asked again. */
+    private var cantListenOver = false
 
     /**
      * [pauseMs] is how long a quiet spell after speech has to last before it's sent. [opener]: a call the agent placed,
@@ -232,8 +234,9 @@ class VoiceController(
     private suspend fun converseChained(session: ChatSession, gateway: GatewayUrl, profile: String?, pauseMs: Long, opener: CallReason?) = coroutineScope {
         appScope.launch { audio.ttsLease(gateway, active = true, profile) }
         // Read while the first listen goes on; it's needed once the first reply is on its way.
-        val settings = async { audio.bargeIn(gateway, profile).also { s -> _chat.update { it.copy(bargeIn = s.enabled) } } }
+        val settings = async { audio.bargeIn(gateway, profile) }
         bargeIn = settings
+        cantListenOver = false
         var failures = 0
         var cutIn: Interjection? = null
         try {
@@ -457,13 +460,14 @@ class VoiceController(
      */
     private suspend fun listenOver(activity: VoiceActivity, tripped: CompletableDeferred<Unit>): Recording? {
         val settings = bargeIn?.await() ?: return null
-        if (!settings.enabled) return null
-        _chat.update { it.copy(bargeIn = true) }
+        if (!settings.enabled || cantListenOver) return null
         val detector = BargeIn(settings, activity.silenceMs, roomFloor)
         val heard = try {
             recorder.listenOver(
                 detector,
                 playing = { playing.value },
+                // Offered once the microphone listens, not before.
+                onListening = { _chat.update { it.copy(bargeIn = true) } },
                 onTrip = { tripped.complete(Unit) },
                 onLevel = { level -> _chat.update { if (it.phase == VoicePhase.Listening) it.copy(level = level) else it } },
             )
@@ -474,8 +478,12 @@ class VoiceController(
         } finally {
             if (detector.roomFloor > 0f) roomFloor = detector.roomFloor
         }
-        // The microphone wouldn't listen over the voice: the reply goes on as without barge-in, and doesn't offer it.
-        if (heard == null) _chat.update { it.copy(bargeIn = false) }
+        // The microphone wouldn't listen over the voice: the reply goes on as without barge-in, and doesn't offer it,
+        // this turn or the next.
+        if (heard == null) {
+            cantListenOver = true
+            _chat.update { it.copy(bargeIn = false) }
+        }
         return heard
     }
 
