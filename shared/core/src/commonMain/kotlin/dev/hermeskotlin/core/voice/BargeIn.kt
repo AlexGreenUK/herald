@@ -247,7 +247,31 @@ fun isTtsEcho(transcript: String, spoken: String): Boolean {
     if (a.isEmpty() || b.isEmpty()) return false
     if (sequenceRatio(a, b) >= ECHO_SIMILARITY) return true
     if (a.size < MIN_ECHO_FRAGMENT || a.size >= b.size) return false
-    return (0..b.size - a.size).any { sequenceRatio(a, b.subList(it, it + a.size)) >= ECHO_SIMILARITY }
+    // A stretch can't match better than the letters it shares with the transcript (difflib's quick_ratio), counted as
+    // it slides along the reply; only a stretch that clears that is compared in full. Same answers, far less work.
+    val need = HashMap<Int, Int>()
+    a.forEach { need[it] = (need[it] ?: 0) + 1 }
+    val have = HashMap<Int, Int>()
+    var shared = 0
+    fun add(x: Int) {
+        val n = have[x] ?: 0
+        have[x] = n + 1
+        if (n < (need[x] ?: 0)) shared++
+    }
+    fun drop(x: Int) {
+        val n = have.getValue(x)
+        have[x] = n - 1
+        if (n <= (need[x] ?: 0)) shared--
+    }
+    for (j in a.indices) add(b[j])
+    for (start in 0..b.size - a.size) {
+        if (start > 0) {
+            drop(b[start - 1])
+            add(b[start + a.size - 1])
+        }
+        if (shared >= a.size * ECHO_SIMILARITY && sequenceRatio(a, b.subList(start, start + a.size)) >= ECHO_SIMILARITY) return true
+    }
+    return false
 }
 
 /** Code points, like Python's str, lowercased with the spaces collapsed. */

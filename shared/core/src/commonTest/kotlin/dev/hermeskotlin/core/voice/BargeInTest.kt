@@ -278,6 +278,15 @@ class BargeInTest {
         assertTrue(isTtsEcho("the build finished in 4 minutes and every test passed. do you want me to deploy it now", reply))
     }
 
+    /** Every stretch of a long reply is still looked at: the echo is found wherever it comes, and only there. */
+    @Test
+    fun anEchoIsFoundAnywhereInALongReply() {
+        val filler = "Then the job went on to the next stage and wrote its results to the shared drive. "
+        val reply = filler.repeat(60) + "The backup finished overnight and all three drives check out. " + filler.repeat(20)
+        assertTrue(isTtsEcho("the backup finished overnight and all three drives", reply))
+        assertFalse(isTtsEcho("Wait, check the staging logs first", reply))
+    }
+
     @Test
     fun someoneCuttingInIsNotAnEcho() {
         val reply = "The build finished in four minutes and every test passed. Do you want me to deploy it now?"
