@@ -161,6 +161,8 @@ class AndroidVoiceRecorder : VoiceRecorder {
                     when (bargeIn.onFrame(level, elapsed, playing())) {
                         BargeIn.Step.Tripped -> {
                             tripped = true
+                            // Send now counts from here: one asked before anyone cut in isn't about what they say.
+                            finishRequested = false
                             preRoll.forEach(pcm::write)
                             preRoll.clear()
                             onTrip()
@@ -173,7 +175,8 @@ class AndroidVoiceRecorder : VoiceRecorder {
                 }
             } finally {
                 runCatching { record.stop() }
-                effects.forEach { it.release() }
+                // One that throws mustn't keep the microphone from being let go.
+                effects.forEach { runCatching { it.release() } }
                 record.release()
                 onLevel(0f)
             }
