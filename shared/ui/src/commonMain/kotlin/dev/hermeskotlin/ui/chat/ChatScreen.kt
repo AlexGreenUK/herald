@@ -305,6 +305,7 @@ import dev.hermeskotlin.designsystem.typography
 import dev.hermeskotlin.designsystem.warning
 import dev.hermeskotlin.ui.LocalAppSettings
 import dev.hermeskotlin.ui.KeepScreenOn
+import dev.hermeskotlin.ui.rememberChangingConfigurations
 import dev.hermeskotlin.ui.components.EmptyState
 import dev.hermeskotlin.ui.components.messageTime
 import dev.hermeskotlin.ui.components.uses24HourClock
@@ -377,19 +378,22 @@ fun ChatScreen(
             viewModel.toggleDictation()
         }
     }
+    // Turning the phone rebuilds the screen without leaving it: the voice the chat owns plays on through it.
+    val changingConfigurations = rememberChangingConfigurations()
     // Dictation stops when the app leaves the screen; a voice chat goes on like a call (VoiceController.onBackground).
     LifecycleEventEffect(Lifecycle.Event.ON_STOP) {
-        viewModel.voice.onBackground()
+        if (!changingConfigurations()) viewModel.voice.onBackground()
         viewModel.onScreen(false)
         // What's on screen now counts as read, so a reply that comes in while away is new.
         viewModel.markLooked()
     }
     LifecycleEventEffect(Lifecycle.Event.ON_START) { viewModel.onScreen(true) }
-    // A room replacing the chat takes it off screen without a stop; a reply read aloud stops with it.
+    // A room replacing the chat takes it off screen without a stop; a reply read aloud stops with it, but not
+    // with a turn of the phone.
     DisposableEffect(viewModel) {
         onDispose {
             viewModel.onScreen(false)
-            viewModel.stopReading()
+            if (!changingConfigurations()) viewModel.stopReading()
         }
     }
     LaunchedEffect(viewModel) {
@@ -641,9 +645,10 @@ internal fun ChatView(
         // A reply read aloud plays to its end with the phone put down, and stops if it leaves the chat
         // (regenerated, or a reload that keys it anew), so its Stop is never gone while it plays.
         KeepScreenOn(readAloud.key != null)
-        LaunchedEffect(readAloud.key, state.messages) {
+        // A chat whose transcript hasn't loaded yet hasn't lost it.
+        LaunchedEffect(readAloud.key, state.messages, state.historyLoaded) {
             val key = readAloud.key ?: return@LaunchedEffect
-            if (state.messages.none { it.key == key }) actions.stopReading()
+            if (state.historyLoaded && state.messages.none { it.key == key }) actions.stopReading()
         }
         Column(
             Modifier
