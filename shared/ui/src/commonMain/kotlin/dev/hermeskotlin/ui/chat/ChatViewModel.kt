@@ -25,6 +25,7 @@ import dev.hermeskotlin.core.chat.LastChat
 import dev.hermeskotlin.core.chat.LastChatStore
 import dev.hermeskotlin.core.connection.ConnectionState
 import dev.hermeskotlin.core.connection.GatewayConnection
+import dev.hermeskotlin.core.gateway.GatewayUrl
 import dev.hermeskotlin.core.gateway.SavedGateway
 import dev.hermeskotlin.core.media.GatewayFile
 import dev.hermeskotlin.core.media.LinkPreview
@@ -59,6 +60,7 @@ import dev.hermeskotlin.core.voice.SpeechPlayer
 import dev.hermeskotlin.core.voice.SpeechStreams
 import dev.hermeskotlin.core.voice.VoiceRecorder
 import dev.hermeskotlin.core.voice.DeviceDictation
+import dev.hermeskotlin.core.voice.DeviceLock
 import dev.hermeskotlin.ui.voice.VoiceController
 import kotlinx.coroutines.CoroutineScope
 import dev.hermeskotlin.core.slash.SlashApi
@@ -202,12 +204,15 @@ class ChatViewModel(
     private val linkPreviews: LinkPreviews? = null,
     /** Where the voice of replies read aloud is kept; in memory without one. */
     readAloudVoices: ReadAloudVoices? = null,
+    /** An approval is only taken by voice while the phone is unlocked. */
+    deviceLock: DeviceLock = DeviceLock.None,
 ) : ViewModel(), ChatActions {
 
     /** Dictation, voice chat and Read aloud for the open chat. */
     val voice = VoiceController(
         audioApi, recorder, player, viewModelScope, appScope, voiceKeepAlive, deviceDictation,
         speechStreams = speechStreams,
+        deviceLock = deviceLock,
         liveCalls = liveCalls,
         readAloudVoices = readAloudVoices ?: InMemoryReadAloudVoices(),
     )
@@ -704,10 +709,7 @@ class ChatViewModel(
 
     internal suspend fun previewFile(file: GatewayFile, owner: ChatTarget?): FileLoad {
         val gateway = owner?.gateway?.gatewayUrl ?: return FileLoad.Failed("Not connected to a gateway.")
-        return when (val result = media.readText(gateway, file.path, owner.profile)) {
-            is ApiResult.Success -> FileLoad.Ready(result.value)
-            else -> FileLoad.Failed(fileError(result))
-        }
+        return media.fileLoad(gateway, file, owner.profile)
     }
 
     /**
@@ -718,10 +720,7 @@ class ChatViewModel(
 
     internal suspend fun downloadFile(file: GatewayFile, owner: ChatTarget?): FileDownload {
         val gateway = owner?.gateway?.gatewayUrl ?: return FileDownload.Failed("Not connected to a gateway.")
-        return when (val result = media.download(gateway, file.path, owner.profile)) {
-            is ApiResult.Success -> FileDownload.Ready(result.value)
-            else -> FileDownload.Failed(fileError(result, whole = true))
-        }
+        return media.fileDownload(gateway, file, owner.profile)
     }
 
     /** Adds picked files to the composer tray, up to [OutgoingAttachment.MAX_COUNT]. */
@@ -1267,6 +1266,20 @@ class ChatViewModel(
         const val VOICE_CONNECT_WAIT_MS = 30_000L
     }
 }
+
+/** The start of gateway [file] for its viewer, read through [profile]; the reason in plain words when it can't be had. */
+internal suspend fun MediaApi.fileLoad(gateway: GatewayUrl, file: GatewayFile, profile: String?): FileLoad =
+    when (val result = readText(gateway, file.path, profile)) {
+        is ApiResult.Success -> FileLoad.Ready(result.value)
+        else -> FileLoad.Failed(fileError(result))
+    }
+
+/** The whole of gateway [file], read through [profile]: for Save, Share and a linked picture. */
+internal suspend fun MediaApi.fileDownload(gateway: GatewayUrl, file: GatewayFile, profile: String?): FileDownload =
+    when (val result = download(gateway, file.path, profile)) {
+        is ApiResult.Success -> FileDownload.Ready(result.value)
+        else -> FileDownload.Failed(fileError(result, whole = true))
+    }
 
 /**
  * Why a gateway file couldn't be read, in the words the file viewer shows. [whole] is for the whole file

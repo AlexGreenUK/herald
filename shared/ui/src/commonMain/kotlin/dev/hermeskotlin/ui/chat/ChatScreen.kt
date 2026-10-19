@@ -23,7 +23,6 @@ import androidx.compose.animation.core.spring
 import androidx.compose.runtime.Stable
 import dev.hermeskotlin.core.chat.linkFileUris
 import dev.hermeskotlin.core.media.GatewayFile
-import dev.hermeskotlin.core.media.GatewayFileKind
 import dev.hermeskotlin.core.media.LinkPreview
 import dev.hermeskotlin.designsystem.components.LocalFileLinks
 import kotlinx.coroutines.flow.collectLatest
@@ -469,14 +468,7 @@ fun ChatScreen(
         onOpenPets = { petsOpen = true },
         onOpenControl = viewModel::openControl,
         onViewImage = { viewing = it },
-        onOpenFile = { file ->
-            // A picture opens in the viewer, like one the reply delivered.
-            if (file.kind == GatewayFileKind.Image) {
-                viewing = ViewerImage(file.name, fetch = { viewModel.downloadFile(file) })
-            } else {
-                previewing = file
-            }
-        },
+        onOpenFile = { previewing = it },
         onNotice = { notice = it },
         wallpaper = rememberChatWallpaper(),
         place = target.gateway.label,
@@ -530,7 +522,8 @@ fun ChatScreen(
         onAction = viewModel::runControl,
         onDismiss = { controlOpen = false },
     )
-    FileViewer(
+    // A linked picture opens in the picture viewer, like one the reply delivered.
+    GatewayFileViewer(
         file = previewing,
         onDismiss = { previewing = null },
         load = viewModel::previewFile,
