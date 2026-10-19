@@ -31,6 +31,7 @@ import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.X
 import com.composeunstyled.Text
 import com.composeunstyled.theme.Theme
+import dev.hermeskotlin.core.bots.Bot
 import dev.hermeskotlin.core.media.GatewayFile
 import dev.hermeskotlin.core.rooms.DesktopLine
 import dev.hermeskotlin.core.rooms.DesktopRoom
@@ -166,3 +167,10 @@ private fun DesktopLine.toRoomLine(index: Int, key: String): RoomLine.Message = 
     profile = speaker.takeUnless { fromUser },
     createdAt = at?.div(1000.0),
 )
+
+/**
+ * The profile a Desktop room's file is read through: only one of this gateway's [bots]. The mirror doesn't
+ * say which gateway a member ran on, and Desktop can run a room's members elsewhere, where the same path is
+ * another file; a name the roster doesn't know reads nothing.
+ */
+internal fun desktopFileOwner(speaker: String?, bots: List<Bot>): String? = speaker?.takeIf { name -> bots.any { it.name == name } }

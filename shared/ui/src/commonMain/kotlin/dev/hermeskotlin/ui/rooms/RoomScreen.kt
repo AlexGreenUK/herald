@@ -49,6 +49,8 @@ import dev.hermeskotlin.ui.chat.MentionSuggestions
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -78,7 +80,6 @@ import dev.hermeskotlin.core.chat.linkFileUris
 import dev.hermeskotlin.core.gateway.GatewayUrl
 import dev.hermeskotlin.core.media.GatewayFile
 import dev.hermeskotlin.core.media.MediaApi
-import dev.hermeskotlin.core.network.ApiResult
 import dev.hermeskotlin.core.rooms.Room
 import dev.hermeskotlin.core.rooms.RoomLine
 import dev.hermeskotlin.core.rooms.RoomPendingAction
@@ -116,7 +117,8 @@ import dev.hermeskotlin.ui.chat.BarButton
 import dev.hermeskotlin.ui.chat.MessageTimeLabel
 import dev.hermeskotlin.ui.chat.FileLoad
 import dev.hermeskotlin.ui.chat.FileDownload
-import dev.hermeskotlin.ui.chat.fileError
+import dev.hermeskotlin.ui.chat.fileDownload
+import dev.hermeskotlin.ui.chat.fileLoad
 import dev.hermeskotlin.ui.chat.SendButton
 import dev.hermeskotlin.ui.chat.BarStatus
 import dev.hermeskotlin.ui.chat.SendIcon
@@ -354,6 +356,9 @@ internal fun MemberLine(line: RoomLine.Message, continued: Boolean, faces: BotFa
     val bot = remember(line.profile, faces) { faces.roomBot(line.profile) }
     val tint = bot.roomColor()
     val name = line.speaker ?: bot.label
+    // Kept across recompositions: a new handler would redraw the whole message each time the room updates.
+    val open by rememberUpdatedState(onOpenFile)
+    val fileLinks = remember(line.profile) { { link: String -> roomFileLink(link, line.profile, open) } }
     val shape = RoundedCornerShape(topStart = 6.dp, topEnd = 20.dp, bottomEnd = 20.dp, bottomStart = 20.dp)
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         Box(Modifier.size(FACE)) {
@@ -386,9 +391,7 @@ internal fun MemberLine(line: RoomLine.Message, continued: Boolean, faces: BotFa
                         .padding(horizontal = 13.dp, vertical = 9.dp),
                 ) {
                     SelectionContainer {
-                        CompositionLocalProvider(LocalFileLinks provides { link ->
-                            GatewayFile.fromLink(link)?.let { onOpenFile(line.profile, it) }
-                        }) {
+                        CompositionLocalProvider(LocalFileLinks provides fileLinks) {
                             MarkdownText(remember(line.text) { linkFileUris(line.text) })
                         }
                     }
@@ -555,21 +558,31 @@ private fun RoomMentions(room: OpenRoom, viewModel: RoomActions, faces: BotFaces
 /** How big a member's face is beside its lines. */
 private val FACE = 30.dp
 
+/** Opens the gateway file [link] points at as one of [profile]'s; a web link or anything else is left alone. */
+internal fun roomFileLink(link: String, profile: String?, open: (String?, GatewayFile) -> Unit) {
+    GatewayFile.fromLink(link)?.let { open(profile, it) }
+}
+
 /** A room file keeps the gateway and speaking bot that own it, including for links inside its preview. */
 internal data class RoomFileLink(val gateway: GatewayUrl, val profile: String?, val file: GatewayFile) {
-    suspend fun preview(media: MediaApi, linked: GatewayFile = file): FileLoad {
-        if (profile.isNullOrBlank()) return FileLoad.Failed("The gateway didn't identify which bot owns this file.")
-        return when (val result = media.readText(gateway, linked.path, profile)) {
-            is ApiResult.Success -> FileLoad.Ready(result.value)
-            else -> FileLoad.Failed(fileError(result))
-        }
-    }
+    suspend fun preview(media: MediaApi, linked: GatewayFile = file): FileLoad =
+        if (profile.isNullOrBlank()) FileLoad.Failed(NO_OWNER) else media.fileLoad(gateway, linked, profile)
 
-    suspend fun download(media: MediaApi, linked: GatewayFile = file): FileDownload {
-        if (profile.isNullOrBlank()) return FileDownload.Failed("The gateway didn't identify which bot owns this file.")
-        return when (val result = media.download(gateway, linked.path, profile)) {
-            is ApiResult.Success -> FileDownload.Ready(result.value)
-            else -> FileDownload.Failed(fileError(result, whole = true))
-        }
+    suspend fun download(media: MediaApi, linked: GatewayFile = file): FileDownload =
+        if (profile.isNullOrBlank()) FileDownload.Failed(NO_OWNER) else media.fileDownload(gateway, linked, profile)
+
+    companion object {
+        /** No request goes out without an owner: another profile's file at the same path is not this one. */
+        const val NO_OWNER = "Herald can't tell which of this gateway's bots owns this file."
+
+        /** Kept across rotation and a folding screen, so an open file stays open. */
+        val Saver = Saver<RoomFileLink?, List<Any>>(
+            save = { link -> link?.let { arrayListOf(it.gateway.value, it.profile.orEmpty(), it.file.path, it.file.line ?: 0) } },
+            restore = { saved ->
+                GatewayUrl.parseOrNull(saved[0] as String)?.let { gateway ->
+                    RoomFileLink(gateway, (saved[1] as String).ifEmpty { null }, GatewayFile(saved[2] as String, (saved[3] as Int).takeIf { it > 0 }))
+                }
+            },
+        )
     }
 }

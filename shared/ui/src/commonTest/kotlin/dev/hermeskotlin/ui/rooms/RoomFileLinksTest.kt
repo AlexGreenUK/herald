@@ -1,5 +1,7 @@
 package dev.hermeskotlin.ui.rooms
 
+import androidx.compose.runtime.saveable.SaverScope
+import dev.hermeskotlin.core.bots.Bot
 import dev.hermeskotlin.core.gateway.GatewayUrl
 import dev.hermeskotlin.core.media.GatewayFile
 import dev.hermeskotlin.core.media.MediaApi
@@ -14,8 +16,41 @@ import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNull
 
 class RoomFileLinksTest {
+    @Test
+    fun aLineOpensItsGatewayFilesAsItsOwnBotAndLeavesWebLinksAlone() {
+        val opened = mutableListOf<Pair<String?, GatewayFile>>()
+        val open = { profile: String?, file: GatewayFile -> opened += profile to file }
+        roomFileLink("file:///output/report.md", "scribe", open)
+        roomFileLink("/output/data.csv#L3", "ops", open)
+        roomFileLink("https://example.com/report.md", "scribe", open)
+        roomFileLink("mailto:someone@example.com", "scribe", open)
+        assertEquals(listOf<Pair<String?, GatewayFile>>("scribe" to GatewayFile("/output/report.md"), "ops" to GatewayFile("/output/data.csv", 3)), opened)
+    }
+
+    @Test
+    fun aDesktopMemberReadsFilesOnlyAsABotOfThisGateway() {
+        val bots = listOf(Bot("default", isDefault = true), Bot("scribe"))
+        assertEquals("scribe", desktopFileOwner("scribe", bots))
+        assertEquals("default", desktopFileOwner("default", bots))
+        assertNull(desktopFileOwner("elsewhere", bots))
+        assertNull(desktopFileOwner(null, bots))
+        assertNull(desktopFileOwner("scribe", emptyList()))
+    }
+
+    @Test
+    fun anOpenRoomFileSurvivesBeingSavedAndRestored() {
+        val scope = SaverScope { true }
+        val link = RoomFileLink(first, "scribe", GatewayFile("/output/data.csv", 12))
+        val saved = with(RoomFileLink.Saver) { scope.save(link) }!!
+        assertEquals(link, RoomFileLink.Saver.restore(saved))
+        val noLine = RoomFileLink(first, null, file)
+        assertEquals(noLine, RoomFileLink.Saver.restore(with(RoomFileLink.Saver) { scope.save(noLine) }!!))
+        assertNull(with(RoomFileLink.Saver) { scope.save(null) })
+    }
+
     private val file = GatewayFile("/output/report.md")
     private val first = GatewayUrl.parse("https://first.example")
     private val second = GatewayUrl.parse("https://second.example")
