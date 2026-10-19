@@ -58,7 +58,7 @@ class BargeIn(
     var tripped = false
         private set
 
-    private val floorSamples = ArrayDeque<Float>()
+    private val floorSamples = Levels(FLOOR_SAMPLES)
     private var floor = 0f
 
     init {
@@ -68,7 +68,7 @@ class BargeIn(
 
     /** The room's quiet floor so far, for the next listen in the chat; 0 when it hasn't heard the room quiet. */
     val roomFloor: Float get() = floor
-    private val bleedSamples = ArrayDeque<Float>()
+    private val bleedSamples = Levels(FLOOR_SAMPLES)
     private var bleed = 0f
     private var calibratedSince = -1L
     private var floorLocked = false
@@ -124,10 +124,17 @@ class BargeIn(
         while (recent.isNotEmpty() && nowMs - recent.first().first > SUSTAINED_OVER_ECHO_MS) recent.removeFirst()
         // Over a loud echo its syllables can poke above the bar; someone talking stays there.
         val hold = if (playing && trigger > playingBar()) SUSTAINED_OVER_ECHO_MS else SUSTAINED_MS
-        val held = recent.filter { nowMs - it.first <= hold }
-        val span = nowMs - held.first().first
-        val aboveCount = held.count { it.second }
-        if (above && span >= hold * SUSTAINED_MAJORITY && aboveCount >= held.size * SUSTAINED_MAJORITY) {
+        // Counted in place, every frame: the frames within the hold, when the first of them came, and those above the bar.
+        var since = nowMs
+        var frames = 0
+        var aboveCount = 0
+        for ((at, over) in recent) {
+            if (nowMs - at > hold) continue
+            if (frames++ == 0) since = at
+            if (over) aboveCount++
+        }
+        val span = nowMs - since
+        if (above && span >= hold * SUSTAINED_MAJORITY && aboveCount >= frames * SUSTAINED_MAJORITY) {
             tripped = true
             trippedAt = nowMs
             return Step.Tripped
@@ -149,8 +156,14 @@ class BargeIn(
 
     /** Someone was talking just before [nowMs]: most of the last [TALKING_MS] stood over the bar. */
     private fun talkingAt(nowMs: Long): Boolean {
-        val last = recent.filter { nowMs - it.first <= TALKING_MS }
-        return last.size >= 3 && last.count { it.second } >= last.size * SUSTAINED_MAJORITY
+        var frames = 0
+        var aboveCount = 0
+        for ((at, over) in recent) {
+            if (nowMs - at > TALKING_MS) continue
+            frames++
+            if (over) aboveCount++
+        }
+        return frames >= 3 && aboveCount >= frames * SUSTAINED_MAJORITY
     }
 
     /**
@@ -168,16 +181,32 @@ class BargeIn(
     }
 
     private fun addBleed(level: Float) {
-        bleedSamples.addLast(level)
-        if (bleedSamples.size > FLOOR_SAMPLES) bleedSamples.removeFirst()
+        bleedSamples.add(level)
         // Its louder syllables, not its average: the voice's peaks are what could pass for someone talking.
-        bleed = bleedSamples.sorted()[(bleedSamples.size * BLEED_PERCENTILE).toInt().coerceAtMost(bleedSamples.size - 1)]
+        bleed = bleedSamples[(bleedSamples.size * BLEED_PERCENTILE).toInt().coerceAtMost(bleedSamples.size - 1)]
     }
 
     private fun addFloor(level: Float) {
-        floorSamples.addLast(level)
-        if (floorSamples.size > FLOOR_SAMPLES) floorSamples.removeFirst()
-        floor = floorSamples.sorted()[floorSamples.size / 2]
+        floorSamples.add(level)
+        floor = floorSamples[floorSamples.size / 2]
+    }
+
+    /** The last [capacity] levels, kept sorted as they come, so a percentile needs no sort on every frame. */
+    private class Levels(private val capacity: Int) {
+        private val arrived = ArrayDeque<Float>()
+        private val sorted = ArrayList<Float>()
+        val size: Int get() = sorted.size
+
+        fun add(level: Float) {
+            arrived.addLast(level)
+            sorted.add(slot(level), level)
+            if (arrived.size > capacity) sorted.removeAt(slot(arrived.removeFirst()))
+        }
+
+        operator fun get(index: Int): Float = sorted[index]
+
+        /** Where [level] is, or goes. */
+        private fun slot(level: Float) = sorted.binarySearch(level).let { if (it < 0) -it - 1 else it }
     }
 
     enum class Step {
