@@ -169,8 +169,9 @@ private fun DesktopLine.toRoomLine(index: Int, key: String): RoomLine.Message = 
 )
 
 /**
- * The profile a Desktop room's file is read through: only one of this gateway's [bots]. The mirror doesn't
- * say which gateway a member ran on, and Desktop can run a room's members elsewhere, where the same path is
- * another file; a name the roster doesn't know reads nothing.
+ * The profile a Desktop room's file is read through: a member whose name is one of this gateway's [bots].
+ * The mirror doesn't say which gateway a member ran on, so a name the roster doesn't know reads nothing.
+ * A name is all there is to go on: a member that ran elsewhere under a name this gateway also has (such as
+ * "default") still reads this gateway's file at that path.
  */
 internal fun desktopFileOwner(speaker: String?, bots: List<Bot>): String? = speaker?.takeIf { name -> bots.any { it.name == name } }

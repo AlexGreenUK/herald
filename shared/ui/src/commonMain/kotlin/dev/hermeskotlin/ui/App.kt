@@ -50,7 +50,7 @@ import dev.hermeskotlin.ui.rooms.RoomScreen
 import dev.hermeskotlin.ui.rooms.DesktopRoomScreen
 import dev.hermeskotlin.ui.rooms.RoomsViewModel
 import dev.hermeskotlin.ui.rooms.RoomFileLink
-import dev.hermeskotlin.ui.rooms.desktopFileOwner
+import dev.hermeskotlin.core.media.GatewayFile
 import dev.hermeskotlin.core.media.MediaApi
 import dev.hermeskotlin.ui.chat.GatewayFileViewer
 import dev.hermeskotlin.ui.chat.ChatViewModel
@@ -236,8 +236,12 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
     // A Desktop room open from the sidebar's "On Desktop" group: read-only, so it is only local state.
     var openDesktopRoom by rememberSaveable { mutableStateOf<String?>(null) }
     val desktopRoom = openDesktopRoom?.let { key -> roster.desktopRooms.firstOrNull { it.key == key } }
-    val roomKey = openRoom?.room?.roomId to desktopRoom?.key
+    // A file a room's bot linked to, open over the room; it closes when the gateway or the room changes.
+    val roomKey = RoomFileLink.roomKey(openRoom?.room?.roomId, desktopRoom?.key)
     var roomFile by rememberSaveable(route.gateway.url, roomKey, stateSaver = RoomFileLink.Saver) { mutableStateOf<RoomFileLink?>(null) }
+    val openRoomFile: (String?, GatewayFile) -> Unit = { profile, file ->
+        if (roomKey != null) roomFile = RoomFileLink(route.gateway.gatewayUrl, roomKey, profile, file)
+    }
     // The bot whose chat is open, as the roster knows it now.
     val openBot = route.target.bot?.let { open -> roster.all.firstOrNull { it.name == open.name } }
     var startOver by remember { mutableStateOf<Bot?>(null) }
@@ -462,15 +466,13 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
                     viewModel = rooms,
                     onOpenSidebar = { scope.launch { sidebar.toggle() } },
                     onBack = rooms::close,
-                    onOpenFile = { profile, file -> roomFile = RoomFileLink(route.gateway.gatewayUrl, profile, file) },
+                    onOpenFile = openRoomFile,
                 )
                 desktopRoom != null -> DesktopRoomScreen(
                     room = desktopRoom,
                     onOpenSidebar = { scope.launch { sidebar.toggle() } },
                     onBack = { openDesktopRoom = null },
-                    onOpenFile = { speaker, file ->
-                        roomFile = RoomFileLink(route.gateway.gatewayUrl, desktopFileOwner(speaker, roster.all), file)
-                    },
+                    onOpenFile = openRoomFile,
                 )
                 else -> ChatScreen(
                     target = route.target,
@@ -500,7 +502,7 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
         }
     }
 
-    roomFile?.let { target ->
+    roomFile?.shownIn(roomKey, roster.all)?.let { target ->
         // Keyed by the whole link: the viewer caches by path, and the same path is another file for another bot.
         key(target) {
             val media = koinInject<MediaApi>()

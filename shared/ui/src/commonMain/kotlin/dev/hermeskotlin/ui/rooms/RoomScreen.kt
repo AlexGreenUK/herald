@@ -39,6 +39,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
+import dev.hermeskotlin.core.bots.Bot
 import dev.hermeskotlin.core.bots.mentionQuery
 import dev.hermeskotlin.core.rooms.mentionable
 import dev.hermeskotlin.core.rooms.mentionsEveryone
@@ -563,8 +564,22 @@ internal fun roomFileLink(link: String, profile: String?, open: (String?, Gatewa
     GatewayFile.fromLink(link)?.let { open(profile, it) }
 }
 
-/** A room file keeps the gateway and speaking bot that own it, including for links inside its preview. */
-internal data class RoomFileLink(val gateway: GatewayUrl, val profile: String?, val file: GatewayFile) {
+/**
+ * A room file keeps the gateway, the room and the speaking bot that own it, including for links inside its
+ * preview. In a Desktop room [profile] is the member's name, and [shownIn] decides whether it is a bot here.
+ */
+internal data class RoomFileLink(val gateway: GatewayUrl, val room: String, val profile: String?, val file: GatewayFile) {
+    /**
+     * The link as the open [openRoom] shows it, or null when another room (or none) is open: a file saved
+     * across process death can come back before its room does. A Desktop member's owner is looked up in
+     * [bots] each time, so a tap made while the roster was still loading finds it once the roster arrives.
+     */
+    fun shownIn(openRoom: String?, bots: List<Bot>): RoomFileLink? = when {
+        room != openRoom -> null
+        room.startsWith(DESKTOP) -> copy(profile = desktopFileOwner(profile, bots))
+        else -> this
+    }
+
     suspend fun preview(media: MediaApi, linked: GatewayFile = file): FileLoad =
         if (profile.isNullOrBlank()) FileLoad.Failed(NO_OWNER) else media.fileLoad(gateway, linked, profile)
 
@@ -575,12 +590,20 @@ internal data class RoomFileLink(val gateway: GatewayUrl, val profile: String?, 
         /** No request goes out without an owner: another profile's file at the same path is not this one. */
         const val NO_OWNER = "Herald can't tell which of this gateway's bots owns this file."
 
+        private const val HOSTED = "hosted:"
+        private const val DESKTOP = "desktop:"
+
+        /** The key [room] takes for the open room: a hosted room by its id, a Desktop room by its mirror key. */
+        fun roomKey(hostedRoomId: String?, desktopRoomKey: String?): String? =
+            hostedRoomId?.let { HOSTED + it } ?: desktopRoomKey?.let { DESKTOP + it }
+
         /** Kept across rotation and a folding screen, so an open file stays open. */
         val Saver = Saver<RoomFileLink?, List<Any>>(
-            save = { link -> link?.let { arrayListOf(it.gateway.value, it.profile.orEmpty(), it.file.path, it.file.line ?: 0) } },
+            save = { link -> link?.let { arrayListOf(it.gateway.value, it.room, it.profile.orEmpty(), it.file.path, it.file.line ?: 0) } },
             restore = { saved ->
                 GatewayUrl.parseOrNull(saved[0] as String)?.let { gateway ->
-                    RoomFileLink(gateway, (saved[1] as String).ifEmpty { null }, GatewayFile(saved[2] as String, (saved[3] as Int).takeIf { it > 0 }))
+                    val file = GatewayFile(saved[3] as String, (saved[4] as Int).takeIf { it > 0 })
+                    RoomFileLink(gateway, saved[1] as String, (saved[2] as String).ifEmpty { null }, file)
                 }
             },
         )
