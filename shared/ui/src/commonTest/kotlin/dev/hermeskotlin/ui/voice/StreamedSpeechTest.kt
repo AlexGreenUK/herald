@@ -329,6 +329,8 @@ class StreamedSpeechTest {
 
         setup.socket.submits.first { it.size == 2 }
         assertEquals("Never mind that, check the weather", setup.socket.submits.value[1]["params"]!!.jsonObject["text"]!!.jsonPrimitive.content)
+        // Stopped once, by the prompt itself: a second stop could land after it and stop the new turn.
+        assertEquals(1, setup.socket.calls.value.count { it == "session.interrupt" })
         setup.voice.stopChat()
     }
 

@@ -522,8 +522,11 @@ class VoiceController(
             reply.cancelAndJoin()
             playing.value = false
             _chat.update { it.copy(working = null) }
-            if (session.state.value.running) appScope.launch { session.interrupt() }
-            return if (stop && (!someone || isVoiceStopCommand(transcript))) Turn.End else Turn.CutIn(Interjection(transcript))
+            val end = stop && (!someone || isVoiceStopCommand(transcript))
+            // A cut-in's prompt stops the turn itself (stopAndSubmit), in order: a second stop sent alongside could land
+            // after it and stop the new turn, or drop the prompt where it was queued behind the old one.
+            if (end && session.state.value.running) appScope.launch { session.interrupt() }
+            return if (end) Turn.End else Turn.CutIn(Interjection(transcript))
         } finally {
             player.hold(false)
         }
