@@ -317,9 +317,15 @@ class AndroidSpeechPlayer(private val context: Context) : SpeechPlayer {
                 val left = (written.get() - played()).coerceAtLeast(0)
                 // Nor can it tell sound from silence any more: what's showing now stays until the end.
                 sound.cancelAndJoin()
-                // Stopping a streaming track plays out what it holds first.
+                // Stopping a streaming track plays out what it holds first. Held meanwhile, it pauses where it is and
+                // goes on when let go, so the wait does too.
                 track.stop()
-                delay(left * 1000 / sampleRate + DRAIN_SLACK_MS)
+                var draining = left * 1000 / sampleRate + DRAIN_SLACK_MS
+                while (draining > 0) {
+                    val step = min(draining, DRAIN_STEP_MS)
+                    delay(step)
+                    if (!synchronized(lock) { holding }) draining -= step
+                }
             }
         } finally {
             withContext(NonCancellable) { sound.cancelAndJoin() }
@@ -383,5 +389,7 @@ class AndroidSpeechPlayer(private val context: Context) : SpeechPlayer {
         const val QUIET_MS = 600L
         const val WRITE_WAIT_MS = 10L
         const val DRAIN_SLACK_MS = 400L
+        /** How often the drain looks whether it's held. */
+        const val DRAIN_STEP_MS = 50L
     }
 }
