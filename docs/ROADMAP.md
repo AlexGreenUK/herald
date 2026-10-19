@@ -233,6 +233,7 @@ uses. The protocol itself is described in [hermes-protocol-research.md](hermes-p
 - [ ] "Ask <bot>" by voice, a Settings switch for bot notifications
 - [x] Rooms: Desktop rooms read-only from the `hermes-bots-groups` mirror; hosted rooms (`groups.*`) to take part
 - [x] Rooms: select message text to copy a passage, or copy a bot's whole message with its Markdown; also in read-only Desktop rooms
+- [x] Rooms: gateway file links open in the existing viewer, with Save and Share through the speaking bot's profile
 - [x] Rooms: scroll up for older messages (`groups.log` read back a window at a time, the reader's place kept)
 - [x] Rooms: notifications for bots' lines while Herald is out of sight (one conversation per room, a tap opens it), and an unread dot on room rows
 - [x] Rooms: @mention a member (`@` lists Everyone and the members with their faces; the composer says who answers first, by the gateway's own rule)
