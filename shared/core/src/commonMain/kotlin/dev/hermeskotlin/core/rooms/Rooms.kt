@@ -2,12 +2,12 @@ package dev.hermeskotlin.core.rooms
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.builtins.ListSerializer
-import dev.hermeskotlin.core.network.HermesJson
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
 
 /**
@@ -30,6 +30,9 @@ data class RoomAttachment(
         const val MAX_COUNT = 8
         const val MAX_BYTES = 15_000_000
         const val MAX_TOTAL_BYTES = 25_000_000
+
+        /** The limits as the composer states them; the gateway counts megabytes in millions of bytes. */
+        val LIMITS = "Up to $MAX_COUNT files, ${MAX_BYTES / 1_000_000} MB each, ${MAX_TOTAL_BYTES / 1_000_000} MB per message"
     }
 }
 
@@ -166,10 +169,24 @@ internal fun JsonObject.payloadText(key: String): String? = (this[key] as? JsonP
 /** The words of a message event; null when it carries none. */
 val RoomEvent.messageText: String? get() = payload.payloadText("text")
 
-/** User attachments are part of the durable log, including when no text accompanied them. */
-val RoomEvent.messageAttachments: List<RoomAttachment> get() = payload["attachments"]?.let {
-    runCatching { HermesJson.decodeFromJsonElement(ListSerializer(RoomAttachment.serializer()), it) }.getOrNull()
-}.orEmpty()
+/**
+ * User attachments are part of the durable log, including when no text accompanied them. Each entry is
+ * read on its own: one odd entry loses only itself, never the message's other files.
+ */
+val RoomEvent.messageAttachments: List<RoomAttachment> get() =
+    (payload["attachments"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonObject)?.roomAttachment() }
+
+/** A manifest entry; only its id is required, the rest has a stand-in for drawing it. */
+private fun JsonObject.roomAttachment(): RoomAttachment? {
+    val id = payloadText("attachment_id")?.takeIf { it.isNotBlank() } ?: return null
+    return RoomAttachment(
+        attachmentId = id,
+        kind = payloadText("kind") ?: "file",
+        name = payloadText("name")?.takeIf { it.isNotBlank() } ?: "Attachment",
+        mime = payloadText("mime") ?: "application/octet-stream",
+        size = (this["size"] as? JsonPrimitive)?.doubleOrNull?.toInt() ?: 0,
+    )
+}
 
 /** A payload integer, or null when the key is absent or not a number. */
 internal fun JsonObject.payloadInt(key: String): Int? = (this[key] as? JsonPrimitive)?.intOrNull

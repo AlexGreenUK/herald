@@ -28,6 +28,18 @@ class RoomsTest {
     }
 
     @Test
+    fun oneOddAttachmentEntryLosesOnlyItself() {
+        val payload = kotlinx.serialization.json.Json.parseToJsonElement(
+            """{"attachments":[{"kind":"file","name":"no-id.csv"},{"attachment_id":"att_two","kind":"image","name":"photo.jpg","mime":"image/jpeg","size":3.0},{"attachment_id":"att_three"},"junk"]}""",
+        ) as JsonObject
+        val line = roomLine(event(1, "message.user", payload), members) as RoomLine.Message
+        assertEquals("", line.text)
+        assertEquals(listOf("att_two", "att_three"), line.attachments.map { it.attachmentId })
+        assertEquals(3, line.attachments[0].size)
+        assertEquals("Attachment", line.attachments[1].name)
+    }
+
+    @Test
     fun theTranscriptDrawsMessagesFailuresAndRenamesAndHidesTheMachinery() {
         val user = event(
             1, "message.user",
