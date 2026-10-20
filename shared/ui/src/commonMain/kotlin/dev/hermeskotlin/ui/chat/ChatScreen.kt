@@ -165,6 +165,7 @@ import dev.hermeskotlin.designsystem.radiusXLarge
 import androidx.compose.ui.semantics.Role
 import dev.hermeskotlin.designsystem.surface2
 import com.composables.icons.lucide.CloudOff
+import com.composables.icons.lucide.Lightbulb
 import com.composables.icons.lucide.ListEnd
 import com.composables.icons.lucide.Info
 import dev.hermeskotlin.core.chat.MESSAGE_AGENT_TOOL
@@ -443,6 +444,7 @@ fun ChatScreen(
         dictation = viewModel.voice.dictation.collectAsStateWithLifecycle().value,
         readAloud = viewModel.voice.reading.collectAsStateWithLifecycle().value,
         suggestions = viewModel.suggestions.collectAsStateWithLifecycle().value,
+        suggestedReply = viewModel.nextPrompt.suggestion.collectAsStateWithLifecycle().value,
         mentions = mentions,
         onMention = { bot ->
             val typed = mention ?: return@ChatView
@@ -583,6 +585,8 @@ internal fun ChatView(
     /** The reply being read aloud, and why the last one couldn't be. */
     readAloud: ReadAloudState = ReadAloudState(),
     suggestions: List<SlashSuggestion>,
+    /** The message the gateway's Next Prompt plugin expects next, shown over an empty composer. */
+    suggestedReply: SuggestedReply? = null,
     /** Bots matching the `@word` being typed, to pick one to mention. */
     mentions: List<Bot> = emptyList(),
     onMention: (Bot) -> Unit = {},
@@ -812,6 +816,7 @@ internal fun ChatView(
                         dictation = dictation,
                         readAloud = readAloud,
                         suggestions = suggestions,
+                        suggestedReply = suggestedReply,
                         mentions = mentions,
                         onMention = onMention,
                         notice = notice,
@@ -883,6 +888,7 @@ private fun ColumnScope.Dock(
     dictation: DictationState,
     readAloud: ReadAloudState,
     suggestions: List<SlashSuggestion>,
+    suggestedReply: SuggestedReply?,
     mentions: List<Bot>,
     onMention: (Bot) -> Unit,
     notice: String?,
@@ -972,6 +978,21 @@ private fun ColumnScope.Dock(
                 hazeState,
                 onPick = { choice -> choice.bot?.let(onMention) },
             )
+        }
+        // Over an empty composer only: once the user types, their own words are the next message.
+        val replyShown = suggestedReply != null && connected && !state.running && !editing && actions.composer.text.isEmpty()
+        AnimatedVisibility(visible = replyShown, enter = fadeIn(), exit = fadeOut()) {
+            // Kept through the fade-out, so the chip doesn't empty before it leaves.
+            var shown by remember { mutableStateOf(suggestedReply) }
+            if (suggestedReply != null) shown = suggestedReply
+            shown?.let { reply ->
+                SuggestedReplyChip(
+                    reply.text,
+                    hazeState,
+                    onUse = { actions.useSuggestedReply(reply) },
+                    onDismiss = actions::dismissSuggestedReply,
+                )
+            }
         }
         if (editing) {
             Banner(
@@ -2350,6 +2371,53 @@ private fun SlashSuggestions(suggestions: List<SlashSuggestion>, hazeState: Haze
                 }
             }
         }
+    }
+}
+
+/**
+ * The message the user would likely send next, over the composer: a tap puts [text] in the composer to look
+ * over and send, the cross closes it. Frosted over the chat like the `/` list.
+ */
+@Composable
+internal fun SuggestedReplyChip(text: String, hazeState: HazeState?, onUse: () -> Unit, onDismiss: () -> Unit) {
+    val shape = RoundedCornerShape(Theme[radii][radiusLarge])
+    val page = Theme[colors][background]
+    val frosted = remember(page) {
+        HazeBlurStyle {
+            blurEnabled(true)
+            blurRadius(20.dp)
+            backgroundColor(page)
+        }
+    }
+    Row(
+        Modifier
+            .padding(start = 12.dp, end = 12.dp, top = 6.dp)
+            .fillMaxWidth()
+            .clip(shape)
+            .then(if (hazeState != null) Modifier.hazeBlur(input = HazeInput.Sources(hazeState), style = frosted) else Modifier)
+            .background(Theme[colors][surfaceElevated].copy(alpha = 0.85f))
+            .border(1.dp, Theme[colors][strokeStrong], shape),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Row(
+            Modifier
+                .weight(1f)
+                .heightIn(min = MinTouchTarget)
+                .clickable(role = Role.Button, onClickLabel = "Put in the composer", onClick = onUse)
+                .padding(start = 14.dp, top = 8.dp, bottom = 8.dp, end = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            UnstyledIcon(Lucide.Lightbulb, contentDescription = "Suggested reply", tint = Theme[colors][accentText], modifier = Modifier.size(16.dp))
+            Text(
+                text,
+                style = Theme[typography][label],
+                color = Theme[colors][textColor],
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        IconButton(Lucide.X, contentDescription = "Dismiss the suggestion", onClick = onDismiss)
     }
 }
 

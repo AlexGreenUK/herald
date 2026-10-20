@@ -42,6 +42,7 @@ import dev.hermeskotlin.core.chat.canEdit
 import dev.hermeskotlin.core.chat.promptNow
 import dev.hermeskotlin.core.chat.regenerateTarget
 import dev.hermeskotlin.core.network.errorMessage
+import dev.hermeskotlin.core.plugins.NextPromptApi
 import dev.hermeskotlin.core.profiles.ProfilesApi
 import dev.hermeskotlin.core.sessions.SeenStore
 import dev.hermeskotlin.core.sessions.SessionsApi
@@ -206,6 +207,8 @@ class ChatViewModel(
     readAloudVoices: ReadAloudVoices? = null,
     /** An approval is only taken by voice while the phone is unlocked. */
     deviceLock: DeviceLock = DeviceLock.None,
+    /** The Next Prompt plugin's suggestions; none without it. */
+    nextPromptApi: NextPromptApi? = null,
 ) : ViewModel(), ChatActions {
 
     /** Dictation, voice chat and Read aloud for the open chat. */
@@ -235,6 +238,9 @@ class ChatViewModel(
     /** Runs goal, loop and heartbeat actions for the open chat's panel. */
     val control = SessionControlController(viewModelScope)
 
+    /** The message the gateway's Next Prompt plugin expects next in the open chat. */
+    val nextPrompt = NextPromptController(nextPromptApi, viewModelScope)
+
     override val composer = TextFieldState()
     val connectionState: StateFlow<ConnectionState> = connection.state
 
@@ -250,6 +256,13 @@ class ChatViewModel(
         // A chat opened under the checkpoints sheet shows its own checkpoints, not the last chat's.
         viewModelScope.launch { session.collect { checkpoints.follow(it) } }
         viewModelScope.launch { session.collect { control.follow(it) } }
+        viewModelScope.launch {
+            val enabled = settings.settings.map { it?.suggestedReplies ?: true }
+            widgetSession
+                .map { bound -> bound?.let { (chat, owner) -> Triple(chat, owner.gateway.gatewayUrl, owner.profile) } }
+                .distinctUntilChanged()
+                .collect { bound -> nextPrompt.follow(bound?.second, bound?.third, bound?.first?.state, enabled) }
+        }
     }
 
     internal val transcript: StateFlow<ChatTranscript> = widgetSession
@@ -769,6 +782,15 @@ class ChatViewModel(
     override fun pickSuggestion(suggestion: SlashSuggestion) {
         composer.setTextAndPlaceCursorAtEnd(if (suggestion.kind == SlashKind.Option) suggestion.text else "${suggestion.text} ")
     }
+
+    override fun useSuggestedReply(reply: SuggestedReply) {
+        // Only into an empty composer, where the chip shows: what the user typed is never replaced.
+        if (reply != nextPrompt.suggestion.value || composer.text.isNotEmpty()) return
+        composer.setTextAndPlaceCursorAtEnd(reply.text)
+        nextPrompt.used()
+    }
+
+    override fun dismissSuggestedReply() = nextPrompt.dismiss()
 
     private fun isSlashQuery(text: String): Boolean = '\n' !in text && SlashCommand.looksLikeCommand(text) || text == "/"
 

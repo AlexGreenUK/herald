@@ -88,6 +88,8 @@ data class AppSettings(
     val showPet: Boolean = true,
     /** Automatically fetch linked webpages and thumbnails; off until the user opts in. */
     val showLinkPreviews: Boolean = false,
+    /** The gateway's Next Prompt plugin's suggested next message, over the composer once a turn ends. */
+    val suggestedReplies: Boolean = true,
     val voicePause: VoicePause = VoicePause.Normal,
     /** The mic for dictation in the composer and on an empty chat. Off, it goes, and the model name gets the room. */
     val dictation: Boolean = true,
