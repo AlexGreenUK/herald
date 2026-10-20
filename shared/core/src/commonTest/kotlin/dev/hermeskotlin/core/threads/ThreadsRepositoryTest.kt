@@ -60,6 +60,8 @@ class ThreadsRepositoryTest {
         }
         gateway.http = { request ->
             when {
+                // A gateway without snapshots, so writes go without an identity (SessionsApiTest covers that).
+                request.url.encodedPath.endsWith("/mutation-snapshot") -> json("""{"detail":"No such API endpoint"}""", HttpStatusCode.NotFound)
                 request.method == HttpMethod.Patch -> {
                     val body = request.body.toByteArray().decodeToString()
                     sent += "PATCH ${request.url.encodedPath.substringAfterLast('/')} $body"

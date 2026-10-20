@@ -90,6 +90,8 @@ class SessionsViewModelTest {
                     if (listFails()) HttpStatusCode.InternalServerError else listStatus, json,
                 )
                 request.url.encodedPath == "/api/auth/ws-ticket" -> respond("""{"ticket":"T","ttl_seconds":30}""", HttpStatusCode.OK, json)
+                // A gateway without snapshots, so writes go without an identity (SessionsApiTest covers that).
+                request.url.encodedPath.endsWith("/mutation-snapshot") -> respond("""{"detail":"Not Found"}""", HttpStatusCode.NotFound, json)
                 request.method == HttpMethod.Delete -> respond("""{"detail":"Store is busy"}""", deleteStatus, json)
                 request.method == HttpMethod.Patch -> {
                     patches += request.body.toByteArray().decodeToString()
