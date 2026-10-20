@@ -215,7 +215,7 @@ class NextPromptControllerTest {
         assertNull(controller.suggestion.value, "The answer from a moment ago still holds")
         assertEquals(1, gateway.listed)
 
-        now += NextPromptController.INSTALLED_FRESH_MS
+        now += NextPromptController.MISSING_FRESH_MS
         controller.follow(url, null, MutableStateFlow(chat()), MutableStateFlow(true))
         runCurrent()
         assertEquals("Run the tests", controller.suggestion.value?.text)
@@ -230,15 +230,63 @@ class NextPromptControllerTest {
         runCurrent()
 
         states.value = chat(running = false)
-        advanceTimeBy(120_000)
+        advanceTimeBy(10_000)
         assertEquals(1, gateway.asked.size)
 
         // Until the answer is old, the next turn doesn't ask either.
         states.value = chat(running = true)
         runCurrent()
         states.value = chat(running = false)
-        advanceTimeBy(120_000)
+        advanceTimeBy(10_000)
         assertEquals(1, gateway.asked.size)
+
+        // Restarted meanwhile: a turn after that finds it.
+        gateway.answers.apply { clear(); add(suggestion("Run the tests")) }
+        advanceTimeBy(NextPromptController.MISSING_FRESH_MS)
+        states.value = chat(running = true)
+        runCurrent()
+        states.value = chat(running = false)
+        advanceTimeBy(2_000)
+        assertEquals("Run the tests", controller.suggestion.value?.text)
+    }
+
+    @Test
+    fun theHistoryReloadingAsATurnEndsKeepsTheAsking() = runTest {
+        val gateway = Gateway()
+        val controller = controller(gateway)
+        val states = MutableStateFlow(chat(running = true))
+        controller.follow(url, null, states, MutableStateFlow(true))
+        runCurrent()
+
+        gateway.answers.apply { clear(); addAll(listOf(NONE, NONE, suggestion("Deploy to staging first"))) }
+        states.value = chat(running = false, loaded = false)
+        advanceTimeBy(500)
+        states.value = chat(running = false)
+        advanceTimeBy(5_000)
+
+        assertEquals(SuggestedReply("s1", "Deploy to staging first"), controller.suggestion.value)
+        assertEquals(3, gateway.asked.size)
+    }
+
+    @Test
+    fun theSettingBackOnMidwayPicksTheAskingUp() = runTest {
+        val gateway = Gateway()
+        val controller = controller(gateway)
+        val enabled = MutableStateFlow(true)
+        val states = MutableStateFlow(chat(running = true))
+        controller.follow(url, null, states, enabled)
+        runCurrent()
+
+        states.value = chat(running = false)
+        advanceTimeBy(1_500)
+        enabled.value = false
+        advanceTimeBy(1_000)
+        assertEquals(1, gateway.asked.size, "Off: no asking")
+
+        gateway.answers.apply { clear(); add(suggestion("Run the tests")) }
+        enabled.value = true
+        advanceTimeBy(1_000)
+        assertEquals("Run the tests", controller.suggestion.value?.text)
     }
 
     @Test

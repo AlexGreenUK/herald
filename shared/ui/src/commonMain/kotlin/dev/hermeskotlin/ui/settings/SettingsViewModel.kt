@@ -124,9 +124,12 @@ class SettingsViewModel(
 
     fun update(transform: (AppSettings) -> AppSettings) = store.update(transform)
 
-    private fun checkSuggestions() {
+    /** Looks again whether the gateway has the plugin and serves it (after a restart, say). */
+    fun checkSuggestions() {
         val url = bound?.gatewayUrl ?: return
         val profile = boundProfile
+        // An install keeps going on the gateway either way; it looks again for what's bound once it's done.
+        if (_suggestions.value == SuggestionsPlugin.Installing) return
         suggestionsJob?.cancel()
         _suggestions.value = SuggestionsPlugin.Checking
         suggestionsJob = viewModelScope.launch { _suggestions.value = lookUpSuggestions(url, profile) }
@@ -162,6 +165,8 @@ class SettingsViewModel(
                 failure != null -> SuggestionsPlugin.Failed(failure)
                 else -> SuggestionsPlugin.Failed("Installed, but the gateway doesn't list it yet. Restart the gateway, then look again.")
             }
+            // Settings moved to another gateway or profile meanwhile.
+            if (bound?.gatewayUrl != url || boundProfile != profile) checkSuggestions()
         }
     }
 

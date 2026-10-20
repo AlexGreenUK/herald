@@ -225,6 +225,7 @@ fun SettingsScreen(
         onOpenStartInstruction = { startInstructionOpen = true },
         suggestions = suggestions,
         onInstallSuggestions = viewModel::installSuggestions,
+        onCheckSuggestions = viewModel::checkSuggestions,
     )
     if (phoneToolsOpen) PhoneToolsScreen(onBack = { phoneToolsOpen = false })
     if (startInstructionOpen) {
@@ -317,6 +318,7 @@ internal fun SettingsView(
     /** Where the Next Prompt plugin behind Suggested replies stands on the gateway. */
     suggestions: SuggestionsPlugin = SuggestionsPlugin.Checking,
     onInstallSuggestions: () -> Unit = {},
+    onCheckSuggestions: () -> Unit = {},
 ) {
     Box(
         Modifier
@@ -516,6 +518,10 @@ internal fun SettingsView(
                             asked = false
                             onInstallSuggestions()
                         }
+                    }
+                    if (settings.suggestedReplies && (suggestions == SuggestionsPlugin.NeedsRestart || suggestions == SuggestionsPlugin.Unknown)) {
+                        Divider()
+                        ActionRow("Check again", Lucide.RefreshCw, onClick = onCheckSuggestions)
                     }
                 }
 

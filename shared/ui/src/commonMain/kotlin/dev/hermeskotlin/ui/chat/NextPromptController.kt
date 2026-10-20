@@ -57,17 +57,22 @@ class NextPromptController(
         if (api == null || owner == null || states == null) return
         follow = scope.launch {
             var ranBefore: String? = null
+            // The chat whose turn ended here and when, until its asking is done: a moment later (the history
+            // reloading, the setting flipped) picks the asking up where it was, not as a single look.
+            var afterTurn: Pair<String, Long>? = null
             combine(enabled, states) { on, chat -> Moment(on, chat.storedSessionId, chat.running, chat.historyLoaded) }
                 .distinctUntilChanged()
                 .collectLatest { moment ->
                     val id = moment.storedSessionId
-                    // A turn ending in this chat, seen here: what follows it is worth waiting for.
-                    val turnEnded = ranBefore != null && ranBefore == id && !moment.running
+                    if (id != null && ranBefore == id && !moment.running) afterTurn = id to now()
+                    if (moment.running || afterTurn?.first != id) afterTurn = null
                     ranBefore = id?.takeIf { moment.running }
                     _suggestion.update { shown -> shown?.takeIf { it.storedSessionId == id && !moment.running && moment.enabled } }
                     if (!moment.enabled || id == null || moment.running || !moment.historyLoaded) return@collectLatest
                     if (!isInstalled(owner)) return@collectLatest
-                    ask(owner, id, if (turnEnded) AFTER_TURN_MS else ON_OPEN_MS)
+                    val waits = afterTurn?.let { (_, endedAt) -> afterTurnWaits(now() - endedAt) }
+                    ask(owner, id, waits?.ifEmpty { null } ?: ON_OPEN_MS)
+                    afterTurn = null
                 }
         }
     }
@@ -92,8 +97,20 @@ class NextPromptController(
         }
     }
 
+    /** What's left of [AFTER_TURN_MS] [elapsed] ms after the turn ended. */
+    private fun afterTurnWaits(elapsed: Long): List<Long> {
+        var at = 0L
+        val left = mutableListOf<Long>()
+        for (wait in AFTER_TURN_MS) {
+            at += wait
+            if (at > elapsed) left += if (left.isEmpty()) at - elapsed else wait
+        }
+        return left
+    }
+
     private suspend fun isInstalled(owner: Owner): Boolean {
-        installed[owner]?.let { (known, at) -> if (now() - at < INSTALLED_FRESH_MS) return known }
+        // A "no" is held briefly: the plugin may be installed from Settings, or the gateway restarted, any moment.
+        installed[owner]?.let { (known, at) -> if (now() - at < if (known) INSTALLED_FRESH_MS else MISSING_FRESH_MS) return known }
         val result = api?.installed(owner.url, owner.profile) as? ApiResult.Success ?: return false
         installed[owner] = result.value to now()
         return result.value
@@ -113,8 +130,11 @@ class NextPromptController(
     }
 
     internal companion object {
-        /** The plugin's answer is learned again after this long, so one installed meanwhile shows up. */
+        /** An installed plugin is looked for again after this long, so one removed meanwhile stops the asking. */
         const val INSTALLED_FRESH_MS = 5 * 60_000L
+
+        /** A missing (or not yet served) plugin is looked for again after this long. */
+        const val MISSING_FRESH_MS = 30_000L
 
         /** One look on opening a chat: the suggestion may still be waiting from before. */
         val ON_OPEN_MS = listOf(0L)
