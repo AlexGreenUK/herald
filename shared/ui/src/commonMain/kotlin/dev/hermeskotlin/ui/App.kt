@@ -617,6 +617,7 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
             onBack = { settingsOpen = false },
             onSignOut = app::signOut,
             onOpenGateways = onOpenGateways,
+            profile = chatsProfile,
         )
     }
 
