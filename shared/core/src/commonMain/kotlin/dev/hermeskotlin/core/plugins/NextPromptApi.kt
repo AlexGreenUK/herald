@@ -13,6 +13,7 @@ import io.ktor.client.request.get
 import io.ktor.client.request.parameter
 import io.ktor.client.request.post
 import io.ktor.client.statement.bodyAsText
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -92,13 +93,16 @@ class NextPromptApi(
                     put("enable", true)
                     scoped()
                 },
-                timeoutMs = INSTALL_TIMEOUT_MS,
             )
             ((reply as? JsonObject)?.get("ok") as? JsonPrimitive)?.booleanOrNull == true
-        } catch (e: RpcException) {
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Refused, or no answer in time: installing still can.
             false
         }
-        if (!switchedOn) {
+        // A toggle may say yes for a name it doesn't have; only the list tells it's really there.
+        if (!switchedOn || !rescanned(url, profile)) {
             rpc.request(
                 "plugins.manage",
                 buildJsonObject {
@@ -111,13 +115,18 @@ class NextPromptApi(
                 },
                 timeoutMs = INSTALL_TIMEOUT_MS,
             )
+            rescanned(url, profile)
         }
-        // The dashboard keeps its plugin list until asked to look again.
+    }
+
+    /** Has the dashboard read its plugin list afresh (it keeps it until asked); true when it then lists this one. */
+    private suspend fun rescanned(url: GatewayUrl, profile: String?): Boolean {
         apiCall {
             client.get(url.resolve("api/dashboard/plugins/rescan")) {
                 profile?.let { parameter("profile", it) }
             }
         }
+        return (installed(url, profile) as? ApiResult.Success)?.value == true
     }
 
     /**
