@@ -240,9 +240,13 @@ class SkillsHubViewModel(private val api: SkillsHubApi) : ViewModel(), SkillsHub
                 _state.update { it.copy(message = "${skill.name} was blocked by the security scan.") }
                 when (val scan = api.scan(url, key)) {
                     is ApiResult.Success -> showScan(skill, scan.value)
+                    // Only the sheet still open on this skill gets the error; the Blocked message already told them.
                     else -> _state.update { s ->
-                        val keep = s.detail?.takeIf { it.skill.installKey == key } ?: HubDetail(skill)
-                        s.copy(detail = keep.copy(error = scan.errorMessage), sessionExpired = scan == ApiResult.SessionExpired)
+                        val d = s.detail?.takeIf { it.skill.installKey == key }
+                        s.copy(
+                            detail = d?.copy(error = scan.errorMessage) ?: s.detail,
+                            sessionExpired = scan == ApiResult.SessionExpired,
+                        )
                     }
                 }
                 return@launch

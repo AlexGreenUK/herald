@@ -330,9 +330,43 @@ class SkillsHubViewModelTest {
         }
         val vm = vm(rig)
         vm.bind(gateway, null)
+        vm.open(official) // the sheet is open on the skill being installed
         vm.install(official) // official skips the pre-scan, so the only scan is the follow-up
         assertEquals("official/creative/ascii-art", vm.state.value.detail?.skill?.installKey)
         assertNotNull(vm.state.value.detail?.error)
+    }
+
+    private val blockedLines = """{"running":false,"exit_code":1,"lines":["Not installed: the security scan found 2 high-risk patterns"]}"""
+
+    @Test
+    fun aFailedFollowUpScanDoesNotReopenAClosedSheet() = runTest(dispatcher) {
+        val rig = rig().apply { scanStatus = HttpStatusCode.NotFound; status = { HttpStatusCode.OK to blockedLines } }
+        val vm = vm(rig)
+        vm.bind(gateway, null)
+        vm.open(community)
+        vm.closeDetail()
+        vm.install(official)
+        assertNull(vm.state.value.detail)
+    }
+
+    @Test
+    fun aFailedFollowUpScanDoesNotLandOnAnotherSkillsSheet() = runTest(dispatcher) {
+        val rig = rig().apply { scanStatus = HttpStatusCode.NotFound; status = { HttpStatusCode.OK to blockedLines } }
+        val vm = vm(rig)
+        vm.bind(gateway, null)
+        vm.open(community)
+        vm.install(official)
+        assertEquals(community.installKey, vm.state.value.detail?.skill?.installKey)
+        assertNull(vm.state.value.detail?.error)
+    }
+
+    @Test
+    fun anExpiredSessionOnTheFollowUpScanRaisesTheFlag() = runTest(dispatcher) {
+        val rig = rig().apply { scanStatus = HttpStatusCode.Unauthorized; status = { HttpStatusCode.OK to blockedLines } }
+        val vm = vm(rig)
+        vm.bind(gateway, null)
+        vm.install(official)
+        assertTrue(vm.state.value.sessionExpired)
     }
 
     @Test
