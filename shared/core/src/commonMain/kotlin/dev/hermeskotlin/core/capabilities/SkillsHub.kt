@@ -6,7 +6,7 @@ import kotlinx.serialization.Serializable
 /** A skill the hub offers (featured, searched or from the official catalog). */
 @Serializable
 data class HubSkill(
-    val name: String,
+    val name: String = "",
     val description: String = "",
     val source: String = "",
     val identifier: String = "",
@@ -33,7 +33,7 @@ data class HubInstalled(
 /** A place the hub searches. */
 @Serializable
 data class HubSource(
-    val id: String,
+    val id: String = "",
     val label: String = id,
     @SerialName("rate_limited") val rateLimited: Boolean = false,
     val available: Boolean = true,

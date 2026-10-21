@@ -79,7 +79,9 @@ class SkillsHubApiTest {
 
     @Test
     fun previewAndScanDecodeNullsAsDefaults() = runTest {
+        val queries = mutableListOf<String>()
         val api = SkillsHubApi(createHttpClient(MockEngine { request ->
+            queries += request.url.encodedQuery
             if (request.url.encodedPath.endsWith("preview")) {
                 respond("""{"name":"pdf","identifier":"clawhub/org/pdf","repo":null,"tags":null,"files":null}""", HttpStatusCode.OK, json)
             } else {
@@ -90,13 +92,22 @@ class SkillsHubApiTest {
             }
         }))
 
-        val preview = assertIs<ApiResult.Success<HubPreview>>(api.preview(url, "clawhub/org/pdf")).value
+        val preview = assertIs<ApiResult.Success<HubPreview>>(api.preview(url, "ruby", "clawhub/org/pdf")).value
         assertEquals(emptyList(), preview.tags)
         assertEquals(emptyList(), preview.files)
 
-        val scan = assertIs<ApiResult.Success<HubScan>>(api.scan(url, "clawhub/org/pdf")).value
+        val scan = assertIs<ApiResult.Success<HubScan>>(api.scan(url, "ruby", "clawhub/org/pdf")).value
         assertEquals("ask", scan.policy)
         assertEquals(3, scan.findings.single().line)
+        assertTrue(queries.all { "profile=ruby" in it })
+    }
+
+    @Test
+    fun aNullNameDecodesAsBlank() = runTest {
+        val api = SkillsHubApi(createHttpClient(MockEngine {
+            respond("""{"skills":[{"name":null,"identifier":"official/x/y"}]}""", HttpStatusCode.OK, json)
+        }))
+        assertEquals("", assertIs<ApiResult.Success<List<HubSkill>>>(api.official(url, null)).value.single().name)
     }
 
     @Test
@@ -175,6 +186,22 @@ class SkillsHubApiTest {
     fun statusGoneMidPollEndsAsFailed() = runTest {
         val result = finish(HttpStatusCode.NotFound to """{"detail":"Not Found"}""")
         assertEquals(HubActionResult.Failed(listOf("Lost track of the install on the gateway.")), result)
+    }
+
+    @Test
+    fun lostTrackNamesTheAction() = runTest {
+        val api = actionApi(startOk, HttpStatusCode.NotFound to """{"detail":"Not Found"}""")
+        val result = assertIs<ApiResult.Success<HubActionResult>>(api.uninstall(url, null, "x")).value
+        assertEquals(HubActionResult.Failed(listOf("Lost track of the removal on the gateway.")), result)
+    }
+
+    @Test
+    fun anOkStartWithoutANameIsAFailure() = runTest {
+        val calls = mutableListOf<String>()
+        val api = actionApi("""{"ok":true}""", calls = calls)
+        val result = assertIs<ApiResult.Success<HubActionResult>>(api.install(url, null, "org/x")).value
+        assertEquals(HubActionResult.Failed(listOf("The gateway didn't name the action.")), result)
+        assertEquals(0, calls.count { "/status" in it })
     }
 
     @Test

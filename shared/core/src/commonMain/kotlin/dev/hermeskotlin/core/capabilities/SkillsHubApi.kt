@@ -6,6 +6,7 @@ import dev.hermeskotlin.core.network.HermesJson
 import dev.hermeskotlin.core.network.apiCall
 import dev.hermeskotlin.core.network.map
 import io.ktor.client.HttpClient
+import io.ktor.client.plugins.timeout
 import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.get
 import io.ktor.client.request.parameter
@@ -15,6 +16,7 @@ import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
+import io.ktor.http.encodeURLPathPart
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -45,11 +47,17 @@ class SkillsHubApi(
 ) {
 
     suspend fun sources(url: GatewayUrl, profile: String?): ApiResult<HubSources> = apiCall {
-        client.get(url.resolve("api/skills/hub/sources")) { profile(profile) }
+        client.get(url.resolve("api/skills/hub/sources")) {
+            profile(profile)
+            timeout { requestTimeoutMillis = HUB_REQUEST_TIMEOUT_MS }
+        }
     }.map { it.decode<HubSources>() }
 
     suspend fun official(url: GatewayUrl, profile: String?): ApiResult<List<HubSkill>> = apiCall {
-        client.get(url.resolve("api/skills/hub/official")) { profile(profile) }
+        client.get(url.resolve("api/skills/hub/official")) {
+            profile(profile)
+            timeout { requestTimeoutMillis = HUB_REQUEST_TIMEOUT_MS }
+        }
     }.map { it.decode<OfficialResponse>().skills }
 
     suspend fun search(url: GatewayUrl, profile: String?, query: String, limit: Int = 20): ApiResult<HubSearch> = apiCall {
@@ -58,28 +66,37 @@ class SkillsHubApi(
             parameter("q", query)
             parameter("source", "all")
             parameter("limit", limit)
+            timeout { requestTimeoutMillis = HUB_REQUEST_TIMEOUT_MS }
         }
     }.map { it.decode<HubSearch>() }
 
-    suspend fun preview(url: GatewayUrl, identifier: String): ApiResult<HubPreview> = apiCall {
-        client.get(url.resolve("api/skills/hub/preview")) { parameter("identifier", identifier) }
+    suspend fun preview(url: GatewayUrl, profile: String?, identifier: String): ApiResult<HubPreview> = apiCall {
+        client.get(url.resolve("api/skills/hub/preview")) {
+            profile(profile)
+            parameter("identifier", identifier)
+            timeout { requestTimeoutMillis = HUB_REQUEST_TIMEOUT_MS }
+        }
     }.map { it.decode<HubPreview>() }
 
-    suspend fun scan(url: GatewayUrl, identifier: String): ApiResult<HubScan> = apiCall {
-        client.get(url.resolve("api/skills/hub/scan")) { parameter("identifier", identifier) }
+    suspend fun scan(url: GatewayUrl, profile: String?, identifier: String): ApiResult<HubScan> = apiCall {
+        client.get(url.resolve("api/skills/hub/scan")) {
+            profile(profile)
+            parameter("identifier", identifier)
+            timeout { requestTimeoutMillis = HUB_REQUEST_TIMEOUT_MS }
+        }
     }.map { it.decode<HubScan>() }
 
     suspend fun install(url: GatewayUrl, profile: String?, identifier: String): ApiResult<HubActionResult> =
-        runAction(url, profile, "api/skills/hub/install", buildJsonObject { put("identifier", identifier) })
+        runAction(url, profile, "api/skills/hub/install", "install", buildJsonObject { put("identifier", identifier) })
 
     suspend fun uninstall(url: GatewayUrl, profile: String?, name: String): ApiResult<HubActionResult> =
-        runAction(url, profile, "api/skills/hub/uninstall", buildJsonObject { put("name", name) })
+        runAction(url, profile, "api/skills/hub/uninstall", "removal", buildJsonObject { put("name", name) })
 
     suspend fun updateAll(url: GatewayUrl, profile: String?): ApiResult<HubActionResult> =
-        runAction(url, profile, "api/skills/hub/update", buildJsonObject { })
+        runAction(url, profile, "api/skills/hub/update", "update", buildJsonObject { })
 
-    /** Starts a background action on the gateway, then polls its status until the process ends. */
-    private suspend fun runAction(url: GatewayUrl, profile: String?, route: String, fields: JsonObject): ApiResult<HubActionResult> {
+    /** Starts a background action on the gateway, then polls its status until the process ends; [noun] names it in a lost-track message. */
+    private suspend fun runAction(url: GatewayUrl, profile: String?, route: String, noun: String, fields: JsonObject): ApiResult<HubActionResult> {
         val body = buildJsonObject {
             fields.forEach { (k, v) -> put(k, v) }
             profile?.let { put("profile", it) }
@@ -95,11 +112,12 @@ class SkillsHubApi(
             else -> return started.passThrough()
         }
         if (!start.ok) return ApiResult.Success(HubActionResult.Failed(listOfNotNull(start.error)))
+        if (start.name.isBlank()) return ApiResult.Success(HubActionResult.Failed(listOf("The gateway didn't name the action.")))
 
         while (true) {
             currentCoroutineContext().ensureActive() // a zero interval never suspends in delay
             val read = apiCall {
-                client.get(url.resolve("api/actions/${start.name}/status")) {
+                client.get(url.resolve("api/actions/${start.name.encodeURLPathPart()}/status")) {
                     profile(profile)
                     parameter("lines", 200)
                 }
@@ -107,7 +125,7 @@ class SkillsHubApi(
             val status = when (read) {
                 is ApiResult.Success -> read.value
                 is ApiResult.Failed -> return when (read.status) {
-                    404 -> ApiResult.Success(HubActionResult.Failed(listOf("Lost track of the install on the gateway.")))
+                    404 -> ApiResult.Success(HubActionResult.Failed(listOf("Lost track of the $noun on the gateway.")))
                     else -> read
                 }
                 else -> return read.passThrough()
@@ -134,6 +152,9 @@ class SkillsHubApi(
     private suspend inline fun <reified T> HttpResponse.decode(): T = lenientJson.decodeFromString<T>(bodyAsText())
 
     private companion object {
+        /** Search waits up to 30 s on slow sources, longer than the client's default timeout. */
+        const val HUB_REQUEST_TIMEOUT_MS = 45_000L
+
         /** The gateway writes `null` for what it doesn't have (a preview's tags, files); that reads as the field's default. */
         val lenientJson = Json(HermesJson) { coerceInputValues = true }
     }
