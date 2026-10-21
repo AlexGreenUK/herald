@@ -106,9 +106,10 @@ class SkillsHubApi(
             }.map { it.decode<ActionStatus>() }
             val status = when (read) {
                 is ApiResult.Success -> read.value
-                is ApiResult.Failed ->
-                    if (read.status == 404) return ApiResult.Success(HubActionResult.Failed(listOf("Lost track of the install on the gateway.")))
-                    else return read
+                is ApiResult.Failed -> return when (read.status) {
+                    404 -> ApiResult.Success(HubActionResult.Failed(listOf("Lost track of the install on the gateway.")))
+                    else -> read
+                }
                 else -> return read.passThrough()
             }
             if (!status.running) {

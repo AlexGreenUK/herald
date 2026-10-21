@@ -4,18 +4,18 @@ import dev.hermeskotlin.core.gateway.GatewayUrl
 import dev.hermeskotlin.core.network.ApiResult
 import dev.hermeskotlin.core.network.createHttpClient
 import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.MockEngineConfig
 import io.ktor.client.engine.mock.respond
 import io.ktor.client.engine.mock.toByteArray
 import io.ktor.http.HttpMethod
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.cancelAndJoin
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -114,12 +114,11 @@ class SkillsHubApiTest {
         """{"name":"skills-install-x","running":$running,"exit_code":${exit ?: "null"},"pid":null,"lines":[${lines.joinToString(",") { "\"" + it + "\"" }}]}"""
 
     /** Start answers [startBody]; each status read answers the next of [statuses] (the last repeats). */
-    private fun actionApi(startBody: String, vararg statuses: Pair<HttpStatusCode, String>, onCall: (String, String) -> Unit = { _, _ -> }, calls: MutableList<String> = mutableListOf()) =
+    private fun actionApi(startBody: String, vararg statuses: Pair<HttpStatusCode, String>, calls: MutableList<String> = mutableListOf()) =
         SkillsHubApi(createHttpClient(MockEngine { request ->
             val path = request.url.encodedPath
             val body = if (request.method == HttpMethod.Post) request.body.toByteArray().decodeToString() else ""
             calls += "${request.method.value} $path ${request.url.encodedQuery} $body".trim()
-            onCall(path, body)
             if (path.endsWith("/status")) {
                 val n = calls.count { it.contains("/status") } - 1
                 val (code, text) = statuses[minOf(n, statuses.size - 1)]
@@ -191,22 +190,32 @@ class SkillsHubApiTest {
         assertTrue(posts[1].startsWith("POST /api/skills/hub/update"), posts[1])
     }
 
-    // Real time on purpose: the mock engine answers on its own dispatcher, so virtual time never sees it.
+    @OptIn(ExperimentalCoroutinesApi::class)
     @Test
-    fun cancellingStopsPolling() = runTest {
-        var statusCalls = 0
-        val api = SkillsHubApi(createHttpClient(MockEngine { request ->
-            if (request.url.encodedPath.endsWith("/status")) {
-                statusCalls++
-                respond(status(true, null), HttpStatusCode.OK, json)
-            } else respond(startOk, HttpStatusCode.OK, json)
-        }), pollIntervalMs = 200)
+    fun cancellingStopsPolling() {
+        val dispatcher = StandardTestDispatcher()
+        runTest(dispatcher) {
+            var statusCalls = 0
+            // On the test dispatcher, so virtual time governs both the engine and the poll delay.
+            val config = MockEngineConfig()
+            config.dispatcher = dispatcher
+            config.addHandler { request ->
+                if (request.url.encodedPath.endsWith("/status")) {
+                    statusCalls++
+                    respond(status(true, null), HttpStatusCode.OK, json)
+                } else respond(startOk, HttpStatusCode.OK, json)
+            }
+            val api = SkillsHubApi(createHttpClient(MockEngine(config)), pollIntervalMs = 1_000)
 
-        withContext(Dispatchers.Default) {
             val job = launch { api.install(url, null, "org/x") }
-            withTimeout(5_000) { while (statusCalls < 2) delay(5) }
-            job.cancelAndJoin()
-            delay(600)
+            runCurrent()
+            assertEquals(1, statusCalls)
+            advanceTimeBy(1_001)
+            runCurrent()
+            assertEquals(2, statusCalls)
+            job.cancel()
+            advanceTimeBy(10_000)
+            runCurrent()
             assertEquals(2, statusCalls)
         }
     }
