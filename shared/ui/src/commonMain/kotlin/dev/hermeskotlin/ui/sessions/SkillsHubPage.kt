@@ -17,6 +17,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -36,6 +37,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.composables.icons.lucide.CloudOff
 import com.composables.icons.lucide.Lucide
+import com.composables.icons.lucide.RefreshCw
 import com.composables.icons.lucide.Search
 import com.composeunstyled.Text
 import com.composeunstyled.theme.Theme
@@ -76,7 +78,10 @@ internal fun SkillsHubPage(
     LaunchedEffect(gateway, profile) {
         viewModel.onSkillsChanged = onSkillsChanged
         viewModel.bind(gateway, profile)
+        viewModel.openHub()
     }
+    // Whichever way the page leaves, its sheets go with it.
+    DisposableEffect(viewModel) { onDispose { viewModel.closeHub() } }
     // The view model debounces; the page only reports what was typed.
     LaunchedEffect(viewModel) { snapshotFlow { viewModel.query.text.toString() }.collect { viewModel.search(it) } }
     LaunchedEffect(state.sessionExpired) {
@@ -142,7 +147,7 @@ private fun HubLists(state: SkillsHubUiState, actions: SkillsHubActions) {
         results != null -> {
             val found = results.items
             when {
-                found == null && results.error != null -> HubError(results.error)
+                found == null && results.error != null -> HubError(results.error, actions::refresh)
                 found == null -> ListSkeleton()
                 else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = HubPadding) {
                     if (state.timedOut.isNotEmpty()) item(key = "timeout") { Hint("Some sources didn't answer: ${state.timedOut.joinToString()}") }
@@ -152,7 +157,7 @@ private fun HubLists(state: SkillsHubUiState, actions: SkillsHubActions) {
             }
         }
         state.featured.items == null && state.official.items == null ->
-            if (state.featured.error != null && state.official.error != null) HubError(state.featured.error) else ListSkeleton()
+            if (state.featured.error != null && state.official.error != null) HubError(state.featured.error, actions::refresh) else ListSkeleton()
         else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = HubPadding) {
             val featured = state.featured.items.orEmpty()
             if (featured.isNotEmpty()) {
@@ -162,19 +167,36 @@ private fun HubLists(state: SkillsHubUiState, actions: SkillsHubActions) {
             item(key = "h-official") { HubHeading("OFFICIAL") }
             val official = state.official.items
             when {
-                official == null && state.official.error != null -> item(key = "official-error") { Hint(state.official.error) }
+                official == null && state.official.error != null -> {
+                    item(key = "official-error") { Hint(state.official.error) }
+                    item(key = "official-retry") {
+                        Button("Try again", onClick = actions::refresh, variant = ButtonVariant.Secondary, size = ButtonSize.Small, leadingIcon = Lucide.RefreshCw, modifier = Modifier.padding(start = 2.dp, bottom = 8.dp))
+                    }
+                }
                 official == null -> item(key = "official-loading") { Hint("Loading…") }
                 official.isEmpty() -> item(key = "official-none") { Hint("Nothing in the official catalog.") }
-                else -> item(key = "official") { HubRows(official, state, actions) }
+                else -> officialGroups(official).forEach { (category, inGroup) ->
+                    item(key = "c-$category") { HubHeading(category.uppercase()) }
+                    item(key = "g-$category") { HubRows(inGroup, state, actions) }
+                }
             }
         }
     }
 }
 
+/** The official catalog by category, uncategorised ones last as "other". */
+internal fun officialGroups(skills: List<HubSkill>): Map<String, List<HubSkill>> =
+    skills
+        .groupBy { it.category?.trim()?.lowercase()?.takeIf(String::isNotEmpty) ?: "other" }
+        .toSortedMap(compareBy<String> { it == "other" }.thenBy { it })
+
 private val HubPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 4.dp, bottom = 32.dp)
 
 @Composable
-private fun HubError(message: String) = EmptyState(Lucide.CloudOff, "Couldn't load", message, error = true)
+private fun HubError(message: String, onRetry: () -> Unit) =
+    EmptyState(Lucide.CloudOff, "Couldn't load", message, error = true) {
+        Button("Try again", onClick = onRetry, variant = ButtonVariant.Secondary, leadingIcon = Lucide.RefreshCw)
+    }
 
 @Composable
 private fun HubHeading(label: String) {
@@ -192,7 +214,7 @@ private fun HubHeading(label: String) {
 @Composable
 private fun HubRows(skills: List<HubSkill>, state: SkillsHubUiState, actions: SkillsHubActions) {
     RowCard(skills, key = { it.installKey }) { skill ->
-        val installed = skill.installed || skill.installKey in state.installed
+        val installed = skill.installKey in state.installed
         Column(
             Modifier.fillMaxWidth().clickable { actions.open(skill) }.padding(horizontal = 14.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(2.dp),
@@ -231,7 +253,7 @@ internal fun HubDetailSheet(state: SkillsHubUiState, actions: SkillsHubActions) 
         val d = kept ?: return@BottomSheet
         val skill = d.skill
         val key = skill.installKey
-        val installed = skill.installed || key in state.installed
+        val installed = key in state.installed
         val blocked = d.scan?.policy == "block"
         Column(Modifier.heightIn(max = 600.dp).verticalScroll(rememberScrollState())) {
             SheetHeader(skill.name, listOfNotNull(skill.trustLevel.takeIf { it.isNotBlank() }, skill.source.takeIf { it.isNotBlank() }).joinToString(" · ").ifBlank { null })
@@ -251,10 +273,11 @@ internal fun HubDetailSheet(state: SkillsHubUiState, actions: SkillsHubActions) 
                             Text(d.preview.files.joinToString("\n"), style = Theme[typography][code].copy(fontSize = 12.sp), color = Theme[colors][textTertiary])
                         }
                     }
-                    d.error != null -> Text(d.error, style = Theme[typography][bodySmall], color = Theme[colors][danger])
+                    d.error != null -> Unit
                     else -> Text("Loading…", style = Theme[typography][bodySmall], color = Theme[colors][textTertiary])
                 }
                 d.scan?.let { ScanFindings(it, expanded = blocked) }
+                d.error?.let { Text(it, style = Theme[typography][bodySmall], color = Theme[colors][danger]) }
                 if (blocked) Text("Blocked by security scan", style = Theme[typography][bodySmall], color = Theme[colors][danger])
                 Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     when {

@@ -33,6 +33,7 @@ import androidx.compose.runtime.key
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
@@ -151,6 +152,7 @@ internal fun CapabilitiesPage(
         state,
         viewModel.skillQuery,
         actions,
+        hubOpen = hubOpen,
         onBack = onBack,
         title = title,
         note = note,
@@ -214,8 +216,10 @@ internal fun CapabilitiesView(
     /** A message from the hub, e.g. after an uninstall, shown with the page's own. */
     hubMessage: String? = null,
     onDismissHubMessage: () -> Unit = {},
+    /** The hub page is drawn over this one; keep screen readers off the list beneath it. */
+    hubOpen: Boolean = false,
 ) {
-    Column(Modifier.fillMaxSize()) {
+    Column(Modifier.fillMaxSize().then(if (hubOpen) Modifier.clearAndSetSemantics { } else Modifier)) {
         SubpageHeader(title, onBack = onBack, subtitle = note ?: "What the agent can use in new chats")
         SegmentedControl(
             options = CapabilityTab.entries,

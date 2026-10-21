@@ -122,8 +122,8 @@ internal object PageSamples {
         HubSkill("smart-disks", "Read SMART data and judge whether a disk is failing", source = "github", identifier = "acme/skills/smart-disks", trustLevel = "community"),
     )
     private val hubOfficial = listOf(
-        HubSkill("arxiv", "Search arXiv and summarize papers", source = "official", identifier = "official/research/arxiv", trustLevel = "builtin"),
-        HubSkill("github-pr", "Open, review and merge pull requests with gh", source = "official", identifier = "official/software/github-pr", trustLevel = "builtin"),
+        HubSkill("arxiv", "Search arXiv and summarize papers", source = "official", identifier = "official/research/arxiv", trustLevel = "builtin", category = "research"),
+        HubSkill("github-pr", "Open, review and merge pull requests with gh", source = "official", identifier = "official/software/github-pr", trustLevel = "builtin", category = "software"),
     )
     private val hubScan = HubScan(
         name = "smart-disks",
