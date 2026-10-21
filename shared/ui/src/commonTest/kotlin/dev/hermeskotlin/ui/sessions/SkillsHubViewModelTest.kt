@@ -82,6 +82,12 @@ class SkillsHubViewModelTest {
 
     private fun rig() = Rig(json)
 
+    /** Binds and opens the hub page, as the page does. */
+    private fun SkillsHubViewModel.bound(profile: String?) {
+        bind(gateway, profile)
+        openHub()
+    }
+
     private val community = HubSkill(name = "pdf", identifier = "skills-sh/acme/pdf", source = "skills-sh")
     private val official = HubSkill(name = "ascii-art", identifier = "official/creative/ascii-art", source = "official")
 
@@ -89,7 +95,7 @@ class SkillsHubViewModelTest {
     fun bindLoadsFeaturedAndOfficialForTheProfile() = runTest(dispatcher) {
         val rig = rig()
         val vm = vm(rig)
-        vm.bind(gateway, "ruby")
+        vm.bound("ruby")
         assertTrue(rig.log.filter { "hub/sources" in it || "hub/official" in it }.all { "profile=ruby" in it })
         assertEquals(2, rig.log.size)
         assertEquals(listOf("pdf"), vm.state.value.featured.items?.map { it.name })
@@ -100,7 +106,7 @@ class SkillsHubViewModelTest {
     fun searchWaitsForThePause() = runTest(dispatcher) {
         val rig = rig()
         val vm = vm(rig)
-        vm.bind(gateway, null)
+        vm.bound(null)
         vm.search("pd")
         advanceTimeBy(200)
         vm.search("pdf")
@@ -113,7 +119,7 @@ class SkillsHubViewModelTest {
     @Test
     fun blankQueryClearsResults() = runTest(dispatcher) {
         val vm = vm(rig())
-        vm.bind(gateway, null)
+        vm.bound(null)
         vm.search("pdf")
         advanceTimeBy(401)
         assertNotNull(vm.state.value.results)
@@ -125,7 +131,7 @@ class SkillsHubViewModelTest {
     fun installedIdentifiersMarkRows() = runTest(dispatcher) {
         val rig = rig().apply { sources = """{"installed":{"official/creative/ascii-art":{"name":"ascii-art"}}}""" }
         val vm = vm(rig)
-        vm.bind(gateway, null)
+        vm.bound(null)
         assertTrue("official/creative/ascii-art" in vm.state.value.installed)
     }
 
@@ -135,7 +141,7 @@ class SkillsHubViewModelTest {
         val vm = vm(rig)
         var changed = 0
         vm.onSkillsChanged = { changed++ }
-        vm.bind(gateway, null)
+        vm.bound(null)
         vm.install(official)
         assertEquals(0, rig.count("hub/scan"))
         assertEquals(1, rig.count("POST /api/skills/hub/install"))
@@ -148,7 +154,7 @@ class SkillsHubViewModelTest {
     fun safeScanInstallsStraightAway() = runTest(dispatcher) {
         val rig = rig()
         val vm = vm(rig)
-        vm.bind(gateway, null)
+        vm.bound(null)
         vm.install(community)
         assertEquals(1, rig.count("hub/scan"))
         assertEquals(1, rig.count("POST /api/skills/hub/install"))
@@ -158,7 +164,7 @@ class SkillsHubViewModelTest {
     fun cautionWaitsForConfirmation() = runTest(dispatcher) {
         val rig = rig().apply { scan = """{"name":"pdf","verdict":"caution","policy":"ask"}""" }
         val vm = vm(rig)
-        vm.bind(gateway, null)
+        vm.bound(null)
         vm.install(community)
         assertNotNull(vm.state.value.confirm)
         assertEquals(0, rig.count("POST /api/skills/hub/install"))
@@ -176,7 +182,7 @@ class SkillsHubViewModelTest {
     fun blockedPolicyNeverInstalls() = runTest(dispatcher) {
         val rig = rig().apply { scan = """{"name":"pdf","verdict":"dangerous","policy":"block"}""" }
         val vm = vm(rig)
-        vm.bind(gateway, null)
+        vm.bound(null)
         vm.install(community)
         assertEquals(0, rig.count("POST /api/skills/hub/install"))
         assertEquals("block", vm.state.value.detail?.scan?.policy)
@@ -189,7 +195,7 @@ class SkillsHubViewModelTest {
             status = { HttpStatusCode.OK to """{"running":false,"exit_code":1,"lines":["Not installed: the security scan found 2 high-risk patterns"]}""" }
         }
         val vm = vm(rig)
-        vm.bind(gateway, null)
+        vm.bound(null)
         vm.install(community)
         assertEquals("pdf was blocked by the security scan.", vm.state.value.message)
         assertEquals("safe", vm.state.value.detail?.scan?.verdict)
@@ -199,7 +205,7 @@ class SkillsHubViewModelTest {
     fun failureShowsTheLastLogLine() = runTest(dispatcher) {
         val rig = rig().apply { status = { HttpStatusCode.OK to """{"running":false,"exit_code":1,"lines":["fetching","network down"]}""" } }
         val vm = vm(rig)
-        vm.bind(gateway, null)
+        vm.bound(null)
         vm.install(community)
         assertEquals("Couldn't install pdf: network down", vm.state.value.message)
     }
@@ -211,7 +217,7 @@ class SkillsHubViewModelTest {
             status = { hold.await(); HttpStatusCode.OK to """{"running":false,"exit_code":0,"lines":[]}""" }
         }
         val vm = vm(rig)
-        vm.bind(gateway, null)
+        vm.bound(null)
         vm.install(official)
         vm.install(official)
         assertEquals(1, rig.count("POST /api/skills/hub/install"))
@@ -225,7 +231,7 @@ class SkillsHubViewModelTest {
         val vm = vm(rig)
         var changed = 0
         vm.onSkillsChanged = { changed++ }
-        vm.bind(gateway, null)
+        vm.bound(null)
         vm.uninstall("ascii-art")
         assertEquals(1, changed)
         assertEquals("Removed ascii-art. It applies from the next chat.", vm.state.value.message)
@@ -236,9 +242,9 @@ class SkillsHubViewModelTest {
         val hold = CompletableDeferred<Unit>()
         val rig = rig().apply { status = { hold.await(); HttpStatusCode.OK to """{"running":false,"exit_code":0,"lines":[]}""" } }
         val vm = vm(rig)
-        vm.bind(gateway, "old")
+        vm.bound("old")
         vm.install(official)
-        vm.bind(gateway, "other")
+        vm.bound("other")
         val before = rig.count("/status")
         hold.complete(Unit)
         assertEquals(before, rig.count("/status"))
@@ -250,7 +256,7 @@ class SkillsHubViewModelTest {
     fun olderGatewayWithoutHubRoutesSaysSo() = runTest(dispatcher) {
         val rig = rig().apply { sourcesStatus = HttpStatusCode.NotFound; sources = """{"detail":"Not Found"}""" }
         val vm = vm(rig)
-        vm.bind(gateway, null)
+        vm.bound(null)
         assertTrue(vm.state.value.unsupported)
     }
 
@@ -258,7 +264,7 @@ class SkillsHubViewModelTest {
     fun expiredSessionDuringInstallRaisesTheFlag() = runTest(dispatcher) {
         val rig = rig().apply { status = { HttpStatusCode.Unauthorized to "{}" } }
         val vm = vm(rig)
-        vm.bind(gateway, null)
+        vm.bound(null)
         vm.install(official)
         assertTrue(vm.state.value.sessionExpired)
         vm.consumeSessionExpired()
@@ -268,7 +274,7 @@ class SkillsHubViewModelTest {
     @Test
     fun openFillsPreviewAndScan() = runTest(dispatcher) {
         val vm = vm(rig())
-        vm.bind(gateway, null)
+        vm.bound(null)
         vm.open(community)
         val detail = assertNotNull(vm.state.value.detail)
         assertEquals(community.identifier, detail.preview?.name)
@@ -279,7 +285,7 @@ class SkillsHubViewModelTest {
     @Test
     fun previewFailureSetsDetailError() = runTest(dispatcher) {
         val vm = vm(rig().apply { previewStatus = HttpStatusCode.NotFound })
-        vm.bind(gateway, null)
+        vm.bound(null)
         vm.open(community)
         assertEquals("no such skill", vm.state.value.detail?.error)
         assertNull(vm.state.value.detail?.preview)
@@ -290,7 +296,7 @@ class SkillsHubViewModelTest {
         val hold = CompletableDeferred<Unit>()
         val rig = rig().apply { gate = { if (it == community.identifier) hold.await() } }
         val vm = vm(rig)
-        vm.bind(gateway, null)
+        vm.bound(null)
         vm.open(community)
         vm.open(official)
         assertEquals(official.identifier, vm.state.value.detail?.preview?.name)
@@ -313,7 +319,7 @@ class SkillsHubViewModelTest {
         val vm = vm(rig)
         var changed = 0
         vm.onSkillsChanged = { changed++ }
-        vm.bind(gateway, null)
+        vm.bound(null)
         vm.updateAll()
         assertTrue(UPDATE_ALL in vm.state.value.running)
         hold.complete(Unit)
@@ -329,7 +335,7 @@ class SkillsHubViewModelTest {
             status = { HttpStatusCode.OK to """{"running":false,"exit_code":1,"lines":["Not installed: the security scan found 2 high-risk patterns"]}""" }
         }
         val vm = vm(rig)
-        vm.bind(gateway, null)
+        vm.bound(null)
         vm.open(official) // the sheet is open on the skill being installed
         vm.install(official) // official skips the pre-scan, so the only scan is the follow-up
         assertEquals("official/creative/ascii-art", vm.state.value.detail?.skill?.installKey)
@@ -342,7 +348,7 @@ class SkillsHubViewModelTest {
     fun aFailedFollowUpScanDoesNotReopenAClosedSheet() = runTest(dispatcher) {
         val rig = rig().apply { scanStatus = HttpStatusCode.NotFound; status = { HttpStatusCode.OK to blockedLines } }
         val vm = vm(rig)
-        vm.bind(gateway, null)
+        vm.bound(null)
         vm.open(community)
         vm.closeDetail()
         vm.install(official)
@@ -353,7 +359,7 @@ class SkillsHubViewModelTest {
     fun aFailedFollowUpScanDoesNotLandOnAnotherSkillsSheet() = runTest(dispatcher) {
         val rig = rig().apply { scanStatus = HttpStatusCode.NotFound; status = { HttpStatusCode.OK to blockedLines } }
         val vm = vm(rig)
-        vm.bind(gateway, null)
+        vm.bound(null)
         vm.open(community)
         vm.install(official)
         assertEquals(community.installKey, vm.state.value.detail?.skill?.installKey)
@@ -364,7 +370,7 @@ class SkillsHubViewModelTest {
     fun anExpiredSessionOnTheFollowUpScanRaisesTheFlag() = runTest(dispatcher) {
         val rig = rig().apply { scanStatus = HttpStatusCode.Unauthorized; status = { HttpStatusCode.OK to blockedLines } }
         val vm = vm(rig)
-        vm.bind(gateway, null)
+        vm.bound(null)
         vm.install(official)
         assertTrue(vm.state.value.sessionExpired)
     }
@@ -372,10 +378,78 @@ class SkillsHubViewModelTest {
     @Test
     fun bindClearsTheSearchText() = runTest(dispatcher) {
         val vm = vm(rig())
-        vm.bind(gateway, "a")
+        vm.bound("a")
         vm.query.edit { append("pdf") }
-        vm.bind(gateway, "b")
+        vm.bound("b")
         assertEquals("", vm.query.text.toString())
+    }
+
+    @Test
+    fun bindAloneSendsNoRequest() = runTest(dispatcher) {
+        val rig = rig()
+        vm(rig).bind(gateway, "ruby")
+        assertEquals(0, rig.log.size)
+    }
+
+    @Test
+    fun retryAfterAFailedLoadReloads() = runTest(dispatcher) {
+        val rig = rig().apply { sourcesStatus = HttpStatusCode.InternalServerError }
+        val vm = vm(rig)
+        vm.bound(null)
+        assertNotNull(vm.state.value.featured.error)
+        rig.sourcesStatus = HttpStatusCode.OK
+        vm.refresh()
+        assertEquals(listOf("pdf"), vm.state.value.featured.items?.map { it.name })
+        assertNull(vm.state.value.featured.error)
+    }
+
+    @Test
+    fun uninstallingAnOfficialSkillClearsItsMark() = runTest(dispatcher) {
+        val rig = rig().apply { official = """{"skills":[{"name":"ascii-art","identifier":"official/creative/ascii-art","source":"official","installed":true}]}""" }
+        val vm = vm(rig)
+        vm.bound(null)
+        assertTrue("official/creative/ascii-art" in vm.state.value.installed)
+        vm.uninstall("ascii-art")
+        assertFalse("official/creative/ascii-art" in vm.state.value.installed)
+    }
+
+    @Test
+    fun previewAndScanCarryTheProfile() = runTest(dispatcher) {
+        val rig = rig()
+        val vm = vm(rig)
+        vm.bound("ruby")
+        vm.open(community)
+        vm.install(community)
+        val hub = rig.log.filter { "hub/preview" in it || "hub/scan" in it }
+        assertEquals(3, hub.size)
+        assertTrue(hub.all { "profile=ruby" in it })
+    }
+
+    @Test
+    fun closingTheHubDropsItsSheets() = runTest(dispatcher) {
+        val rig = rig().apply { scan = """{"name":"pdf","verdict":"caution","policy":"ask"}""" }
+        val vm = vm(rig)
+        vm.bound(null)
+        vm.open(community)
+        vm.install(community)
+        assertNotNull(vm.state.value.detail)
+        assertNotNull(vm.state.value.confirm)
+        vm.closeHub()
+        assertNull(vm.state.value.detail)
+        assertNull(vm.state.value.confirm)
+    }
+
+    @Test
+    fun aBlockAfterTheHubClosedLeavesTheSheetForViewScan() = runTest(dispatcher) {
+        val hold = CompletableDeferred<Unit>()
+        val rig = rig().apply { status = { hold.await(); HttpStatusCode.OK to blockedLines } }
+        val vm = vm(rig)
+        vm.bound(null)
+        vm.install(official)
+        vm.closeHub()
+        hold.complete(Unit)
+        assertNull(vm.state.value.detail)
+        assertNotNull(vm.state.value.message)
     }
 }
 

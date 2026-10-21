@@ -51,6 +51,7 @@ data class SkillsHubUiState(
 )
 
 interface SkillsHubActions {
+    fun refresh()
     fun search(query: String)
     fun open(skill: HubSkill)
     fun closeDetail()
@@ -77,8 +78,11 @@ class SkillsHubViewModel(private val api: SkillsHubApi) : ViewModel(), SkillsHub
     private var profile: String? = null
     private var binding: Job = newBinding()
     private var searchJob: Job? = null
+    private var loadJob: Job? = null
     private var pending: HubSkill? = null
+    private var hubOpen = false
 
+    /** Points the hub at [gateway] and [profile], dropping what the last binding loaded. Loads nothing: see [openHub]. */
     fun bind(gateway: SavedGateway, profile: String?) {
         if (this.gateway == gateway && this.profile == profile) return
         this.gateway = gateway
@@ -88,27 +92,51 @@ class SkillsHubViewModel(private val api: SkillsHubApi) : ViewModel(), SkillsHub
         searchJob = null
         pending = null
         query.clearText()
-        _state.value = SkillsHubUiState(featured = Loadable(loading = true), official = Loadable(loading = true))
-        val url = gateway.gatewayUrl
-        viewModelScope.launch(binding) {
-            when (val r = api.sources(url, profile)) {
-                is ApiResult.Success -> _state.update {
-                    it.copy(featured = Loadable(items = r.value.featured), installed = it.installed + r.value.installed.keys)
-                }
-                else -> _state.update {
-                    it.copy(
-                        featured = Loadable(error = r.errorMessage),
-                        unsupported = (r as? ApiResult.Failed)?.status == 404,
-                        sessionExpired = r == ApiResult.SessionExpired,
-                    )
+        _state.value = SkillsHubUiState()
+    }
+
+    /** The hub page opened: loads the lists afresh, so a failed or stale load never outlives a visit. */
+    fun openHub() {
+        hubOpen = true
+        refresh()
+    }
+
+    /** The hub page closed: its sheets don't wait for the next visit. */
+    fun closeHub() {
+        hubOpen = false
+        pending = null
+        _state.update { it.copy(detail = null, confirm = null) }
+    }
+
+    /** Loads the featured and official lists, again if they were loaded before. */
+    override fun refresh() {
+        val url = gateway?.gatewayUrl ?: return
+        val profile = profile
+        loadJob?.cancel()
+        _state.update { it.copy(featured = Loadable(items = it.featured.items, loading = true), official = Loadable(items = it.official.items, loading = true), unsupported = false) }
+        loadJob = viewModelScope.launch(binding) {
+            launch {
+                when (val r = api.sources(url, profile)) {
+                    is ApiResult.Success -> _state.update {
+                        it.copy(featured = Loadable(items = r.value.featured), installed = it.installed + r.value.installed.keys)
+                    }
+                    else -> _state.update {
+                        it.copy(
+                            featured = Loadable(error = r.errorMessage),
+                            unsupported = (r as? ApiResult.Failed)?.status == 404,
+                            sessionExpired = r == ApiResult.SessionExpired,
+                        )
+                    }
                 }
             }
-        }
-        viewModelScope.launch(binding) {
-            when (val r = api.official(url, profile)) {
-                is ApiResult.Success -> _state.update { it.copy(official = Loadable(items = r.value)) }
-                else -> _state.update {
-                    it.copy(official = Loadable(error = r.errorMessage), sessionExpired = it.sessionExpired || r == ApiResult.SessionExpired)
+            launch {
+                when (val r = api.official(url, profile)) {
+                    is ApiResult.Success -> _state.update {
+                        it.copy(official = Loadable(items = r.value), installed = it.installed + r.value.filter { s -> s.installed }.map { s -> s.installKey })
+                    }
+                    else -> _state.update {
+                        it.copy(official = Loadable(error = r.errorMessage), sessionExpired = it.sessionExpired || r == ApiResult.SessionExpired)
+                    }
                 }
             }
         }
@@ -141,14 +169,14 @@ class SkillsHubViewModel(private val api: SkillsHubApi) : ViewModel(), SkillsHub
         _state.update { it.copy(detail = HubDetail(skill)) }
         val id = skill.installKey
         viewModelScope.launch(binding) {
-            val r = api.preview(url, id)
+            val r = api.preview(url, profile, id)
             _state.update { s ->
                 if (s.detail?.skill?.installKey != id) s
                 else s.copy(detail = s.detail.run { if (r is ApiResult.Success) copy(preview = r.value) else copy(error = r.errorMessage) })
             }
         }
         viewModelScope.launch(binding) {
-            val r = api.scan(url, id)
+            val r = api.scan(url, profile, id)
             _state.update { s ->
                 if (s.detail?.skill?.installKey != id || r !is ApiResult.Success) s else s.copy(detail = s.detail.copy(scan = r.value))
             }
@@ -164,7 +192,7 @@ class SkillsHubViewModel(private val api: SkillsHubApi) : ViewModel(), SkillsHub
         setRunning(key, emptyList())
         if (skill.isOfficial) return runInstall(skill)
         viewModelScope.launch(binding) {
-            when (val r = api.scan(url, key)) {
+            when (val r = api.scan(url, profile, key)) {
                 is ApiResult.Success -> {
                     val scan = r.value
                     when {
@@ -238,7 +266,7 @@ class SkillsHubViewModel(private val api: SkillsHubApi) : ViewModel(), SkillsHub
             if (result is ApiResult.Success && result.value is HubActionResult.Blocked) {
                 stopRunning(key)
                 _state.update { it.copy(message = "${skill.name} was blocked by the security scan.") }
-                when (val scan = api.scan(url, key)) {
+                when (val scan = api.scan(url, profile, key)) {
                     is ApiResult.Success -> showScan(skill, scan.value)
                     // Only the sheet still open on this skill gets the error; the Blocked message already told them.
                     else -> _state.update { s ->
@@ -277,7 +305,9 @@ class SkillsHubViewModel(private val api: SkillsHubApi) : ViewModel(), SkillsHub
         }
     }
 
+    /** Opens the sheet on [scan] only while the hub page is up; otherwise the banner's "View scan" leaves it to the next visit. */
     private fun showScan(skill: HubSkill, scan: HubScan) = _state.update { s ->
+        if (!hubOpen) return@update s
         val keep = s.detail?.takeIf { it.skill.installKey == skill.installKey }
         s.copy(detail = (keep ?: HubDetail(skill)).copy(scan = scan))
     }

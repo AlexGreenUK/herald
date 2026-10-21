@@ -623,6 +623,7 @@ private object PreviewCapabilitiesActions : CapabilitiesActions {
 }
 
 private object PreviewSkillsHubActions : SkillsHubActions {
+    override fun refresh() = Unit
     override fun search(query: String) = Unit
     override fun open(skill: HubSkill) = Unit
     override fun closeDetail() = Unit
