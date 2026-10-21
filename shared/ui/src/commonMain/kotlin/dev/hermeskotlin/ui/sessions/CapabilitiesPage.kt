@@ -100,6 +100,8 @@ internal fun CapabilitiesPage(
     profile: String?,
     onBack: () -> Unit,
     onSessionExpired: () -> Unit,
+    /** The profile's display name, e.g. a bot's label; the hub and the uninstall sheet name it instead of [profile]. */
+    profileLabel: String? = null,
     title: String = "Capabilities",
     /** A line above the tabs, e.g. on when changes take effect. */
     note: String? = null,
@@ -159,7 +161,7 @@ internal fun CapabilitiesPage(
         hubMessage = hub.message.takeIf { !hubOpen },
         onDismissHubMessage = hubViewModel::dismissMessage,
     )
-    UninstallSheet(uninstalling, profile) { confirmed ->
+    UninstallSheet(uninstalling, profileLabel ?: profile) { confirmed ->
         uninstalling?.let { if (confirmed) hubViewModel.uninstall(it.name) }
         uninstalling = null
     }
@@ -167,7 +169,7 @@ internal fun CapabilitiesPage(
         PlatformBackHandler(enabled = true) { hubOpen = false }
         // Consumes taps, so one on a gap in the hub page doesn't reach the Capabilities list beneath.
         Box(Modifier.fillMaxSize().background(Theme[colors][background]).pointerInput(Unit) { detectTapGestures { } }) {
-            SkillsHubPage(gateway, profile, onBack = { hubOpen = false }, onSessionExpired = onSessionExpired, onSkillsChanged = viewModel::refresh, viewModel = hubViewModel)
+            SkillsHubPage(gateway, profile, profileLabel, onBack = { hubOpen = false }, onSessionExpired = onSessionExpired, onSkillsChanged = viewModel::refresh, viewModel = hubViewModel)
         }
     }
 }

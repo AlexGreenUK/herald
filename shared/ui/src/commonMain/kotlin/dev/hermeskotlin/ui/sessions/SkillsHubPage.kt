@@ -64,11 +64,12 @@ import dev.hermeskotlin.designsystem.typography
 import dev.hermeskotlin.ui.components.EmptyState
 import dev.hermeskotlin.ui.components.ListSkeleton
 
-/** Browse, search and install skills from the hub, into [profile]'s skills. */
+/** Browse, search and install skills from the hub, into [profile]'s skills; [profileLabel] is how the subtitle names it. */
 @Composable
 internal fun SkillsHubPage(
     gateway: SavedGateway,
     profile: String?,
+    profileLabel: String?,
     onBack: () -> Unit,
     onSessionExpired: () -> Unit,
     onSkillsChanged: () -> Unit,
@@ -90,7 +91,7 @@ internal fun SkillsHubPage(
             onSessionExpired()
         }
     }
-    SkillsHubView(state, viewModel.query, viewModel, onBack, subtitle = "Installs into ${profile ?: "the main profile"}")
+    SkillsHubView(state, viewModel.query, viewModel, onBack, subtitle = "Installs into ${profileLabel ?: profile ?: "the main profile"}")
 }
 
 @Composable
