@@ -189,6 +189,23 @@ class SkillsHubApiTest {
     }
 
     @Test
+    fun aBriefOutageDuringPollingIsRiddenOut() = runTest {
+        val down = HttpStatusCode.ServiceUnavailable to """{"detail":"down"}"""
+        val result = finish(down, down, HttpStatusCode.OK to status(false, 0, "Installed: x"))
+        assertEquals(HubActionResult.Done(listOf("Installed: x")), result)
+    }
+
+    @Test
+    fun aLastingOutageEndsThePolling() = runTest {
+        val calls = mutableListOf<String>()
+        val api = actionApi(startOk, HttpStatusCode.ServiceUnavailable to """{"detail":"down"}""", calls = calls)
+
+        assertIs<ApiResult.Unavailable>(api.install(url, null, "org/x"))
+
+        assertEquals(3, calls.count { "/status" in it })
+    }
+
+    @Test
     fun lostTrackNamesTheAction() = runTest {
         val api = actionApi(startOk, HttpStatusCode.NotFound to """{"detail":"Not Found"}""")
         val result = assertIs<ApiResult.Success<HubActionResult>>(api.uninstall(url, null, "x")).value

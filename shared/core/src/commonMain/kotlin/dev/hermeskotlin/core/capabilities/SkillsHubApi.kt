@@ -114,6 +114,7 @@ class SkillsHubApi(
         if (!start.ok) return ApiResult.Success(HubActionResult.Failed(listOfNotNull(start.error)))
         if (start.name.isBlank()) return ApiResult.Success(HubActionResult.Failed(listOf("The gateway didn't name the action.")))
 
+        var outages = 0
         while (true) {
             currentCoroutineContext().ensureActive() // a zero interval never suspends in delay
             val read = apiCall {
@@ -122,8 +123,12 @@ class SkillsHubApi(
                     parameter("lines", 200)
                 }
             }.map { it.decode<ActionStatus>() }
+            if (read is ApiResult.Unavailable && ++outages <= STATUS_RETRIES) {
+                delay(pollIntervalMs)
+                continue
+            }
             val status = when (read) {
-                is ApiResult.Success -> read.value
+                is ApiResult.Success -> read.value.also { outages = 0 }
                 is ApiResult.Failed -> return when (read.status) {
                     404 -> ApiResult.Success(HubActionResult.Failed(listOf("Lost track of the $noun on the gateway.")))
                     else -> read
@@ -154,6 +159,9 @@ class SkillsHubApi(
     private companion object {
         /** Search waits up to 30 s on slow sources, longer than the client's default timeout. */
         const val HUB_REQUEST_TIMEOUT_MS = 45_000L
+
+        /** Status reads in a row that may fail as unavailable before polling gives up; the gateway keeps going through a Wi-Fi to LTE switch. */
+        const val STATUS_RETRIES = 2
 
         /** The gateway writes `null` for what it doesn't have (a preview's tags, files); that reads as the field's default. */
         val lenientJson = Json(HermesJson) { coerceInputValues = true }
