@@ -17,6 +17,8 @@ import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -161,7 +163,8 @@ internal fun CapabilitiesPage(
     }
     if (hubOpen) {
         PlatformBackHandler(enabled = true) { hubOpen = false }
-        Box(Modifier.fillMaxSize().background(Theme[colors][background])) {
+        // Consumes taps, so one on a gap in the hub page doesn't reach the Capabilities list beneath.
+        Box(Modifier.fillMaxSize().background(Theme[colors][background]).pointerInput(Unit) { detectTapGestures { } }) {
             SkillsHubPage(gateway, profile, onBack = { hubOpen = false }, onSessionExpired = onSessionExpired, onSkillsChanged = viewModel::refresh, viewModel = hubViewModel)
         }
     }

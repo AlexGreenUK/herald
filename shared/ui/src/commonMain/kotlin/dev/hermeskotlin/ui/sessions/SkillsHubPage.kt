@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -38,6 +39,7 @@ import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.Search
 import com.composeunstyled.Text
 import com.composeunstyled.theme.Theme
+import dev.hermeskotlin.core.capabilities.HubFinding
 import dev.hermeskotlin.core.capabilities.HubScan
 import dev.hermeskotlin.core.capabilities.HubSkill
 import dev.hermeskotlin.core.gateway.SavedGateway
@@ -169,7 +171,7 @@ private fun HubLists(state: SkillsHubUiState, actions: SkillsHubActions) {
     }
 }
 
-private val HubPadding = androidx.compose.foundation.layout.PaddingValues(start = 14.dp, end = 14.dp, top = 4.dp, bottom = 32.dp)
+private val HubPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 4.dp, bottom = 32.dp)
 
 @Composable
 private fun HubError(message: String) = EmptyState(Lucide.CloudOff, "Couldn't load", message, error = true)
@@ -284,11 +286,7 @@ private fun ScanFindings(scan: HubScan, expanded: Boolean) {
                 color = Theme[colors][textSecondary],
             )
             scan.findings.forEach {
-                Text(
-                    "${it.severity} · ${it.file}:${it.line} · ${it.description}",
-                    style = Theme[typography][code].copy(fontSize = 12.sp),
-                    color = Theme[colors][textTertiary],
-                )
+                FindingLine(it)
             }
         }
     }
@@ -308,11 +306,7 @@ internal fun HubConfirmSheet(scan: HubScan?, actions: SkillsHubActions) {
                     Text(it, style = Theme[typography][bodySmall], color = Theme[colors][textSecondary])
                 }
                 s.findings.forEach {
-                    Text(
-                        "${it.severity} · ${it.file}:${it.line} · ${it.description}",
-                        style = Theme[typography][code].copy(fontSize = 12.sp),
-                        color = Theme[colors][textTertiary],
-                    )
+                    FindingLine(it)
                 }
                 Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Button("Install anyway", onClick = actions::confirmInstall, variant = ButtonVariant.Danger)
@@ -321,4 +315,13 @@ internal fun HubConfirmSheet(scan: HubScan?, actions: SkillsHubActions) {
             }
         }
     }
+}
+
+@Composable
+private fun FindingLine(f: HubFinding) {
+    Text(
+        "${f.severity} · ${f.file}:${f.line} · ${f.description}",
+        style = Theme[typography][code].copy(fontSize = 12.sp),
+        color = Theme[colors][textTertiary],
+    )
 }
