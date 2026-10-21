@@ -5,9 +5,17 @@ import dev.hermeskotlin.core.network.ApiResult
 import dev.hermeskotlin.core.network.createHttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
+import io.ktor.client.engine.mock.toByteArray
+import io.ktor.http.HttpMethod
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -99,5 +107,107 @@ class SkillsHubApiTest {
 
         val failed = assertIs<ApiResult.Failed>(api.sources(url, null))
         assertEquals(404, failed.status)
+    }
+
+    private val startOk = """{"name":"skills-install-x","ok":true,"pid":7}"""
+    private fun status(running: Boolean, exit: Int?, vararg lines: String) =
+        """{"name":"skills-install-x","running":$running,"exit_code":${exit ?: "null"},"pid":null,"lines":[${lines.joinToString(",") { "\"" + it + "\"" }}]}"""
+
+    /** Start answers [startBody]; each status read answers the next of [statuses] (the last repeats). */
+    private fun actionApi(startBody: String, vararg statuses: Pair<HttpStatusCode, String>, onCall: (String, String) -> Unit = { _, _ -> }, calls: MutableList<String> = mutableListOf()) =
+        SkillsHubApi(createHttpClient(MockEngine { request ->
+            val path = request.url.encodedPath
+            val body = if (request.method == HttpMethod.Post) request.body.toByteArray().decodeToString() else ""
+            calls += "${request.method.value} $path ${request.url.encodedQuery} $body".trim()
+            onCall(path, body)
+            if (path.endsWith("/status")) {
+                val n = calls.count { it.contains("/status") } - 1
+                val (code, text) = statuses[minOf(n, statuses.size - 1)]
+                respond(text, code, json)
+            } else respond(startBody, HttpStatusCode.OK, json)
+        }), pollIntervalMs = 0)
+
+    private suspend fun finish(vararg statuses: Pair<HttpStatusCode, String>) =
+        assertIs<ApiResult.Success<HubActionResult>>(actionApi(startOk, *statuses).install(url, null, "org/x")).value
+
+    @Test
+    fun installPollsUntilDoneAndSendsProfile() = runTest {
+        val calls = mutableListOf<String>()
+        val api = actionApi(startOk, HttpStatusCode.OK to status(true, null), HttpStatusCode.OK to status(false, 0, "Installed: x"), calls = calls)
+
+        val result = assertIs<ApiResult.Success<HubActionResult>>(api.install(url, "ruby", "org/x")).value
+
+        assertEquals(HubActionResult.Done(listOf("Installed: x")), result)
+        val start = calls.first()
+        assertTrue(start.startsWith("POST /api/skills/hub/install") && "\"identifier\":\"org/x\"" in start && "\"profile\":\"ruby\"" in start, start)
+        assertEquals(2, calls.count { "/status" in it })
+        assertTrue(calls.last().contains("/api/actions/skills-install-x/status") && calls.last().contains("lines=200") && calls.last().contains("profile=ruby"), calls.last())
+    }
+
+    @Test
+    fun blockedInstallIsRecognised() = runTest {
+        val result = finish(HttpStatusCode.OK to status(false, 1, "scanning", "Not installed: the security scan found 2 high-risk pattern(s) in 'org/evil' (listed above)."))
+        assertEquals(2, assertIs<HubActionResult.Blocked>(result).findings)
+    }
+
+    @Test
+    fun legacyBlockMessageIsRecognised() = runTest {
+        val result = finish(HttpStatusCode.OK to status(false, 1, "Installation blocked: Blocked (community source + dangerous verdict, 3 findings)"))
+        assertEquals(3, assertIs<HubActionResult.Blocked>(result).findings)
+    }
+
+    @Test
+    fun failedActionKeepsTheLogTail() = runTest {
+        assertEquals(HubActionResult.Failed(listOf("b", "c", "d")), finish(HttpStatusCode.OK to status(false, 1, "a", "b", "c", "d")))
+    }
+
+    @Test
+    fun refusedStartIsAFailure() = runTest {
+        val calls = mutableListOf<String>()
+        val api = actionApi("""{"name":"","ok":false,"pid":null,"error":"identifier is required"}""", calls = calls)
+
+        val result = assertIs<ApiResult.Success<HubActionResult>>(api.install(url, null, "")).value
+
+        assertEquals(HubActionResult.Failed(listOf("identifier is required")), result)
+        assertEquals(0, calls.count { "/status" in it })
+    }
+
+    @Test
+    fun statusGoneMidPollEndsAsFailed() = runTest {
+        val result = finish(HttpStatusCode.NotFound to """{"detail":"Not Found"}""")
+        assertEquals(HubActionResult.Failed(listOf("Lost track of the install on the gateway.")), result)
+    }
+
+    @Test
+    fun uninstallAndUpdateHitTheirRoutes() = runTest {
+        val calls = mutableListOf<String>()
+        val api = actionApi(startOk, HttpStatusCode.OK to status(false, 0), calls = calls)
+
+        api.uninstall(url, null, "x")
+        api.updateAll(url, null)
+
+        val posts = calls.filter { it.startsWith("POST") }
+        assertTrue(posts[0].startsWith("POST /api/skills/hub/uninstall") && "\"name\":\"x\"" in posts[0], posts[0])
+        assertTrue(posts[1].startsWith("POST /api/skills/hub/update"), posts[1])
+    }
+
+    // Real time on purpose: the mock engine answers on its own dispatcher, so virtual time never sees it.
+    @Test
+    fun cancellingStopsPolling() = runTest {
+        var statusCalls = 0
+        val api = SkillsHubApi(createHttpClient(MockEngine { request ->
+            if (request.url.encodedPath.endsWith("/status")) {
+                statusCalls++
+                respond(status(true, null), HttpStatusCode.OK, json)
+            } else respond(startOk, HttpStatusCode.OK, json)
+        }), pollIntervalMs = 200)
+
+        withContext(Dispatchers.Default) {
+            val job = launch { api.install(url, null, "org/x") }
+            withTimeout(5_000) { while (statusCalls < 2) delay(5) }
+            job.cancelAndJoin()
+            delay(600)
+            assertEquals(2, statusCalls)
+        }
     }
 }

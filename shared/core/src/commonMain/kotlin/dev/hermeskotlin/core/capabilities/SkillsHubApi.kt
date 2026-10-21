@@ -9,10 +9,31 @@ import io.ktor.client.HttpClient
 import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.get
 import io.ktor.client.request.parameter
+import io.ktor.client.request.post
+import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
+import io.ktor.http.ContentType
+import io.ktor.http.contentType
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+
+@Serializable
+private data class ActionStart(val name: String = "", val ok: Boolean = true, val error: String? = null)
+
+@Serializable
+private data class ActionStatus(
+    val running: Boolean = false,
+    @SerialName("exit_code") val exitCode: Int? = null,
+    val lines: List<String> = emptyList(),
+)
 
 @Serializable
 private data class OfficialResponse(val skills: List<HubSkill> = emptyList())
@@ -47,6 +68,63 @@ class SkillsHubApi(
     suspend fun scan(url: GatewayUrl, identifier: String): ApiResult<HubScan> = apiCall {
         client.get(url.resolve("api/skills/hub/scan")) { parameter("identifier", identifier) }
     }.map { it.decode<HubScan>() }
+
+    suspend fun install(url: GatewayUrl, profile: String?, identifier: String): ApiResult<HubActionResult> =
+        runAction(url, profile, "api/skills/hub/install", buildJsonObject { put("identifier", identifier) })
+
+    suspend fun uninstall(url: GatewayUrl, profile: String?, name: String): ApiResult<HubActionResult> =
+        runAction(url, profile, "api/skills/hub/uninstall", buildJsonObject { put("name", name) })
+
+    suspend fun updateAll(url: GatewayUrl, profile: String?): ApiResult<HubActionResult> =
+        runAction(url, profile, "api/skills/hub/update", buildJsonObject { })
+
+    /** Starts a background action on the gateway, then polls its status until the process ends. */
+    private suspend fun runAction(url: GatewayUrl, profile: String?, route: String, fields: JsonObject): ApiResult<HubActionResult> {
+        val body = buildJsonObject {
+            fields.forEach { (k, v) -> put(k, v) }
+            profile?.let { put("profile", it) }
+        }
+        val started = apiCall {
+            client.post(url.resolve(route)) {
+                contentType(ContentType.Application.Json)
+                setBody(body)
+            }
+        }.map { it.decode<ActionStart>() }
+        val start = when (started) {
+            is ApiResult.Success -> started.value
+            else -> return started.passThrough()
+        }
+        if (!start.ok) return ApiResult.Success(HubActionResult.Failed(listOfNotNull(start.error)))
+
+        while (true) {
+            currentCoroutineContext().ensureActive() // a zero interval never suspends in delay
+            val read = apiCall {
+                client.get(url.resolve("api/actions/${start.name}/status")) {
+                    profile(profile)
+                    parameter("lines", 200)
+                }
+            }.map { it.decode<ActionStatus>() }
+            val status = when (read) {
+                is ApiResult.Success -> read.value
+                is ApiResult.Failed ->
+                    if (read.status == 404) return ApiResult.Success(HubActionResult.Failed(listOf("Lost track of the install on the gateway.")))
+                    else return read
+                else -> return read.passThrough()
+            }
+            if (!status.running) {
+                val result = when {
+                    status.exitCode == 0 -> HubActionResult.Done(status.lines)
+                    else -> scanBlock(status.lines) ?: HubActionResult.Failed(status.lines.takeLast(3))
+                }
+                return ApiResult.Success(result)
+            }
+            delay(pollIntervalMs)
+        }
+    }
+
+    /** A non-success result carries no value, so it can change its type freely. */
+    @Suppress("UNCHECKED_CAST")
+    private fun <T> ApiResult<*>.passThrough(): ApiResult<T> = this as ApiResult<T>
 
     private fun HttpRequestBuilder.profile(profile: String?) {
         profile?.let { parameter("profile", it) }
