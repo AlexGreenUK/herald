@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -57,6 +58,8 @@ import com.composables.icons.lucide.Ellipsis
 import dev.hermeskotlin.designsystem.background
 import dev.hermeskotlin.designsystem.components.BottomSheet
 import dev.hermeskotlin.designsystem.components.IconButton
+import dev.hermeskotlin.designsystem.components.MinTouchTarget
+import dev.hermeskotlin.designsystem.components.Spinner
 import dev.hermeskotlin.designsystem.components.SheetHeader
 import dev.hermeskotlin.ui.PlatformBackHandler
 import com.composables.icons.lucide.Lucide
@@ -159,6 +162,7 @@ internal fun CapabilitiesPage(
         title = title,
         note = note,
         hubMessage = hub.message.takeIf { !hubOpen },
+        removing = hub.running.keys,
         onDismissHubMessage = hubViewModel::dismissMessage,
     )
     UninstallSheet(uninstalling, profileLabel ?: profile) { confirmed ->
@@ -218,6 +222,8 @@ internal fun CapabilitiesView(
     /** A message from the hub, e.g. after an uninstall, shown with the page's own. */
     hubMessage: String? = null,
     onDismissHubMessage: () -> Unit = {},
+    /** Names of hub skills being removed; their "⋯" shows progress and can't be pressed. */
+    removing: Set<String> = emptySet(),
     /** The hub page is drawn over this one; keep screen readers off the list beneath it. */
     hubOpen: Boolean = false,
 ) {
@@ -240,7 +246,7 @@ internal fun CapabilitiesView(
         )
         Box(Modifier.weight(1f).fillMaxWidth()) {
             when (state.tab) {
-                CapabilityTab.Skills -> SkillsTab(state, skillQuery, actions)
+                CapabilityTab.Skills -> SkillsTab(state, skillQuery, actions, removing)
                 CapabilityTab.Tools -> TabList(state.toolsets, empty = "No toolsets configured.", onRetry = actions::refresh) { toolsets ->
                     item(key = "note") { Hint("Toolsets the agent gets in new chats.") }
                     item(key = "toolsets") {
@@ -273,7 +279,7 @@ internal fun CapabilitiesView(
 }
 
 @Composable
-private fun SkillsTab(state: CapabilitiesUiState, skillQuery: TextFieldState, actions: CapabilitiesActions) {
+private fun SkillsTab(state: CapabilitiesUiState, skillQuery: TextFieldState, actions: CapabilitiesActions, removing: Set<String>) {
     val query = skillQuery.text.toString().trim()
     val all = state.skills.items
     val groups = remember(all, query) { skillGroups(all.orEmpty(), query) }
@@ -305,7 +311,7 @@ private fun SkillsTab(state: CapabilitiesUiState, skillQuery: TextFieldState, ac
                 )
             }
             item(key = "g-$category") {
-                RowCard(inGroup, key = { "s-${it.name}" }) { skill -> SkillRow(skill, onToggle = { on -> actions.setSkillEnabled(skill, on) }, onMore = { actions.uninstallSkill(skill) }) }
+                RowCard(inGroup, key = { "s-${it.name}" }) { skill -> SkillRow(skill, removing = skill.name in removing, onToggle = { on -> actions.setSkillEnabled(skill, on) }, onMore = { actions.uninstallSkill(skill) }) }
             }
         }
     }
@@ -340,7 +346,7 @@ internal fun <T> TabList(loadable: Loadable<T>, empty: String, onRetry: () -> Un
 }
 
 @Composable
-private fun SkillRow(skill: Skill, onToggle: (Boolean) -> Unit, onMore: () -> Unit) {
+private fun SkillRow(skill: Skill, removing: Boolean, onToggle: (Boolean) -> Unit, onMore: () -> Unit) {
     SwitchRow(
         title = skill.name,
         detail = skill.description.ifBlank { null },
@@ -353,6 +359,7 @@ private fun SkillRow(skill: Skill, onToggle: (Boolean) -> Unit, onMore: () -> Un
         checked = skill.enabled,
         onToggle = onToggle,
         onMore = onMore.takeIf { skill.provenance == "hub" },
+        moreBusy = removing,
     )
 }
 
@@ -444,6 +451,8 @@ private fun SwitchRow(
     lockedNote: String = "can't be changed here",
     /** A "⋯" button after the switch, for a row with more to do. */
     onMore: (() -> Unit)? = null,
+    /** Swaps the "⋯" for a spinner of the same size while its action runs. */
+    moreBusy: Boolean = false,
 ) {
     Row(
         Modifier
@@ -477,7 +486,10 @@ private fun SwitchRow(
             }
         }
         Switch(checked)
-        onMore?.let { IconButton(Lucide.Ellipsis, contentDescription = "More for $title", onClick = it) }
+        onMore?.let {
+            if (moreBusy) Box(Modifier.size(MinTouchTarget), contentAlignment = Alignment.Center) { Spinner(Modifier.size(16.dp)) }
+            else IconButton(Lucide.Ellipsis, contentDescription = "More for $title", onClick = it)
+        }
     }
 }
 
