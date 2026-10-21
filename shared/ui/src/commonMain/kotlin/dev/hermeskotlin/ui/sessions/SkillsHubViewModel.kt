@@ -1,6 +1,7 @@
 package dev.hermeskotlin.ui.sessions
 
 import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.foundation.text.input.clearText
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.hermeskotlin.core.capabilities.HubActionResult
@@ -86,6 +87,7 @@ class SkillsHubViewModel(private val api: SkillsHubApi) : ViewModel(), SkillsHub
         binding = newBinding()
         searchJob = null
         pending = null
+        query.clearText()
         _state.value = SkillsHubUiState(featured = Loadable(loading = true), official = Loadable(loading = true))
         val url = gateway.gatewayUrl
         viewModelScope.launch(binding) {
@@ -236,7 +238,13 @@ class SkillsHubViewModel(private val api: SkillsHubApi) : ViewModel(), SkillsHub
             if (result is ApiResult.Success && result.value is HubActionResult.Blocked) {
                 stopRunning(key)
                 _state.update { it.copy(message = "${skill.name} was blocked by the security scan.") }
-                (api.scan(url, key) as? ApiResult.Success)?.let { showScan(skill, it.value) }
+                when (val scan = api.scan(url, key)) {
+                    is ApiResult.Success -> showScan(skill, scan.value)
+                    else -> _state.update { s ->
+                        val keep = s.detail?.takeIf { it.skill.installKey == key } ?: HubDetail(skill)
+                        s.copy(detail = keep.copy(error = scan.errorMessage), sessionExpired = scan == ApiResult.SessionExpired)
+                    }
+                }
                 return@launch
             }
             finish(key, result, failure = "Couldn't install ${skill.name}") {

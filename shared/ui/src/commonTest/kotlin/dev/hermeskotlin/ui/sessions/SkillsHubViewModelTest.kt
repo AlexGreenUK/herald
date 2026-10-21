@@ -44,6 +44,10 @@ class SkillsHubViewModelTest {
         var official = """{"skills":[{"name":"ascii-art","identifier":"official/creative/ascii-art","source":"official"}]}"""
         var search = """{"results":[{"name":"pdf","identifier":"skills-sh/acme/pdf"}],"timed_out":[]}"""
         var scan = """{"name":"pdf","verdict":"safe","policy":"allow"}"""
+        var scanStatus = HttpStatusCode.OK
+        var previewStatus = HttpStatusCode.OK
+        /** Called with the identifier before a preview or scan answers; a test can hold one here. */
+        var gate: suspend (String) -> Unit = {}
         var sourcesStatus = HttpStatusCode.OK
         var status: suspend () -> Pair<HttpStatusCode, String> = { HttpStatusCode.OK to """{"running":false,"exit_code":0,"lines":["done"]}""" }
         val config = MockEngineConfig().apply {
@@ -54,7 +58,15 @@ class SkillsHubViewModelTest {
                     path.endsWith("hub/sources") -> respond(sources, sourcesStatus, json)
                     path.endsWith("hub/official") -> respond(official, HttpStatusCode.OK, json)
                     path.endsWith("hub/search") -> respond(search, HttpStatusCode.OK, json)
-                    path.endsWith("hub/scan") -> respond(scan, HttpStatusCode.OK, json)
+                    path.endsWith("hub/scan") -> {
+                        gate(request.url.parameters["identifier"].orEmpty())
+                        respond(scan, scanStatus, json)
+                    }
+                    path.endsWith("hub/preview") -> {
+                        val id = request.url.parameters["identifier"].orEmpty()
+                        gate(id)
+                        respond(if (previewStatus.value < 300) """{"name":"$id"}""" else """{"detail":"no such skill"}""", previewStatus, json)
+                    }
                     path.endsWith("/status") -> status().let { (code, body) -> respond(body, code, json) }
                     else -> respond("""{"name":"act1","ok":true}""", HttpStatusCode.OK, json)
                 }
@@ -251,6 +263,85 @@ class SkillsHubViewModelTest {
         assertTrue(vm.state.value.sessionExpired)
         vm.consumeSessionExpired()
         assertFalse(vm.state.value.sessionExpired)
+    }
+
+    @Test
+    fun openFillsPreviewAndScan() = runTest(dispatcher) {
+        val vm = vm(rig())
+        vm.bind(gateway, null)
+        vm.open(community)
+        val detail = assertNotNull(vm.state.value.detail)
+        assertEquals(community.identifier, detail.preview?.name)
+        assertEquals("safe", detail.scan?.verdict)
+        assertNull(detail.error)
+    }
+
+    @Test
+    fun previewFailureSetsDetailError() = runTest(dispatcher) {
+        val vm = vm(rig().apply { previewStatus = HttpStatusCode.NotFound })
+        vm.bind(gateway, null)
+        vm.open(community)
+        assertEquals("no such skill", vm.state.value.detail?.error)
+        assertNull(vm.state.value.detail?.preview)
+    }
+
+    @Test
+    fun aLateAnswerForAnotherSkillIsDropped() = runTest(dispatcher) {
+        val hold = CompletableDeferred<Unit>()
+        val rig = rig().apply { gate = { if (it == community.identifier) hold.await() } }
+        val vm = vm(rig)
+        vm.bind(gateway, null)
+        vm.open(community)
+        vm.open(official)
+        assertEquals(official.identifier, vm.state.value.detail?.preview?.name)
+        hold.complete(Unit)
+        assertEquals(official.installKey, vm.state.value.detail?.skill?.installKey)
+        assertEquals(official.identifier, vm.state.value.detail?.preview?.name)
+
+        val hold2 = CompletableDeferred<Unit>()
+        rig.gate = { hold2.await() }
+        vm.open(community)
+        vm.closeDetail()
+        hold2.complete(Unit)
+        assertNull(vm.state.value.detail)
+    }
+
+    @Test
+    fun updateAllReportsAndRefetches() = runTest(dispatcher) {
+        val hold = CompletableDeferred<Unit>()
+        val rig = rig().apply { status = { hold.await(); HttpStatusCode.OK to """{"running":false,"exit_code":0,"lines":[]}""" } }
+        val vm = vm(rig)
+        var changed = 0
+        vm.onSkillsChanged = { changed++ }
+        vm.bind(gateway, null)
+        vm.updateAll()
+        assertTrue(UPDATE_ALL in vm.state.value.running)
+        hold.complete(Unit)
+        assertTrue(vm.state.value.running.isEmpty())
+        assertEquals("Skills updated. It applies from the next chat.", vm.state.value.message)
+        assertEquals(1, changed)
+    }
+
+    @Test
+    fun aFailedScanAfterABlockedInstallSetsTheDetailError() = runTest(dispatcher) {
+        val rig = rig().apply {
+            scanStatus = HttpStatusCode.NotFound
+            status = { HttpStatusCode.OK to """{"running":false,"exit_code":1,"lines":["Not installed: the security scan found 2 high-risk patterns"]}""" }
+        }
+        val vm = vm(rig)
+        vm.bind(gateway, null)
+        vm.install(official) // official skips the pre-scan, so the only scan is the follow-up
+        assertEquals("official/creative/ascii-art", vm.state.value.detail?.skill?.installKey)
+        assertNotNull(vm.state.value.detail?.error)
+    }
+
+    @Test
+    fun bindClearsTheSearchText() = runTest(dispatcher) {
+        val vm = vm(rig())
+        vm.bind(gateway, "a")
+        vm.query.edit { append("pdf") }
+        vm.bind(gateway, "b")
+        assertEquals("", vm.query.text.toString())
     }
 }
 
