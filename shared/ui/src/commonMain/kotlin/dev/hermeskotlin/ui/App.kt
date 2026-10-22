@@ -56,6 +56,8 @@ import dev.hermeskotlin.ui.chat.GatewayFileViewer
 import dev.hermeskotlin.ui.chat.ChatViewModel
 import dev.hermeskotlin.ui.chat.ModelConfirmDialog
 import dev.hermeskotlin.ui.chat.ModelSheet
+import dev.hermeskotlin.ui.chat.ProvideReplySpeaker
+import dev.hermeskotlin.ui.chat.replySpeaker
 import dev.hermeskotlin.ui.sessions.CapabilitiesPage
 import dev.hermeskotlin.ui.sessions.ConfigPage
 import dev.hermeskotlin.core.chat.ChatState
@@ -344,6 +346,16 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
     // the foreground; that keeps the gateway's live list polled then (every 10 s, as while the sidebar shows), and
     // never in the background.
     val sessions: SessionsViewModel = koinViewModel()
+    val profileRoster by sessions.roster.collectAsStateWithLifecycle()
+    // The bot answering in the open chat, named above its replies. Only a launch profile the gateway named counts:
+    // a guessed `default` could name the wrong bot. Equal unless what's drawn changed, so a roster refresh doesn't
+    // redraw the chat.
+    val speaker = replySpeaker(
+        faces,
+        route.target.bot?.name,
+        route.target.profile,
+        profileRoster?.takeIf { it.launchKnown }?.launch,
+    )
     val others: OtherChatsViewModel = koinViewModel { parametersOf(sessions) }
     val settings = LocalAppSettings.current
     val alerts = settings.otherChatsAlerts
@@ -474,30 +486,33 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
                     onBack = { openDesktopRoom = null },
                     onOpenFile = openRoomFile,
                 )
-                else -> ChatScreen(
-                    target = route.target,
-                    onOpenSidebar = { scope.launch { sidebar.toggle() } },
-                    onNewChat = app::newChat,
-                    onOpenMenu = openSessionId?.let { { menuOpen = true } },
-                    onOpenChat = { id, title -> app.openSession(id, title ?: "Untitled session") },
-                    onSwitchProfile = app::switchProfile,
-                    viewModel = chat,
-                    sessionsBadge = if (alerts) sessionsBadge else SessionsBadge(),
-                    otherChatBanner = banner.takeIf { alerts && settings.otherChatsBanner && !drawerOver },
-                    onOpenOtherChat = { event: OtherChatEvent ->
-                        others.dismissBanner(event)
-                        openOther(event.chatId, event.title, event.bot)
-                    },
-                    onDismissOtherChat = others::dismissBanner,
-                    onNextChat = if (!alerts) null else fun(): Boolean {
-                        val next = others.nextChat()
-                        if (next != null) {
-                            banner?.let(others::dismissBanner)
-                            openOther(next.id, next.title, next.bot)
-                        }
-                        return next != null
-                    },
-                )
+                // Rooms draw their own transcripts, each bot under its own name; only the chat has one speaker.
+                else -> ProvideReplySpeaker(speaker) {
+                    ChatScreen(
+                        target = route.target,
+                        onOpenSidebar = { scope.launch { sidebar.toggle() } },
+                        onNewChat = app::newChat,
+                        onOpenMenu = openSessionId?.let { { menuOpen = true } },
+                        onOpenChat = { id, title -> app.openSession(id, title ?: "Untitled session") },
+                        onSwitchProfile = app::switchProfile,
+                        viewModel = chat,
+                        sessionsBadge = if (alerts) sessionsBadge else SessionsBadge(),
+                        otherChatBanner = banner.takeIf { alerts && settings.otherChatsBanner && !drawerOver },
+                        onOpenOtherChat = { event: OtherChatEvent ->
+                            others.dismissBanner(event)
+                            openOther(event.chatId, event.title, event.bot)
+                        },
+                        onDismissOtherChat = others::dismissBanner,
+                        onNextChat = if (!alerts) null else fun(): Boolean {
+                            val next = others.nextChat()
+                            if (next != null) {
+                                banner?.let(others::dismissBanner)
+                                openOther(next.id, next.title, next.bot)
+                            }
+                            return next != null
+                        },
+                    )
+                }
             }
         }
     }
