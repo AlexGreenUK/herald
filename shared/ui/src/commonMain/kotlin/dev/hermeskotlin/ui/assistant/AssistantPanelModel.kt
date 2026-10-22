@@ -5,6 +5,7 @@ import androidx.compose.foundation.text.input.clearText
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import dev.hermeskotlin.core.auth.AuthApi
 import dev.hermeskotlin.core.bots.BotsApi
+import dev.hermeskotlin.core.bots.showsPicture
 import dev.hermeskotlin.core.chat.ChatSession
 import dev.hermeskotlin.core.chat.InputRequest
 import dev.hermeskotlin.core.connection.ConnectionState
@@ -167,6 +168,10 @@ class AssistantPanelModel(
 
     /** Takes up the gateway Herald is on, its picked profile and a new chat there. */
     private suspend fun bind() {
+        // The last gateway's bot doesn't answer here, signed in or not.
+        speakerJob?.cancel()
+        _speaker.value = null
+        speakerSettled = false
         val saved = gateways.current()
         if (saved == null || !auth.hasStoredSession(saved.gatewayUrl)) {
             gateway = null
@@ -179,15 +184,18 @@ class AssistantPanelModel(
         connection.start(saved.gatewayUrl)
         newChat()
         _phase.value = AssistantPhase.Ready
-        _speaker.value = null
         readSpeaker(saved, profile)
     }
 
     private var speakerJob: Job? = null
 
+    /** Whether [speaker] is all the gateway can tell: false while it's unknown or its picture failed to load. */
+    private var speakerSettled = false
+
     /**
      * Which bot answers on [saved] as [profile] (null: the gateway's launch profile), once the socket is up. Left
-     * to "Hermes" when it can't be had (offline, an older gateway); the next call-up asks again.
+     * to "Hermes" when it can't be had (offline, an older gateway), or drawn as its shape when its picture can't;
+     * the next call-up asks again.
      */
     private fun readSpeaker(saved: SavedGateway, profile: String?) {
         val bots = bots ?: return
@@ -203,17 +211,21 @@ class AssistantPanelModel(
             }
             // Only a launch profile the gateway named: a guessed `default` could name the wrong bot.
             val launch = (profileRoster?.roster(saved.gatewayUrl) as? ApiResult.Success)?.value?.takeIf { it.launchKnown }?.launch
-            val bot = replySpeaker(BotFaces(roster.bots), null, profile, launch)?.face ?: return@launch
+            val speaker = replySpeaker(BotFaces(roster.bots), null, profile, launch) ?: return@launch
+            val bot = speaker.face
+            var pictureMissed = false
             val picture = if (!bot.hasAvatar) null else try {
                 bots.avatar(bot.name)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                pictureMissed = true
                 null
             }
             // Another gateway taken up meanwhile has its own bots.
             if (gateway?.url != saved.url) return@launch
-            _speaker.value = replySpeaker(BotFaces(roster.bots, picture?.let { mapOf(bot.name to it) }.orEmpty()), null, profile, launch)
+            _speaker.value = ReplySpeaker(speaker.name, bot, picture?.takeIf { showsPicture(bot, it) })
+            speakerSettled = !pictureMissed
         }
     }
 
@@ -244,8 +256,8 @@ class AssistantPanelModel(
         else {
             // The last call-up's chat goes on in the sessions list; an unused one is simply kept.
             if (_session.value?.state?.value?.hasConversation == true) newChat()
-            // Couldn't tell last time which bot answers (offline, say): ask again now.
-            gateway?.takeIf { _speaker.value == null && speakerJob?.isActive != true }?.let { readSpeaker(it, profile) }
+            // Couldn't tell last time which bot answers, or get its picture (offline, say): ask again now.
+            gateway?.takeIf { !speakerSettled && speakerJob?.isActive != true }?.let { readSpeaker(it, profile) }
         }
         _shows.update { it + 1 }
     }
