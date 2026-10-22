@@ -67,7 +67,17 @@ data class HubPreview(
     val tags: List<String> = emptyList(),
     @SerialName("skill_md") val skillMd: String = "",
     val files: List<String> = emptyList(),
-)
+) {
+    /** [skillMd] without its YAML front matter, whose name, description and tags the sheet already shows. */
+    val body: String
+        get() {
+            val lines = skillMd.lines()
+            if (lines.firstOrNull()?.trim() != "---") return skillMd
+            val end = lines.drop(1).indexOfFirst { it.trim() == "---" || it.trim() == "..." }
+            if (end < 0) return skillMd
+            return lines.drop(end + 2).joinToString("\n").trimStart('\n')
+        }
+}
 
 /** One thing the security scan flagged. */
 @Serializable

@@ -263,4 +263,17 @@ class SkillsHubApiTest {
             assertEquals(2, statusCalls)
         }
     }
+
+    @Test
+    fun aPreviewsBodyLeavesOutTheFrontMatter() {
+        val md = "---\nname: 1password\ndescription: Set up op CLI\ntags: [security, cli]\n---\n\n# 1Password CLI\n\nUse this skill when…\n"
+        assertEquals("# 1Password CLI\n\nUse this skill when…\n", HubPreview(skillMd = md).body)
+    }
+
+    @Test
+    fun aPreviewWithoutFrontMatterIsShownWhole() {
+        assertEquals("# notes\n\n---\n\nmore", HubPreview(skillMd = "# notes\n\n---\n\nmore").body)
+        // An opening fence that never closes isn't front matter.
+        assertEquals("---\nname: x\n", HubPreview(skillMd = "---\nname: x\n").body)
+    }
 }

@@ -269,7 +269,7 @@ internal fun HubDetailSheet(state: SkillsHubUiState, actions: SkillsHubActions) 
                 }
                 when {
                     d.preview != null -> {
-                        Box(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) { MarkdownText(d.preview.skillMd) }
+                        Box(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) { MarkdownText(d.preview.body) }
                         if (d.preview.files.isNotEmpty()) {
                             Text(d.preview.files.joinToString("\n"), style = Theme[typography][code].copy(fontSize = 12.sp), color = Theme[colors][textTertiary])
                         }
