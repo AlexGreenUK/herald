@@ -44,6 +44,8 @@ private data class OfficialResponse(val skills: List<HubSkill> = emptyList())
 class SkillsHubApi(
     private val client: HttpClient,
     private val pollIntervalMs: Long = 1_000,
+    /** How long, in waits between status reads, an action is polled before Herald stops waiting; the gateway keeps it going. */
+    private val actionTimeoutMs: Long = 10 * 60_000,
 ) {
 
     suspend fun sources(url: GatewayUrl, profile: String?): ApiResult<HubSources> = apiCall {
@@ -115,8 +117,13 @@ class SkillsHubApi(
         if (start.name.isBlank()) return ApiResult.Success(HubActionResult.Failed(listOf("The gateway didn't name the action.")))
 
         var outages = 0
+        // Time spent between reads; past actionTimeoutMs Herald stops waiting on an action that never ends.
+        var waited = 0L
         while (true) {
             currentCoroutineContext().ensureActive() // a zero interval never suspends in delay
+            if (pollIntervalMs > 0 && waited >= actionTimeoutMs) {
+                return ApiResult.Success(HubActionResult.StillRunning(listOf("The $noun is still running on the gateway. Check back later.")))
+            }
             val read = apiCall {
                 client.get(url.resolve("api/actions/${start.name.encodeURLPathPart()}/status")) {
                     profile(profile)
@@ -125,6 +132,7 @@ class SkillsHubApi(
             }.map { it.decode<ActionStatus>() }
             if (read is ApiResult.Unavailable && ++outages <= STATUS_RETRIES) {
                 delay(pollIntervalMs)
+                waited += pollIntervalMs
                 continue
             }
             val status = when (read) {
@@ -143,6 +151,7 @@ class SkillsHubApi(
                 return ApiResult.Success(result)
             }
             delay(pollIntervalMs)
+            waited += pollIntervalMs
         }
     }
 

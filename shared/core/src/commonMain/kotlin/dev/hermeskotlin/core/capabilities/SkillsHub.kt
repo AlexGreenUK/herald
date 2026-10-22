@@ -113,6 +113,9 @@ sealed interface HubActionResult {
     data class Blocked(val findings: Int?, override val lines: List<String>) : HubActionResult
 
     data class Failed(override val lines: List<String>) : HubActionResult
+
+    /** Herald stopped waiting; the gateway may still finish it. [lines] says so. */
+    data class StillRunning(override val lines: List<String>) : HubActionResult
 }
 
 private val scanBlockedNow = Regex("""Not installed:\s+the security scan found\s+(?:(\d+)\s+)?high-risk\s+pattern""", RegexOption.IGNORE_CASE)

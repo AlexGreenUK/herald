@@ -264,6 +264,32 @@ class SkillsHubApiTest {
         }
     }
 
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun anActionThatNeverEndsStopsBeingPolled() {
+        val dispatcher = StandardTestDispatcher()
+        runTest(dispatcher) {
+            var statusCalls = 0
+            val config = MockEngineConfig()
+            config.dispatcher = dispatcher
+            config.addHandler { request ->
+                if (request.url.encodedPath.endsWith("/status")) {
+                    statusCalls++
+                    respond(status(true, null), HttpStatusCode.OK, json)
+                } else respond(startOk, HttpStatusCode.OK, json)
+            }
+            val api = SkillsHubApi(createHttpClient(MockEngine(config)), pollIntervalMs = 1_000, actionTimeoutMs = 5_000)
+
+            val result = assertIs<ApiResult.Success<HubActionResult>>(api.install(url, null, "org/x")).value
+
+            assertEquals(HubActionResult.StillRunning(listOf("The install is still running on the gateway. Check back later.")), result)
+            val calls = statusCalls
+            advanceTimeBy(10_000)
+            runCurrent()
+            assertEquals(calls, statusCalls)
+        }
+    }
+
     @Test
     fun aPreviewsBodyLeavesOutTheFrontMatter() {
         val md = "---\nname: 1password\ndescription: Set up op CLI\ntags: [security, cli]\n---\n\n# 1Password CLI\n\nUse this skill when…\n"
