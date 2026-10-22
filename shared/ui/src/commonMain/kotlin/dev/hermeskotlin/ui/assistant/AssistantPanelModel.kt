@@ -42,6 +42,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonObject
 
@@ -162,16 +164,30 @@ class AssistantPanelModel(
     private var profile: String? = null
     private var sessionScope: CoroutineScope? = null
 
+    // Above init: bind() may run before the constructor gets past it, and a later initializer would undo it.
+    private var speakerJob: Job? = null
+
+    /** Whether [speaker] is all the gateway can tell: false while it's unknown or its picture failed to load. */
+    private var speakerSettled = false
+
+    /** Counts binds; a read of the speaker writes only if no bind came since it began. Guarded by [speakerLock]. */
+    private var speakerReads = 0
+    private val speakerLock = Mutex()
+
     init {
         scope.launch { bind() }
     }
 
     /** Takes up the gateway Herald is on, its picked profile and a new chat there. */
     private suspend fun bind() {
-        // The last gateway's bot doesn't answer here, signed in or not.
+        // The last gateway's bot doesn't answer here, signed in or not. Under the lock, so a read that's just
+        // finishing (cancelling is only a request) can't put it back.
         speakerJob?.cancel()
-        _speaker.value = null
-        speakerSettled = false
+        speakerLock.withLock {
+            speakerReads++
+            _speaker.value = null
+            speakerSettled = false
+        }
         val saved = gateways.current()
         if (saved == null || !auth.hasStoredSession(saved.gatewayUrl)) {
             gateway = null
@@ -187,11 +203,6 @@ class AssistantPanelModel(
         readSpeaker(saved, profile)
     }
 
-    private var speakerJob: Job? = null
-
-    /** Whether [speaker] is all the gateway can tell: false while it's unknown or its picture failed to load. */
-    private var speakerSettled = false
-
     /**
      * Which bot answers on [saved] as [profile] (null: the gateway's launch profile), once the socket is up. Left
      * to "Hermes" when it can't be had (offline, an older gateway), or drawn as its shape when its picture can't;
@@ -201,6 +212,7 @@ class AssistantPanelModel(
         val bots = bots ?: return
         speakerJob?.cancel()
         speakerJob = scope.launch {
+            val read = speakerLock.withLock { speakerReads }
             withTimeoutOrNull(SPEAKER_WAIT_MS) { connection.state.first { it is ConnectionState.Connected } } ?: return@launch
             val roster = try {
                 bots.roster()
@@ -222,10 +234,12 @@ class AssistantPanelModel(
                 pictureMissed = true
                 null
             }
-            // Another gateway taken up meanwhile has its own bots.
-            if (gateway?.url != saved.url) return@launch
-            _speaker.value = ReplySpeaker(speaker.name, bot, picture?.takeIf { showsPicture(bot, it) })
-            speakerSettled = !pictureMissed
+            speakerLock.withLock {
+                // Another gateway (or profile) taken up meanwhile has its own bot.
+                if (speakerReads != read) return@launch
+                _speaker.value = ReplySpeaker(speaker.name, bot, picture?.takeIf { showsPicture(bot, it) })
+                speakerSettled = !pictureMissed
+            }
         }
     }
 
