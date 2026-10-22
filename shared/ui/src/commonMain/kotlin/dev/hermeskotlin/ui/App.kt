@@ -472,7 +472,7 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
             )
         },
     ) {
-        ProvideReplySpeaker(speaker) { CompositionLocalProvider(LocalBotFaces provides faces) {
+        CompositionLocalProvider(LocalBotFaces provides faces) {
             when {
                 openRoom != null -> RoomScreen(
                     viewModel = rooms,
@@ -486,32 +486,35 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
                     onBack = { openDesktopRoom = null },
                     onOpenFile = openRoomFile,
                 )
-                else -> ChatScreen(
-                    target = route.target,
-                    onOpenSidebar = { scope.launch { sidebar.toggle() } },
-                    onNewChat = app::newChat,
-                    onOpenMenu = openSessionId?.let { { menuOpen = true } },
-                    onOpenChat = { id, title -> app.openSession(id, title ?: "Untitled session") },
-                    onSwitchProfile = app::switchProfile,
-                    viewModel = chat,
-                    sessionsBadge = if (alerts) sessionsBadge else SessionsBadge(),
-                    otherChatBanner = banner.takeIf { alerts && settings.otherChatsBanner && !drawerOver },
-                    onOpenOtherChat = { event: OtherChatEvent ->
-                        others.dismissBanner(event)
-                        openOther(event.chatId, event.title, event.bot)
-                    },
-                    onDismissOtherChat = others::dismissBanner,
-                    onNextChat = if (!alerts) null else fun(): Boolean {
-                        val next = others.nextChat()
-                        if (next != null) {
-                            banner?.let(others::dismissBanner)
-                            openOther(next.id, next.title, next.bot)
-                        }
-                        return next != null
-                    },
-                )
+                // Rooms draw their own transcripts, each bot under its own name; only the chat has one speaker.
+                else -> ProvideReplySpeaker(speaker) {
+                    ChatScreen(
+                        target = route.target,
+                        onOpenSidebar = { scope.launch { sidebar.toggle() } },
+                        onNewChat = app::newChat,
+                        onOpenMenu = openSessionId?.let { { menuOpen = true } },
+                        onOpenChat = { id, title -> app.openSession(id, title ?: "Untitled session") },
+                        onSwitchProfile = app::switchProfile,
+                        viewModel = chat,
+                        sessionsBadge = if (alerts) sessionsBadge else SessionsBadge(),
+                        otherChatBanner = banner.takeIf { alerts && settings.otherChatsBanner && !drawerOver },
+                        onOpenOtherChat = { event: OtherChatEvent ->
+                            others.dismissBanner(event)
+                            openOther(event.chatId, event.title, event.bot)
+                        },
+                        onDismissOtherChat = others::dismissBanner,
+                        onNextChat = if (!alerts) null else fun(): Boolean {
+                            val next = others.nextChat()
+                            if (next != null) {
+                                banner?.let(others::dismissBanner)
+                                openOther(next.id, next.title, next.bot)
+                            }
+                            return next != null
+                        },
+                    )
+                }
             }
-        } }
+        }
     }
 
     roomFile?.shownIn(roomKey, roster.all)?.let { target ->
