@@ -41,6 +41,8 @@ fun createHttpClient(
         install(HttpTimeout) {
             connectTimeoutMillis = 15_000
             requestTimeoutMillis = 30_000
+            // Unset, OkHttp's 10s read timeout cuts off answers that take long to start, like a transcription.
+            socketTimeoutMillis = 120_000
         }
         install(WebSockets)
         if (cookies != null) install(HttpCookies) { storage = cookies }
