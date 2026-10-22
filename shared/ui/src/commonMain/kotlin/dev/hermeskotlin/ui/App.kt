@@ -40,7 +40,6 @@ import dev.hermeskotlin.designsystem.components.SidebarLayout
 import dev.hermeskotlin.designsystem.components.Spinner
 import dev.hermeskotlin.designsystem.components.rememberSidebarState
 import dev.hermeskotlin.core.bots.Bot
-import dev.hermeskotlin.ui.bots.AVATAR_EDGE
 import dev.hermeskotlin.ui.bots.BotEditor
 import dev.hermeskotlin.ui.bots.BotFaces
 import dev.hermeskotlin.ui.bots.StartOverDialog
@@ -55,11 +54,9 @@ import dev.hermeskotlin.core.media.GatewayFile
 import dev.hermeskotlin.core.media.MediaApi
 import dev.hermeskotlin.ui.chat.GatewayFileViewer
 import dev.hermeskotlin.ui.chat.ChatViewModel
-import dev.hermeskotlin.ui.chat.LocalReplySpeaker
-import dev.hermeskotlin.ui.chat.LocalReplySpeakerPicture
 import dev.hermeskotlin.ui.chat.ModelConfirmDialog
 import dev.hermeskotlin.ui.chat.ModelSheet
-import dev.hermeskotlin.ui.chat.rememberImageBitmap
+import dev.hermeskotlin.ui.chat.ProvideReplySpeaker
 import dev.hermeskotlin.ui.chat.replySpeaker
 import dev.hermeskotlin.ui.sessions.CapabilitiesPage
 import dev.hermeskotlin.ui.sessions.ConfigPage
@@ -359,8 +356,6 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
         route.target.profile,
         profileRoster?.takeIf { it.launchKnown }?.launch,
     )
-    // Decoded once for every reply that shows it.
-    val speakerPicture = speaker?.picture?.let { rememberImageBitmap(it, maxEdge = AVATAR_EDGE) }
     val others: OtherChatsViewModel = koinViewModel { parametersOf(sessions) }
     val settings = LocalAppSettings.current
     val alerts = settings.otherChatsAlerts
@@ -477,11 +472,7 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
             )
         },
     ) {
-        CompositionLocalProvider(
-            LocalBotFaces provides faces,
-            LocalReplySpeaker provides speaker,
-            LocalReplySpeakerPicture provides speakerPicture,
-        ) {
+        ProvideReplySpeaker(speaker) { CompositionLocalProvider(LocalBotFaces provides faces) {
             when {
                 openRoom != null -> RoomScreen(
                     viewModel = rooms,
@@ -520,7 +511,7 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
                     },
                 )
             }
-        }
+        } }
     }
 
     roomFile?.shownIn(roomKey, roster.all)?.let { target ->

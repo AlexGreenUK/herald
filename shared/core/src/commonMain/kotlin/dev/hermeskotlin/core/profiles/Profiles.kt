@@ -49,15 +49,11 @@ class ProfilesApi(private val client: HttpClient) {
 
     /** `GET /api/profiles` plus `GET /api/profiles/active`, default profile first like Desktop's picker. */
     suspend fun roster(url: GatewayUrl): ApiResult<ProfileRoster> {
-        val launch = apiCall { client.get(url.resolve("api/profiles/active")) }
-            .map { it.body<ActiveProfileResponse>().current }
+        val launch = (apiCall { client.get(url.resolve("api/profiles/active")) }
+            .map { it.body<ActiveProfileResponse>().current } as? ApiResult.Success)?.value?.takeIf { it.isNotBlank() }
         return apiCall { client.get(url.resolve("api/profiles")) }.map { response ->
             val profiles = response.body<ProfilesResponse>().profiles.sortedByDescending { it.isDefault }
-            ProfileRoster(
-                profiles = profiles,
-                launch = (launch as? ApiResult.Success)?.value?.takeIf { it.isNotBlank() } ?: DEFAULT,
-                launchKnown = (launch as? ApiResult.Success)?.value?.isNotBlank() == true,
-            )
+            ProfileRoster(profiles = profiles, launch = launch ?: DEFAULT, launchKnown = launch != null)
         }
     }
 

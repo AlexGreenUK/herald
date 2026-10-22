@@ -9,11 +9,13 @@ import dev.hermeskotlin.ui.bots.AVATAR_EDGE
 import dev.hermeskotlin.ui.bots.BotFaces
 
 /**
- * The bot answering in a chat, as drawn above each reply: its name and its face. A data class of only what's drawn,
- * so a roster refresh that changes something else (a bot's latest chat) doesn't redraw the chat.
+ * The bot answering in a chat, as drawn above each reply: its name and its face. Equal when what's drawn is (the name,
+ * the face's look, the picture), so a roster refresh that changes something else (a bot's latest chat) doesn't redraw
+ * the chat. Not a data class: its generated copy and components would treat all of [face] as part of the value.
  */
-internal data class ReplySpeaker(val name: String, val face: Bot, val picture: ByteArray?) {
-    // The picture is compared by identity: the roster keeps the same bytes until the picture changes.
+internal class ReplySpeaker(val name: String, val face: Bot, val picture: ByteArray?) {
+    // The face by what [dev.hermeskotlin.ui.bots.DecodedBotAvatar] draws it from (name and uiMeta), the picture by
+    // identity: the roster keeps the same bytes until the picture changes.
     override fun equals(other: Any?): Boolean =
         other is ReplySpeaker && name == other.name && face.name == other.face.name && face.uiMeta == other.face.uiMeta &&
             picture === other.picture
