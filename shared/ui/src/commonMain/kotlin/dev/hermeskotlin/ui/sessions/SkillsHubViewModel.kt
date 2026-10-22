@@ -24,12 +24,13 @@ import kotlinx.coroutines.launch
 /** The `running` key of the "update all" action. */
 const val UPDATE_ALL = "update-all"
 
-/** A skill opened for a closer look; [error] is why its preview or scan didn't load. */
+/** A skill opened for a closer look; [error] is why its preview didn't load, [scanError] why its scan didn't. */
 data class HubDetail(
     val skill: HubSkill,
     val preview: HubPreview? = null,
     val scan: HubScan? = null,
     val error: String? = null,
+    val scanError: String? = null,
 )
 
 data class SkillsHubUiState(
@@ -44,7 +45,7 @@ data class SkillsHubUiState(
     /** A scan that wants the user's yes before the install goes ahead. */
     val confirm: HubScan? = null,
     /** Actions in flight, keyed by installKey, uninstall name or [UPDATE_ALL]. */
-    val running: Map<String, List<String>> = emptyMap(),
+    val running: Set<String> = emptySet(),
     val message: String? = null,
     val unsupported: Boolean = false,
     val sessionExpired: Boolean = false,
@@ -82,6 +83,12 @@ class SkillsHubViewModel(private val api: SkillsHubApi) : ViewModel(), SkillsHub
     private var pending: HubSkill? = null
     private var hubOpen = false
 
+    /**
+     * Counts installs and uninstalls this view model finished. A list read that started before one
+     * of them may not show it yet, so its installed map doesn't replace the marks then.
+     */
+    private var localChanges = 0
+
     /** Points the hub at [gateway] and [profile], dropping what the last binding loaded. Loads nothing: see [openHub]. */
     fun bind(gateway: SavedGateway, profile: String?) {
         if (this.gateway == gateway && this.profile == profile) return
@@ -113,18 +120,21 @@ class SkillsHubViewModel(private val api: SkillsHubApi) : ViewModel(), SkillsHub
         val url = gateway?.gatewayUrl ?: return
         val profile = profile
         loadJob?.cancel()
+        val seen = localChanges
         _state.update { it.copy(featured = Loadable(items = it.featured.items, loading = true), official = Loadable(items = it.official.items, loading = true), unsupported = false) }
         loadJob = viewModelScope.launch(binding) {
             launch {
                 when (val r = api.sources(url, profile)) {
+                    // The gateway's installed map is all of the profile's hub skills (the official
+                    // list's marks are a part of it), so it replaces what an earlier visit marked.
                     is ApiResult.Success -> _state.update {
-                        it.copy(featured = Loadable(items = r.value.featured), installed = it.installed + r.value.installed.keys)
+                        it.copy(featured = Loadable(items = r.value.featured), installed = if (localChanges == seen) r.value.installed.keys else it.installed)
                     }
                     else -> _state.update {
                         it.copy(
                             featured = Loadable(error = r.errorMessage),
                             unsupported = (r as? ApiResult.Failed)?.status == 404,
-                            sessionExpired = r == ApiResult.SessionExpired,
+                            sessionExpired = it.sessionExpired || r == ApiResult.SessionExpired,
                         )
                     }
                 }
@@ -153,12 +163,17 @@ class SkillsHubViewModel(private val api: SkillsHubApi) : ViewModel(), SkillsHub
         searchJob = viewModelScope.launch(binding) {
             delay(SEARCH_PAUSE_MS)
             _state.update { it.copy(results = Loadable(items = it.results?.items, loading = true)) }
+            val seen = localChanges
             when (val r = api.search(url, profile, q)) {
                 is ApiResult.Success -> _state.update {
-                    it.copy(results = Loadable(items = r.value.results), timedOut = r.value.timedOut, installed = it.installed + r.value.installed.keys)
+                    it.copy(
+                        results = Loadable(items = r.value.results),
+                        timedOut = r.value.timedOut,
+                        installed = if (localChanges == seen) r.value.installed.keys else it.installed,
+                    )
                 }
                 else -> _state.update {
-                    it.copy(results = Loadable(error = r.errorMessage), sessionExpired = r == ApiResult.SessionExpired)
+                    it.copy(results = Loadable(error = r.errorMessage), sessionExpired = it.sessionExpired || r == ApiResult.SessionExpired)
                 }
             }
         }
@@ -178,7 +193,15 @@ class SkillsHubViewModel(private val api: SkillsHubApi) : ViewModel(), SkillsHub
         viewModelScope.launch(binding) {
             val r = api.scan(url, profile, id)
             _state.update { s ->
-                if (s.detail?.skill?.installKey != id || r !is ApiResult.Success) s else s.copy(detail = s.detail.copy(scan = r.value))
+                when {
+                    s.detail?.skill?.installKey != id -> s
+                    r is ApiResult.Success -> s.copy(detail = s.detail.copy(scan = r.value))
+                    // Install scans again when this one failed.
+                    else -> s.copy(
+                        detail = s.detail.copy(scanError = "Couldn't scan: ${r.errorMessage}"),
+                        sessionExpired = s.sessionExpired || r == ApiResult.SessionExpired,
+                    )
+                }
             }
         }
     }
@@ -189,12 +212,19 @@ class SkillsHubViewModel(private val api: SkillsHubApi) : ViewModel(), SkillsHub
         val url = gateway?.gatewayUrl ?: return
         val key = skill.installKey
         if (key in _state.value.running) return
-        setRunning(key, emptyList())
+        setRunning(key)
         if (skill.isOfficial) return runInstall(skill)
+        // The open sheet scanned this skill already; that verdict is as fresh as a second scan.
+        val scanned = _state.value.detail?.takeIf { it.skill.installKey == key }?.scan
         viewModelScope.launch(binding) {
-            when (val r = api.scan(url, profile, key)) {
+            when (val r = scanned?.let { ApiResult.Success(it) } ?: api.scan(url, profile, key)) {
                 is ApiResult.Success -> {
                     val scan = r.value
+                    // A fresh scan replaces a failed one on the open page.
+                    if (scanned == null) _state.update { s ->
+                        val d = s.detail?.takeIf { it.skill.installKey == key } ?: return@update s
+                        s.copy(detail = d.copy(scan = scan, scanError = null))
+                    }
                     when {
                         scan.policy == "block" -> {
                             stopRunning(key)
@@ -211,7 +241,7 @@ class SkillsHubViewModel(private val api: SkillsHubApi) : ViewModel(), SkillsHub
                 else -> {
                     stopRunning(key)
                     _state.update {
-                        it.copy(message = "Couldn't check ${skill.name}: ${r.errorMessage}", sessionExpired = r == ApiResult.SessionExpired)
+                        it.copy(message = "Couldn't check ${skill.name}: ${r.errorMessage}", sessionExpired = it.sessionExpired || r == ApiResult.SessionExpired)
                     }
                 }
             }
@@ -223,7 +253,7 @@ class SkillsHubViewModel(private val api: SkillsHubApi) : ViewModel(), SkillsHub
         pending = null
         _state.update { it.copy(confirm = null) }
         if (skill.installKey in _state.value.running) return
-        setRunning(skill.installKey, emptyList())
+        setRunning(skill.installKey)
         runInstall(skill)
     }
 
@@ -235,9 +265,10 @@ class SkillsHubViewModel(private val api: SkillsHubApi) : ViewModel(), SkillsHub
     override fun uninstall(name: String) {
         val url = gateway?.gatewayUrl ?: return
         if (name in _state.value.running) return
-        setRunning(name, emptyList())
+        setRunning(name)
         viewModelScope.launch(binding) {
             finish(name, api.uninstall(url, profile, name), failure = "Couldn't remove $name") {
+                localChanges++
                 _state.update { s -> s.copy(installed = s.installed.filterNot { it == name || it.endsWith("/$name") }.toSet(), message = "Removed $name. $APPLIES_NEXT_CHAT") }
             }
         }
@@ -246,7 +277,7 @@ class SkillsHubViewModel(private val api: SkillsHubApi) : ViewModel(), SkillsHub
     override fun updateAll() {
         val url = gateway?.gatewayUrl ?: return
         if (UPDATE_ALL in _state.value.running) return
-        setRunning(UPDATE_ALL, emptyList())
+        setRunning(UPDATE_ALL)
         viewModelScope.launch(binding) {
             finish(UPDATE_ALL, api.updateAll(url, profile), failure = "Couldn't update skills") {
                 _state.update { it.copy(message = "Skills updated. $APPLIES_NEXT_CHAT") }
@@ -273,13 +304,14 @@ class SkillsHubViewModel(private val api: SkillsHubApi) : ViewModel(), SkillsHub
                         val d = s.detail?.takeIf { it.skill.installKey == key }
                         s.copy(
                             detail = d?.copy(error = scan.errorMessage) ?: s.detail,
-                            sessionExpired = scan == ApiResult.SessionExpired,
+                            sessionExpired = s.sessionExpired || scan == ApiResult.SessionExpired,
                         )
                     }
                 }
                 return@launch
             }
             finish(key, result, failure = "Couldn't install ${skill.name}") {
+                localChanges++
                 _state.update { it.copy(installed = it.installed + key, message = "Installed ${skill.name}. $APPLIES_NEXT_CHAT") }
             }
         }
@@ -294,12 +326,17 @@ class SkillsHubViewModel(private val api: SkillsHubApi) : ViewModel(), SkillsHub
                     onDone()
                     onSkillsChanged()
                 }
+                // Not a failure: it may still finish, so the lists are read again and Install is free again.
+                is HubActionResult.StillRunning -> {
+                    _state.update { it.copy(message = r.lines.firstOrNull()) }
+                    onSkillsChanged()
+                }
                 else -> _state.update { it.copy(message = listOfNotNull(failure, r.lines.lastOrNull { l -> l.isNotBlank() }).joinToString(": ")) }
             }
             else -> _state.update {
                 it.copy(
                     message = listOfNotNull(failure, result.errorMessage).joinToString(": "),
-                    sessionExpired = result == ApiResult.SessionExpired,
+                    sessionExpired = it.sessionExpired || result == ApiResult.SessionExpired,
                 )
             }
         }
@@ -312,7 +349,7 @@ class SkillsHubViewModel(private val api: SkillsHubApi) : ViewModel(), SkillsHub
         s.copy(detail = (keep ?: HubDetail(skill)).copy(scan = scan))
     }
 
-    private fun setRunning(key: String, lines: List<String>) = _state.update { it.copy(running = it.running + (key to lines)) }
+    private fun setRunning(key: String) = _state.update { it.copy(running = it.running + key) }
 
     private fun stopRunning(key: String) = _state.update { it.copy(running = it.running - key) }
 

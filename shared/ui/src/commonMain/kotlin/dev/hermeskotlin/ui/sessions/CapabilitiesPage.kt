@@ -20,6 +20,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -32,6 +33,7 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.key
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -55,7 +57,6 @@ import dev.hermeskotlin.designsystem.surface3
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.composables.icons.lucide.CloudOff
 import com.composables.icons.lucide.Ellipsis
-import dev.hermeskotlin.designsystem.background
 import dev.hermeskotlin.designsystem.components.BottomSheet
 import dev.hermeskotlin.designsystem.components.IconButton
 import dev.hermeskotlin.designsystem.components.MinTouchTarget
@@ -162,18 +163,22 @@ internal fun CapabilitiesPage(
         title = title,
         note = note,
         hubMessage = hub.message.takeIf { !hubOpen },
-        removing = hub.running.keys,
+        removing = hub.running,
         onDismissHubMessage = hubViewModel::dismissMessage,
     )
     UninstallSheet(uninstalling, profileLabel ?: profile) { confirmed ->
         uninstalling?.let { if (confirmed) hubViewModel.uninstall(it.name) }
         uninstalling = null
     }
+    // The skills search stays composed under the hub; it must not keep the keyboard and the typing.
+    val focus = LocalFocusManager.current
+    LaunchedEffect(hubOpen) { if (hubOpen) focus.clearFocus() }
     if (hubOpen) {
         PlatformBackHandler(enabled = true) { hubOpen = false }
-        // Consumes taps, so one on a gap in the hub page doesn't reach the Capabilities list beneath.
-        Box(Modifier.fillMaxSize().background(Theme[colors][background]).pointerInput(Unit) { detectTapGestures { } }) {
-            SkillsHubPage(gateway, profile, profileLabel, onBack = { hubOpen = false }, onSessionExpired = onSessionExpired, onSkillsChanged = viewModel::refresh, viewModel = hubViewModel)
+        // The list beneath is hidden, not covered, so the hub sits on the same backdrop as any page.
+        // This consumes taps, so one on a gap in the hub page doesn't reach that list.
+        Box(Modifier.fillMaxSize().pointerInput(Unit) { detectTapGestures { } }) {
+            SkillsHubPage(gateway, profile, profileLabel, onBack = { hubOpen = false }, onSessionExpired = onSessionExpired, viewModel = hubViewModel)
         }
     }
 }
@@ -224,10 +229,10 @@ internal fun CapabilitiesView(
     onDismissHubMessage: () -> Unit = {},
     /** Names of hub skills being removed; their "⋯" shows progress and can't be pressed. */
     removing: Set<String> = emptySet(),
-    /** The hub page is drawn over this one; keep screen readers off the list beneath it. */
+    /** The hub page is drawn over this one: hide the list (kept, so it keeps its scroll) and keep screen readers off it. */
     hubOpen: Boolean = false,
 ) {
-    Column(Modifier.fillMaxSize().then(if (hubOpen) Modifier.clearAndSetSemantics { } else Modifier)) {
+    Column(Modifier.fillMaxSize().then(if (hubOpen) Modifier.alpha(0f).clearAndSetSemantics { } else Modifier)) {
         SubpageHeader(title, onBack = onBack, subtitle = note ?: "What the agent can use in new chats")
         SegmentedControl(
             options = CapabilityTab.entries,

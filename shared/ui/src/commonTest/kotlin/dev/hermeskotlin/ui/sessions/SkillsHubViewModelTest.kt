@@ -49,13 +49,18 @@ class SkillsHubViewModelTest {
         /** Called with the identifier before a preview or scan answers; a test can hold one here. */
         var gate: suspend (String) -> Unit = {}
         var sourcesStatus = HttpStatusCode.OK
+        /** Called before a sources read answers; a test can hold one here. */
+        var sourcesGate: suspend () -> Unit = {}
         var status: suspend () -> Pair<HttpStatusCode, String> = { HttpStatusCode.OK to """{"running":false,"exit_code":0,"lines":["done"]}""" }
         val config = MockEngineConfig().apply {
             addHandler { request ->
                 val path = request.url.encodedPath
                 log += "${request.method.value} $path?${request.url.encodedQuery}"
                 when {
-                    path.endsWith("hub/sources") -> respond(sources, sourcesStatus, json)
+                    path.endsWith("hub/sources") -> {
+                        sourcesGate()
+                        respond(sources, sourcesStatus, json)
+                    }
                     path.endsWith("hub/official") -> respond(official, HttpStatusCode.OK, json)
                     path.endsWith("hub/search") -> respond(search, HttpStatusCode.OK, json)
                     path.endsWith("hub/scan") -> {
@@ -331,15 +336,15 @@ class SkillsHubViewModelTest {
     @Test
     fun aFailedScanAfterABlockedInstallSetsTheDetailError() = runTest(dispatcher) {
         val rig = rig().apply {
-            scanStatus = HttpStatusCode.NotFound
             status = { HttpStatusCode.OK to """{"running":false,"exit_code":1,"lines":["Not installed: the security scan found 2 high-risk patterns"]}""" }
         }
         val vm = vm(rig)
         vm.bound(null)
-        vm.open(official) // the sheet is open on the skill being installed
-        vm.install(official) // official skips the pre-scan, so the only scan is the follow-up
+        vm.open(official) // the page is open on the skill being installed; its own scan succeeds
+        rig.scanStatus = HttpStatusCode.NotFound
+        vm.install(official) // official skips the pre-scan, so the failing scan is the follow-up
         assertEquals("official/creative/ascii-art", vm.state.value.detail?.skill?.installKey)
-        assertNotNull(vm.state.value.detail?.error)
+        assertEquals("HTTP 404", vm.state.value.detail?.error)
     }
 
     private val blockedLines = """{"running":false,"exit_code":1,"lines":["Not installed: the security scan found 2 high-risk patterns"]}"""
@@ -357,10 +362,11 @@ class SkillsHubViewModelTest {
 
     @Test
     fun aFailedFollowUpScanDoesNotLandOnAnotherSkillsSheet() = runTest(dispatcher) {
-        val rig = rig().apply { scanStatus = HttpStatusCode.NotFound; status = { HttpStatusCode.OK to blockedLines } }
+        val rig = rig().apply { status = { HttpStatusCode.OK to blockedLines } }
         val vm = vm(rig)
         vm.bound(null)
         vm.open(community)
+        rig.scanStatus = HttpStatusCode.NotFound
         vm.install(official)
         assertEquals(community.installKey, vm.state.value.detail?.skill?.installKey)
         assertNull(vm.state.value.detail?.error)
@@ -421,8 +427,109 @@ class SkillsHubViewModelTest {
         vm.open(community)
         vm.install(community)
         val hub = rig.log.filter { "hub/preview" in it || "hub/scan" in it }
-        assertEquals(3, hub.size)
+        // The install reuses the scan the open sheet already has.
+        assertEquals(2, hub.size)
         assertTrue(hub.all { "profile=ruby" in it })
+    }
+
+    @Test
+    fun installScansAgainWhenTheSheetHasNoScan() = runTest(dispatcher) {
+        val rig = rig().apply { scanStatus = HttpStatusCode.InternalServerError }
+        val vm = vm(rig)
+        vm.bound(null)
+        vm.open(community)
+        assertEquals(1, rig.count("hub/scan"))
+        assertNotNull(vm.state.value.detail?.scanError)
+        rig.scanStatus = HttpStatusCode.OK
+        vm.install(community)
+        assertEquals(2, rig.count("hub/scan"))
+        // The install's own scan replaces the failed one on the page.
+        assertNull(vm.state.value.detail?.scanError)
+        assertNotNull(vm.state.value.detail?.scan)
+        assertEquals(1, rig.count("POST /api/skills/hub/install"))
+    }
+
+    @Test
+    fun aFailedScanOnOpenIsShownOnTheSheet() = runTest(dispatcher) {
+        val vm = vm(rig().apply { scanStatus = HttpStatusCode.NotFound; scan = """{"detail":"Hub scan failed: boom"}""" })
+        vm.bound(null)
+        vm.open(community)
+        assertEquals("Couldn't scan: Hub scan failed: boom", vm.state.value.detail?.scanError)
+        // The preview's own error stays free, so the page knows the preview loaded.
+        assertNull(vm.state.value.detail?.error)
+        assertNotNull(vm.state.value.detail?.preview)
+    }
+
+    @Test
+    fun aListReadOlderThanAnInstallKeepsItsMark() = runTest(dispatcher) {
+        val hold = CompletableDeferred<Unit>()
+        val rig = rig()
+        val vm = vm(rig)
+        vm.bound(null)
+        // The next sources read answers with what the gateway had before the install.
+        rig.sourcesGate = { hold.await() }
+        vm.refresh()
+        vm.install(official)
+        assertTrue(official.installKey in vm.state.value.installed)
+        hold.complete(Unit)
+        assertTrue(official.installKey in vm.state.value.installed)
+    }
+
+    @Test
+    fun anInstallThatOutlastsTheWaitSaysSoAndFreesTheButton() = runTest(dispatcher) {
+        val rig = rig().apply { status = { HttpStatusCode.OK to """{"running":true,"exit_code":null,"lines":[]}""" } }
+        rig.config.dispatcher = dispatcher
+        val vm = SkillsHubViewModel(SkillsHubApi(createHttpClient(MockEngine(rig.config)), pollIntervalMs = 1_000, actionTimeoutMs = 3_000))
+        var changed = 0
+        vm.onSkillsChanged = { changed++ }
+        vm.bound(null)
+        vm.install(official)
+        advanceTimeBy(5_000)
+        assertEquals("The install is still running on the gateway. Check back later.", vm.state.value.message)
+        assertTrue(vm.state.value.running.isEmpty())
+        assertFalse(official.installKey in vm.state.value.installed)
+        assertEquals(1, changed)
+    }
+
+    @Test
+    fun aReloadDropsSkillsRemovedElsewhere() = runTest(dispatcher) {
+        val rig = rig().apply { sources = """{"installed":{"skills-sh/acme/pdf":{"name":"pdf"}}}""" }
+        val vm = vm(rig)
+        vm.bound(null)
+        assertTrue("skills-sh/acme/pdf" in vm.state.value.installed)
+        // Removed from another device or the CLI; the next visit reloads.
+        rig.sources = """{"installed":{}}"""
+        vm.closeHub()
+        vm.openHub()
+        assertFalse("skills-sh/acme/pdf" in vm.state.value.installed)
+    }
+
+    @Test
+    fun aSearchReplacesTheInstalledMarks() = runTest(dispatcher) {
+        val rig = rig().apply { sources = """{"installed":{"skills-sh/acme/pdf":{"name":"pdf"}}}""" }
+        val vm = vm(rig)
+        vm.bound(null)
+        vm.search("pdf")
+        advanceTimeBy(401)
+        assertFalse("skills-sh/acme/pdf" in vm.state.value.installed)
+    }
+
+    @Test
+    fun aLaterErrorKeepsAnExpiredSession() = runTest(dispatcher) {
+        val hold = CompletableDeferred<Unit>()
+        // official answers 401 at once; sources fails later with a plain error.
+        val config = MockEngineConfig().apply {
+            this.dispatcher = this@SkillsHubViewModelTest.dispatcher
+            addHandler { request ->
+                if (request.url.encodedPath.endsWith("hub/official")) respond("{}", HttpStatusCode.Unauthorized, json)
+                else { hold.await(); respond("""{"detail":"down"}""", HttpStatusCode.BadGateway, json) }
+            }
+        }
+        val vm = SkillsHubViewModel(SkillsHubApi(createHttpClient(MockEngine(config)), pollIntervalMs = 0))
+        vm.bound(null)
+        assertTrue(vm.state.value.sessionExpired)
+        hold.complete(Unit)
+        assertTrue(vm.state.value.sessionExpired)
     }
 
     @Test

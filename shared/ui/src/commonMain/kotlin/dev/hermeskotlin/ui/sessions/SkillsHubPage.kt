@@ -1,6 +1,7 @@
 package dev.hermeskotlin.ui.sessions
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,12 +21,17 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
@@ -63,6 +69,7 @@ import dev.hermeskotlin.designsystem.textTertiary
 import dev.hermeskotlin.designsystem.typography
 import dev.hermeskotlin.ui.components.EmptyState
 import dev.hermeskotlin.ui.components.ListSkeleton
+import dev.hermeskotlin.ui.PlatformBackHandler
 
 /** Browse, search and install skills from the hub, into [profile]'s skills; [profileLabel] is how the subtitle names it. */
 @Composable
@@ -72,15 +79,21 @@ internal fun SkillsHubPage(
     profileLabel: String?,
     onBack: () -> Unit,
     onSessionExpired: () -> Unit,
-    onSkillsChanged: () -> Unit,
     viewModel: SkillsHubViewModel,
 ) {
     val state = viewModel.state.collectAsStateWithLifecycle().value
+    // CapabilitiesPage binds the view model and wires onSkillsChanged; bind again only so the
+    // load below never runs ahead of a binding change (it does nothing when already bound).
     LaunchedEffect(gateway, profile) {
-        viewModel.onSkillsChanged = onSkillsChanged
         viewModel.bind(gateway, profile)
         viewModel.openHub()
     }
+    // Back leaves an open skill for the lists before it leaves the hub.
+    PlatformBackHandler(enabled = state.detail != null) { viewModel.closeDetail() }
+    // The search field stays composed under an open skill; it must not keep the keyboard and the typing.
+    val focus = LocalFocusManager.current
+    val detailOpen = state.detail != null
+    LaunchedEffect(detailOpen) { if (detailOpen) focus.clearFocus() }
     // Whichever way the page leaves, its sheets go with it.
     DisposableEffect(viewModel) { onDispose { viewModel.closeHub() } }
     // The view model debounces; the page only reports what was typed.
@@ -103,6 +116,22 @@ internal fun SkillsHubView(
     subtitle: String,
 ) {
     Column(Modifier.fillMaxSize()) {
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            // An open skill is a page over the lists; they stay composed (hidden) so they keep their scroll.
+            HubBrowse(state, query, actions, onBack, subtitle, Modifier.fillMaxSize().then(if (state.detail != null) Modifier.alpha(0f).clearAndSetSemantics { } else Modifier))
+            // Swallows taps on its gaps, so none reaches the hidden lists.
+            state.detail?.let { HubDetailPage(it, state, actions, Modifier.fillMaxSize().pointerInput(Unit) { detectTapGestures { } }) }
+        }
+        // Above the sidebar's New chat button, as on the Capabilities page.
+        state.message?.let { MessageBanner(it, onDismiss = actions::dismissMessage, modifier = Modifier.padding(bottom = 96.dp)) }
+    }
+    HubConfirmSheet(state.confirm, actions)
+}
+
+/** The hub's header, search and lists. */
+@Composable
+private fun HubBrowse(state: SkillsHubUiState, query: TextFieldState, actions: SkillsHubActions, onBack: () -> Unit, subtitle: String, modifier: Modifier) {
+    Column(modifier) {
         SubpageHeader(
             "Skills hub",
             onBack = onBack,
@@ -135,10 +164,7 @@ internal fun SkillsHubView(
                 }
             }
         }
-        state.message?.let { MessageBanner(it, onDismiss = actions::dismissMessage, modifier = Modifier.padding(bottom = 16.dp)) }
     }
-    HubDetailSheet(state, actions)
-    HubConfirmSheet(state.confirm, actions)
 }
 
 @Composable
@@ -164,6 +190,12 @@ private fun HubLists(state: SkillsHubUiState, actions: SkillsHubActions) {
             if (featured.isNotEmpty()) {
                 item(key = "h-featured") { HubHeading("FEATURED") }
                 item(key = "featured") { HubRows(featured, state, actions) }
+            } else if (state.featured.error != null) {
+                item(key = "h-featured") { HubHeading("FEATURED") }
+                item(key = "featured-error") { Hint(state.featured.error) }
+                item(key = "featured-retry") {
+                    Button("Try again", onClick = actions::refresh, variant = ButtonVariant.Secondary, size = ButtonSize.Small, leadingIcon = Lucide.RefreshCw, modifier = Modifier.padding(start = 2.dp, bottom = 8.dp))
+                }
             }
             item(key = "h-official") { HubHeading("OFFICIAL") }
             val official = state.official.items
@@ -244,21 +276,31 @@ private fun HubRows(skills: List<HubSkill>, state: SkillsHubUiState, actions: Sk
     }
 }
 
-/** A skill's SKILL.md, files and scan, with the button to install it. */
+/** A skill's page in the hub: its install button, scan, SKILL.md and files. */
 @Composable
-internal fun HubDetailSheet(state: SkillsHubUiState, actions: SkillsHubActions) {
-    val detail = state.detail
-    var kept by remember { mutableStateOf(detail) }
-    if (detail != null) kept = detail
-    BottomSheet(visible = detail != null, onDismiss = actions::closeDetail) {
-        val d = kept ?: return@BottomSheet
-        val skill = d.skill
-        val key = skill.installKey
-        val installed = key in state.installed
-        val blocked = d.scan?.policy == "block"
-        Column(Modifier.heightIn(max = 600.dp).verticalScroll(rememberScrollState())) {
-            SheetHeader(skill.name, listOfNotNull(skill.trustLevel.takeIf { it.isNotBlank() }, skill.source.takeIf { it.isNotBlank() }).joinToString(" · ").ifBlank { null })
-            Column(Modifier.padding(horizontal = 18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+private fun HubDetailPage(d: HubDetail, state: SkillsHubUiState, actions: SkillsHubActions, modifier: Modifier = Modifier) {
+    val skill = d.skill
+    val id = skill.installKey
+    val installed = id in state.installed
+    val blocked = d.scan?.policy == "block"
+    Column(modifier) {
+        SubpageHeader(
+            skill.name,
+            onBack = actions::closeDetail,
+            subtitle = listOfNotNull(skill.trustLevel.takeIf { it.isNotBlank() }, skill.source.takeIf { it.isNotBlank() }).joinToString(" · ").ifBlank { null },
+            actions = {
+                when {
+                    installed -> Button("Installed", onClick = {}, enabled = false, variant = ButtonVariant.Secondary, size = ButtonSize.Small)
+                    else -> Button("Install", onClick = { actions.install(skill) }, enabled = !blocked, loading = id in state.running, size = ButtonSize.Small)
+                }
+            },
+        )
+        // Each skill opens at its top.
+        key(id) {
+            Column(
+                Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(start = 18.dp, end = 18.dp, bottom = 32.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
                 (d.preview?.description?.takeIf { it.isNotBlank() } ?: skill.description.takeIf { it.isNotBlank() })?.let {
                     Text(it, style = Theme[typography][bodySmall], color = Theme[colors][textSecondary])
                 }
@@ -267,29 +309,19 @@ internal fun HubDetailSheet(state: SkillsHubUiState, actions: SkillsHubActions) 
                 if (tags.isNotEmpty()) {
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) { tags.forEach { Tag(it, accent = false) } }
                 }
+                if (blocked) Text("Blocked by security scan", style = Theme[typography][bodySmall], color = Theme[colors][danger])
+                d.error?.let { Text(it, style = Theme[typography][bodySmall], color = Theme[colors][danger]) }
+                d.scanError?.let { Text(it, style = Theme[typography][bodySmall], color = Theme[colors][danger]) }
+                d.scan?.let { ScanFindings(it, expanded = blocked) }
                 when {
                     d.preview != null -> {
-                        Box(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) { MarkdownText(d.preview.body) }
+                        MarkdownText(d.preview.body)
                         if (d.preview.files.isNotEmpty()) {
                             Text(d.preview.files.joinToString("\n"), style = Theme[typography][code].copy(fontSize = 12.sp), color = Theme[colors][textTertiary])
                         }
                     }
                     d.error != null -> Unit
                     else -> Text("Loading…", style = Theme[typography][bodySmall], color = Theme[colors][textTertiary])
-                }
-                d.scan?.let { ScanFindings(it, expanded = blocked) }
-                d.error?.let { Text(it, style = Theme[typography][bodySmall], color = Theme[colors][danger]) }
-                if (blocked) Text("Blocked by security scan", style = Theme[typography][bodySmall], color = Theme[colors][danger])
-                Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    when {
-                        installed -> Button("Installed", onClick = {}, enabled = false, variant = ButtonVariant.Secondary)
-                        else -> Button(
-                            "Install",
-                            onClick = { actions.install(skill) },
-                            enabled = !blocked,
-                            loading = key in state.running,
-                        )
-                    }
                 }
             }
         }
