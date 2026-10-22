@@ -213,6 +213,8 @@ class SessionsViewModel(
 
     /** The gateway's profiles; null until loaded (or when the gateway doesn't list them). */
     val roster: StateFlow<ProfileRoster?> = _roster.asStateFlow()
+    private var profilesJob: Job? = null
+    private var profilesFor: GatewayUrl? = null
 
     private val _state = MutableStateFlow(SessionsUiState())
     val state: StateFlow<SessionsUiState> = _state.asStateFlow()
@@ -304,7 +306,10 @@ class SessionsViewModel(
     /** Refetches the profile list, e.g. when the account sheet opens (one may have been added on the host). */
     fun refreshProfiles() {
         val url = gateway?.gatewayUrl ?: return
-        viewModelScope.launch {
+        // One read at a time: the socket connecting while the first is out would only ask again.
+        if (profilesJob?.isActive == true && profilesFor == url) return
+        profilesFor = url
+        profilesJob = viewModelScope.launch {
             val roster = (profiles.roster(url) as? ApiResult.Success)?.value ?: return@launch
             // Another gateway taken up meanwhile has its own profiles.
             if (gateway?.gatewayUrl == url) _roster.value = roster
