@@ -176,6 +176,7 @@ import dev.hermeskotlin.core.bots.mentionQuery
 import dev.hermeskotlin.core.bots.mentionable
 import dev.hermeskotlin.ui.bots.BotAvatar
 import dev.hermeskotlin.ui.bots.LocalBotFaces
+import dev.hermeskotlin.ui.bots.DecodedBotAvatar
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.Pencil
 import com.composables.icons.lucide.MessageSquare
@@ -2139,12 +2140,13 @@ private fun AssistantReply(
     }
 }
 
-/** Who's speaking above a reply: the small mark, "Hermes", and when it finished. */
+/** Who's speaking above a reply: the chat's bot (or the app's mark and "Hermes"), and when it finished. */
 @Composable
 internal fun ReplyHeader(epochSeconds: Double?) {
+    val speaker = LocalReplySpeaker.current
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        AppMark(20.dp, glow = false)
-        Text("Hermes", style = Theme[typography][label], color = Theme[colors][textSecondary])
+        if (speaker != null) DecodedBotAvatar(speaker.face, LocalReplySpeakerPicture.current, size = 20.dp) else AppMark(20.dp, glow = false)
+        Text(speaker?.name ?: "Hermes", style = Theme[typography][label], color = Theme[colors][textSecondary])
         MessageTimeLabel(epochSeconds)
     }
 }
