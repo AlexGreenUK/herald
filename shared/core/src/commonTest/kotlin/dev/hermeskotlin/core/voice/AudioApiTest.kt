@@ -11,19 +11,34 @@ import io.ktor.http.headersOf
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 
 class AudioApiTest {
 
+    private val url = GatewayUrl.parse("https://hermes.example.ts.net")
+
     @Test
-    fun aTranscriptionMayBeSilentAsLongAsItMayTake() = runTest {
-        var timeouts: HttpTimeoutConfig? = null
+    fun aSlowAnswerMayBeSilentAsLongAsItMayTake() = runTest {
+        val timeouts = mutableMapOf<String, HttpTimeoutConfig?>()
         val api = AudioApi(createHttpClient(MockEngine { request ->
-            timeouts = request.getCapabilityOrNull(HttpTimeoutCapability)
-            respond("""{"transcript":"hi"}""", headers = headersOf(HttpHeaders.ContentType, "application/json"))
+            timeouts[request.url.encodedPath] = request.getCapabilityOrNull(HttpTimeoutCapability)
+            respond("{}", headers = headersOf(HttpHeaders.ContentType, "application/json"))
         }))
 
-        api.transcribe(GatewayUrl.parse("https://hermes.example.ts.net"), byteArrayOf(1), "audio/wav", null)
+        // Only the timeouts the calls ask for matter here, not what they make of the empty answer.
+        runCatching { api.transcribe(url, byteArrayOf(1), "audio/wav", null) }
+        runCatching { api.speak(url, "hi", null) }
+        runCatching { api.startVoiceLive(url, "sdp", emptyList(), null) }
+        runCatching { api.ttsLease(url, true, null) }
 
-        assertEquals(timeouts?.requestTimeoutMillis, timeouts?.socketTimeoutMillis)
+        val paths = listOf("/api/audio/transcribe", "/api/audio/speak", "/api/audio/voice-live/session", "/api/audio/tts-lease")
+        assertEquals(paths.toSet(), timeouts.keys)
+        for (path in paths) {
+            val timeout = assertNotNull(timeouts[path], path)
+            val request = assertNotNull(timeout.requestTimeoutMillis, path)
+            val socket = assertNotNull(timeout.socketTimeoutMillis, path)
+            assertTrue(socket >= request, "$path: silence cut off after $socket ms of $request ms")
+        }
     }
 }
