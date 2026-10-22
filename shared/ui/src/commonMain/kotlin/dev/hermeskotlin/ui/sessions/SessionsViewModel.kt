@@ -792,6 +792,8 @@ class SessionsViewModel(
             connection.state.map { it is ConnectionState.Connected }.distinctUntilChanged().filter { it }.collect {
                 if (gateway != null && _state.value.filter == SessionListFilter.Recent) loadProjects(force = true)
                 if (gateway != null) launch { threadsRepo.refresh(force = true) }
+                // Profiles asked for while the gateway was out of reach never came: the chat's bot is named from them.
+                if (gateway != null && _roster.value == null) refreshProfiles()
             }
         }
         viewModelScope.launch {
