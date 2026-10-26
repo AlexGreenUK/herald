@@ -188,19 +188,24 @@ sealed interface InboxEvent {
 
 /**
  * The report [run] as a Markdown file for a new chat to ask about: named for the job ([name], what the Inbox calls
- * it) and the run's time, a failed run said so in its name, holding the run's whole text.
+ * it) and the run's time, a failed run said so in its name, holding the run's whole text. A report the gateway cut
+ * short for the read ([InboxRun.truncated]) says so on its first line, so the agent doesn't take it for the whole.
  */
 fun reportAttachment(run: InboxRun, name: String): OutgoingAttachment {
     val title = name.map { if (it.isISOControl() || it in FILE_NAME_UNSAFE) ' ' else it }.joinToString("")
         .replace(Regex("\\s+"), " ").trim().take(MAX_FILE_TITLE).trim().ifBlank { run.job }
     val time = run.run.replaceFirst('_', ' ')
     val file = "$title $time" + (if (run.failed) " (failed)" else "") + ".md"
-    val text = run.text.ifBlank { if (run.failed) "The run failed and left no output." else "The run left no output." }
+    val whole = run.text.ifBlank { if (run.failed) "The run failed and left no output." else "The run left no output." }
+    val text = if (run.truncated) "$TRUNCATED_NOTE\n\n$whole" else whole
     return OutgoingAttachment("report-${run.key.hashCode().toUInt().toString(16)}", file, "text/markdown", text.encodeToByteArray())
 }
 
 /** The new chat that asks about [run] ([name], what the Inbox calls its job): the report attached, the composer empty for the question. */
 fun reportDraft(run: InboxRun, name: String) = ComposeDraft(attachments = listOf(reportAttachment(run, name)), start = DraftStart.Typing)
+
+/** The first line of a report the gateway cut short ([InboxRun.truncated]). */
+internal const val TRUNCATED_NOTE = "> The gateway cut this report at 48 KB; the rest isn't included."
 
 /** Characters a file name can't hold on one system or another. */
 private const val FILE_NAME_UNSAFE = "/\\:*?\"<>|"
@@ -631,7 +636,7 @@ class InboxViewModel(
             if (gen != generation) return@launch
             if (full != null) {
                 store.add(url, full)
-                if (older.any { it.key == full.key }) older = older.map { if (it.key == full.key) full else it }
+                if (older.any { it.key == full.key }) older = older.map { if (it.key == full.key) full.asKept() else it }
             }
             _state.update { state ->
                 if (state.open?.key != run.key) return@update state
@@ -759,11 +764,11 @@ class InboxViewModel(
                     )
                 }
                 if (gen != generation) return@launch
-                // The plugin's read carries the run's chat too; a list from an older one may not have.
+                // The plugin's read carries the run's chat too, or says it has none now; a list from an older one may not have.
                 val kept = whole?.keeping(run)
                 if (kept != null && shown == null) {
                     store.add(url, kept)
-                    if (older.any { it.key == kept.key }) older = older.map { if (it.key == kept.key) kept else it }
+                    if (older.any { it.key == kept.key }) older = older.map { if (it.key == kept.key) kept.asKept() else it }
                 }
                 then(url, kept, note)
             } finally {

@@ -483,6 +483,45 @@ class InboxViewModelTest {
     }
 
     @Test
+    fun aRunWhoseChatTheGatewayDeletedNoLongerOffersToContinueIt() = runTest(dispatcher) {
+        var session = "\"20261012_000050_abc\""
+        val socket = PluginGateway(CoroutineScope(dispatcher)) { arg ->
+            val a = run("a", 50)
+            when {
+                arg.startsWith("inbox") -> """{"ok":true,"runs":${runsJsonWithSession(a to "20261012_000050_abc")}}"""
+                // Plugin 0.5.2's read: the run's chat, or null once the gateway let the session go.
+                arg.startsWith("read") -> """{"ok":true,"run":{"job":"a","run":"${a.run}","at":50,"text":"All","session":$session}}"""
+                else -> """{"ok":true,"jobs":{},"failures":false,"default":"quiet"}"""
+            }
+        }
+        store.bind(one.gatewayUrl.value, now = 0)
+        val vm = viewModel(socket)
+        vm.bind(one)
+        assertEquals("20261012_000050_abc", vm.state.value.runs.single().session)
+        session = "null"
+        vm.open(vm.state.value.runs.single())
+        assertNull(vm.state.value.open!!.session)
+        assertNull(store.state.value.runs.single().session)
+    }
+
+    @Test
+    fun askingAboutAReportTheGatewayCutShortSaysSoInTheFile() = runTest(dispatcher) {
+        val socket = PluginGateway(CoroutineScope(dispatcher)) { arg ->
+            when {
+                arg.startsWith("inbox") -> """{"ok":true,"runs":${runsJson(run("a", 50))}}"""
+                arg.startsWith("read") -> """{"ok":true,"run":{"job":"a","run":"${run("a", 50).run}","at":50,"text":"The first 48 KB","truncated":true}}"""
+                else -> """{"ok":true,"jobs":{},"failures":false,"default":"quiet"}"""
+            }
+        }
+        store.bind(one.gatewayUrl.value, now = 0)
+        val vm = viewModel(socket)
+        vm.bind(one)
+        vm.ask(vm.state.value.runs.single())
+        val file = (vm.events.first() as InboxEvent.OpenChat).chat.draft!!.attachments.single()
+        assertEquals("$TRUNCATED_NOTE\n\nThe first 48 KB", file.bytes.decodeToString())
+    }
+
+    @Test
     fun aSwipedRowFlipsBetweenReadAndUnreadAndItsNotificationGoes() = runTest(dispatcher) {
         val socket = PluginGateway(CoroutineScope(dispatcher)) { arg ->
             if (arg.startsWith("inbox")) """{"ok":true,"runs":${runsJson(run("a", 50))}}"""

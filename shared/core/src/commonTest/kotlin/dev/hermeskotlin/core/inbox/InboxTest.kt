@@ -456,6 +456,40 @@ class InboxTest {
     }
 
     @Test
+    fun aRunWhosePluginSaysItHasNoChatNowLosesTheOneKept() = runTest {
+        val store = InboxStore(InMemoryKeyValueStore())
+        store.bind(GW, now = 0)
+        store.add(GW, run(at = 5).copy(session = "s1"))
+        // Plugin 0.5.2 names every listed run's chat: none, once the gateway deleted the old session.
+        store.replace(GW, listOf(run(at = 5).copy(sessionSaid = true)), complete = true)
+        assertNull(store.state.value.runs.single().session)
+        store.add(GW, run(at = 5).copy(session = "s1"))
+        // A read that says so too.
+        store.add(GW, run(at = 5, text = "Morning, in full").copy(sessionSaid = true))
+        assertNull(store.state.value.runs.single().session)
+        // What a copy said stays with that copy: the kept run is as any other.
+        assertFalse(store.state.value.runs.single().sessionSaid)
+    }
+
+    @Test
+    fun keepingDropsTheOldChatOnlyWhenTheNewCopySaysItHasNone() {
+        val old = run(at = 5).copy(session = "s1")
+        assertEquals("s1", run(at = 5).keeping(old).session)
+        assertNull(run(at = 5).copy(sessionSaid = true).keeping(old).session)
+        assertEquals("s2", run(at = 5).copy(session = "s2", sessionSaid = true).keeping(old).session)
+        assertNull(run(at = 5).keeping(null).session)
+    }
+
+    @Test
+    fun whatACopySaidOfItsChatAndCutIsntSaved() {
+        val said = run(at = 5).copy(session = "s1", sessionSaid = true, truncated = true)
+        val encoded = HermesJson.encodeToString(InboxRun.serializer(), said)
+        assertFalse(encoded.contains("sessionSaid"))
+        assertFalse(encoded.contains("truncated"))
+        assertEquals(said.asKept(), HermesJson.decodeFromString(InboxRun.serializer(), encoded))
+    }
+
+    @Test
     fun aRunsChatIsKeptOnDisk() = runTest {
         val disk = InMemoryKeyValueStore()
         InboxStore(disk).apply { bind(GW, now = 0); add(GW, run(at = 5).copy(session = "s1")) }

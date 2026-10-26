@@ -19,12 +19,16 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.SetSerializer
 import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonObjectBuilder
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
 import kotlin.coroutines.CoroutineContext
@@ -53,6 +57,14 @@ data class InboxRun(
      * that know it; null from older ones, and for a run with no chat of its own.
      */
     val session: String? = null,
+    /**
+     * Whether the copy this came in said [session], an id or none (plugin 0.5.2's lists and reads always do): then
+     * a null [session] means the run has no chat now (deleted with the gateway's old sessions, say). An older
+     * plugin's copy, and a push, say nothing of it, so the chat an earlier copy knew is kept. Never saved.
+     */
+    @Transient val sessionSaid: Boolean = false,
+    /** Whether the plugin cut [text] short for a read (at 48 KB, from 0.5.2). Never saved: kept text is cut anyway. */
+    @Transient val truncated: Boolean = false,
 ) {
     val key: String get() = "$bot/$job/$run"
     val failed: Boolean get() = status == FAILED
@@ -62,8 +74,15 @@ data class InboxRun(
     /** This run without a [session] that isn't a plausible stored session id: one the app would open as a chat. */
     fun withCheckedSession(): InboxRun = if (session == null || SESSION_ID.matches(session)) this else copy(session = null)
 
-    /** This run as it came anew (a list, a push, a read), keeping what [old], its earlier copy, knew of its chat. */
-    fun keeping(old: InboxRun?): InboxRun = if (session != null || old?.session == null) this else copy(session = old.session)
+    /**
+     * This run as it came anew (a list, a push, a read), keeping what [old], its earlier copy, knew of its chat
+     * unless this copy said ([sessionSaid]) it has none.
+     */
+    fun keeping(old: InboxRun?): InboxRun =
+        if (session != null || sessionSaid || old?.session == null) this else copy(session = old.session)
+
+    /** This run as the Inbox keeps it: what only the copy it came in said ([sessionSaid], [truncated]) left behind. */
+    fun asKept(): InboxRun = if (sessionSaid || truncated) copy(sessionSaid = false, truncated = false) else this
 
     companion object {
         const val OK = "ok"
@@ -177,10 +196,11 @@ private data class FollowReply(
 )
 
 @Serializable
-private data class InboxReply(val ok: Boolean = false, val error: String? = null, val runs: List<InboxRun> = emptyList())
+private data class InboxReply(val ok: Boolean = false, val error: String? = null, val runs: List<JsonObject> = emptyList())
 
+/** Runs come as JSON objects: whether a run's `session` is there at all (null or not) is told apart from its value. */
 @Serializable
-private data class ReadReply(val ok: Boolean = false, val error: String? = null, val run: InboxRun? = null)
+private data class ReadReply(val ok: Boolean = false, val error: String? = null, val run: JsonObject? = null)
 
 /**
  * The gateway's herald-push plugin is older than an Inbox call needs: [needs] is the oldest version that has it,
@@ -232,7 +252,7 @@ class InboxApi(private val push: PushApi, private val keys: PushKeys) {
         }
         val reply = decode(InboxReply.serializer(), push.cron("inbox $body")) { it.ok to it.error }
         if (!reply.ok) throw RpcException(0, reply.error ?: "The gateway couldn't list the runs.")
-        return reply.runs.map { it.withCheckedSession() }
+        return reply.runs.map(::runOf)
     }
 
     /** One run in full, or null when the gateway no longer has it. */
@@ -243,9 +263,16 @@ class InboxApi(private val push: PushApi, private val keys: PushKeys) {
             put("run", run.run)
         }
         val reply = decode(ReadReply.serializer(), push.cron("read $body")) { it.ok to it.error }
-        if (reply.ok) return reply.run?.withCheckedSession()
+        if (reply.ok) return reply.run?.let(::runOf)
         if (reply.error == NO_SUCH_RUN) return null
         throw RpcException(0, reply.error ?: "The gateway couldn't read the run.")
+    }
+
+    /** A run as the plugin wrote it, with what it said of its chat ([InboxRun.sessionSaid]) and whether it cut its text. */
+    private fun runOf(obj: JsonObject): InboxRun {
+        val run = runCatching { HermesJson.decodeFromJsonElement(InboxRun.serializer(), obj) }.getOrElse { throw RpcException(0, UNREADABLE) }
+        val truncated = runCatching { obj["truncated"]?.jsonPrimitive?.booleanOrNull }.getOrNull() == true
+        return run.copy(sessionSaid = "session" in obj, truncated = truncated).withCheckedSession()
     }
 
     private suspend fun follow(op: String, more: JsonObjectBuilder.() -> Unit): Following {
@@ -263,7 +290,7 @@ class InboxApi(private val push: PushApi, private val keys: PushKeys) {
     private fun <T> decode(serializer: KSerializer<T>, output: String?, status: (T) -> Pair<Boolean, String?>): T {
         output ?: throw RpcException(0, "The gateway's herald-push plugin isn't there.")
         val reply = runCatching { HermesJson.decodeFromString(serializer, output) }
-            .getOrElse { throw RpcException(0, "The gateway's herald-push plugin gave an answer the Inbox can't read.") }
+            .getOrElse { throw RpcException(0, UNREADABLE) }
         val (ok, error) = status(reply)
         if (!ok && isUsage(error)) throw InboxPluginTooOld(MIN_PLUGIN_VERSION)
         return reply
@@ -283,6 +310,7 @@ class InboxApi(private val push: PushApi, private val keys: PushKeys) {
         const val PAGE = 100
 
         private const val NO_SUCH_RUN = "no such run"
+        private const val UNREADABLE = "The gateway's herald-push plugin gave an answer the Inbox can't read."
         private const val REFUSES_OFF = "mode must be notify or quiet"
 
         /**
@@ -435,7 +463,7 @@ class InboxStore(private val store: KeyValueStore, private val work: CoroutineCo
 
     /** [runs] with [run] in place of its earlier copy, which may have known its chat when [run] doesn't. */
     private fun mergeIn(run: InboxRun, runs: List<InboxRun>): List<InboxRun> =
-        merge(listOf(run.keeping(runs.firstOrNull { it.key == run.key })) + runs.filter { it.key != run.key })
+        merge(listOf(run.keeping(runs.firstOrNull { it.key == run.key }).asKept()) + runs.filter { it.key != run.key })
 
     /**
      * What was saved for [url], or null when nothing was. A part that no longer reads (an older or damaged
@@ -498,7 +526,7 @@ class InboxStore(private val store: KeyValueStore, private val work: CoroutineCo
             val keptByKey = kept.associateBy { it.key }
             val fresh = listed.distinctBy { it.key }.map { run ->
                 val old = keptByKey[run.key]
-                val kept = run.keeping(old)
+                val kept = run.keeping(old).asKept()
                 if (old != null && old.text.length > run.text.length) kept.copy(text = old.text) else kept
             }
             val listedKeys = fresh.map { it.key }.toSet()

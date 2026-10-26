@@ -68,4 +68,15 @@ class ReportChatTest {
         assertEquals("default", reportChatProfile("default", chatsProfile = null, launch = "work"))
         assertNull(reportChatProfile("work", chatsProfile = null, launch = "work"))
     }
+
+    @Test
+    fun aReportTheGatewayCutShortSaysSoOnItsFirstLine() {
+        val cut = run.copy(text = "Rain later.", truncated = true)
+        val file = reportAttachment(cut, "Morning briefing")
+        assertEquals("$TRUNCATED_NOTE\n\nRain later.", file.bytes.decodeToString())
+        assertTrue(file.bytes.decodeToString().startsWith("> "))
+        assertEquals(reportAttachment(run, "Morning briefing").name, file.name)
+        // A whole one says nothing of it.
+        assertEquals("Rain later.", reportAttachment(run, "Morning briefing").bytes.decodeToString())
+    }
 }
