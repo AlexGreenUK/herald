@@ -9,6 +9,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.RingtoneManager
+import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -20,6 +21,7 @@ import androidx.core.app.Person
 import androidx.core.app.RemoteInput
 import dev.hermeskotlin.core.bots.Bot
 import androidx.core.content.ContextCompat
+import androidx.core.net.toUri
 import dev.hermeskotlin.android.HeraldActivity
 import dev.hermeskotlin.android.R
 import dev.hermeskotlin.core.chat.ApprovalChoice
@@ -668,7 +670,7 @@ class ChatNotifications(
             .addAction(
                 0,
                 "Mark read",
-                action(NotificationActionReceiver.ACTION_INBOX_READ, key + "\u0000" + gatewayUrl) {
+                action(NotificationActionReceiver.ACTION_INBOX_READ, key + "\u0000" + gatewayUrl, data = inboxUri(gatewayUrl, key)) {
                     putExtra(EXTRA_OPEN_INBOX, key)
                     putExtra(EXTRA_INBOX_GATEWAY, gatewayUrl)
                 },
@@ -679,12 +681,28 @@ class ChatNotifications(
                 putString(EXTRA_INBOX_GATEWAY, gatewayUrl)
             })
             .build()
-        post(InboxNotices.tag(bot, job), INBOX_ID, notification)
+        synchronized(inboxNotices) { post(InboxNotices.tag(bot, job), INBOX_ID, notification) }
     }
+
+    /**
+     * Held while an Inbox notification is posted or read back to be taken down: else a job's next run, posted under
+     * the same tag between the read and the cancel, would be taken down with its last.
+     */
+    private val inboxNotices = Any()
+
+    /**
+     * What tells one run's Mark read apart from another's: intents that differ only in their extras are one
+     * PendingIntent to Android, so two runs whose request codes collide would share the newer run's key.
+     */
+    private fun inboxUri(gatewayUrl: String, key: String): Uri = ("herald-inbox:" + Uri.encode("$gatewayUrl/$key")).toUri()
 
     /** Takes down the Inbox notifications that show one of [keys], [gatewayUrl]'s runs just read. */
     override fun runsRead(gatewayUrl: String, keys: Collection<String>) {
         if (keys.isEmpty()) return
+        synchronized(inboxNotices) { cancelShowing(gatewayUrl, keys) }
+    }
+
+    private fun cancelShowing(gatewayUrl: String, keys: Collection<String>) {
         val shown = runCatching { manager.activeNotifications }.getOrDefault(emptyList())
             .filter { it.id == INBOX_ID && it.tag != null }
             .mapNotNull { posted ->
@@ -769,8 +787,8 @@ class ChatNotifications(
         return PendingIntent.getActivity(context, requestCode, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
     }
 
-    private fun action(name: String, key: String, mutable: Boolean = false, extras: Intent.() -> Unit = {}): PendingIntent {
-        val intent = Intent(context, NotificationActionReceiver::class.java).setAction(name).apply(extras)
+    private fun action(name: String, key: String, mutable: Boolean = false, data: Uri? = null, extras: Intent.() -> Unit = {}): PendingIntent {
+        val intent = Intent(context, NotificationActionReceiver::class.java).setAction(name).setData(data).apply(extras)
         val flags = PendingIntent.FLAG_UPDATE_CURRENT or if (mutable) PendingIntent.FLAG_MUTABLE else PendingIntent.FLAG_IMMUTABLE
         return PendingIntent.getBroadcast(context, (name + key).hashCode(), intent, flags)
     }
