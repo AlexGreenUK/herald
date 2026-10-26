@@ -9,6 +9,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.RingtoneManager
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import androidx.core.os.HandlerCompat
@@ -24,6 +25,8 @@ import dev.hermeskotlin.android.R
 import dev.hermeskotlin.core.chat.ApprovalChoice
 import dev.hermeskotlin.core.chat.InputRequest
 import dev.hermeskotlin.core.connection.ConnectionState
+import dev.hermeskotlin.core.inbox.InboxNotice
+import dev.hermeskotlin.core.inbox.InboxNotices
 import dev.hermeskotlin.core.phone.AgentCall
 import dev.hermeskotlin.core.phone.CallOpeners
 import dev.hermeskotlin.core.phone.CallOutcome
@@ -47,7 +50,7 @@ class ChatNotifications(
     private val context: Context,
     /** Why the agent called, for a call picked up on the watch to open with. */
     private val openers: CallOpeners = CallOpeners(),
-) {
+) : InboxNotices {
 
     private val manager = NotificationManagerCompat.from(context)
 
@@ -652,7 +655,7 @@ class ChatNotifications(
      * that opens it in the Inbox. One notification per job (a job id is only unique in its profile, [bot]), so a
      * job's next run replaces its last.
      */
-    fun postCronRun(key: String, bot: String, job: String, title: String, text: String, failed: Boolean) {
+    fun postCronRun(gatewayUrl: String, key: String, bot: String, job: String, title: String, text: String, failed: Boolean) {
         val body = text.toPlainText().take(MAX_PREVIEW).ifBlank { if (failed) "The run failed." else "Finished." }
         val notification = base(if (failed) CHANNEL_INBOX_FAILED else CHANNEL_INBOX)
             .setContentTitle(if (failed) "$title failed" else title)
@@ -660,8 +663,36 @@ class ChatNotifications(
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
             .setCategory(if (failed) NotificationCompat.CATEGORY_ERROR else NotificationCompat.CATEGORY_MESSAGE)
             .setContentIntent(openInbox(key))
+            // Marks the run this notification shows, which the job's next run replaces: one per run, not per job,
+            // so an older run's extras can't stand in for the newer one's.
+            .addAction(
+                0,
+                "Mark read",
+                action(NotificationActionReceiver.ACTION_INBOX_READ, key + "\u0000" + gatewayUrl) {
+                    putExtra(EXTRA_OPEN_INBOX, key)
+                    putExtra(EXTRA_INBOX_GATEWAY, gatewayUrl)
+                },
+            )
+            // What the notification shows, kept with it: the app reads it back to take it down once that run is read.
+            .addExtras(Bundle().apply {
+                putString(EXTRA_OPEN_INBOX, key)
+                putString(EXTRA_INBOX_GATEWAY, gatewayUrl)
+            })
             .build()
-        post("cron:$bot/$job", INBOX_ID, notification)
+        post(InboxNotices.tag(bot, job), INBOX_ID, notification)
+    }
+
+    /** Takes down the Inbox notifications that show one of [keys], [gatewayUrl]'s runs just read. */
+    override fun runsRead(gatewayUrl: String, keys: Collection<String>) {
+        if (keys.isEmpty()) return
+        val shown = runCatching { manager.activeNotifications }.getOrDefault(emptyList())
+            .filter { it.id == INBOX_ID && it.tag != null }
+            .mapNotNull { posted ->
+                val extras = posted.notification.extras
+                val key = extras.getString(EXTRA_OPEN_INBOX) ?: return@mapNotNull null
+                InboxNotice(posted.tag, extras.getString(EXTRA_INBOX_GATEWAY), key)
+            }
+        InboxNotices.toCancel(shown, gatewayUrl, keys).forEach { manager.cancel(it, INBOX_ID) }
     }
 
     private fun openInbox(key: String): PendingIntent {
@@ -756,6 +787,9 @@ class ChatNotifications(
 
         /** On the launch intent of an Inbox notification: the run's key ([dev.hermeskotlin.core.inbox.InboxRun.key]). */
         const val EXTRA_OPEN_INBOX = "open_inbox"
+
+        /** With [EXTRA_OPEN_INBOX] on an Inbox notification's Mark read, and in its extras: the gateway the run is of. */
+        const val EXTRA_INBOX_GATEWAY = "inbox_gateway"
         const val CALL_ID = 9
 
         /** On an Answer's launch intent: the request whose call was answered. */

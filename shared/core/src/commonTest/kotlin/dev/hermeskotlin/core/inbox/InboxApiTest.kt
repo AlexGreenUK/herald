@@ -118,4 +118,18 @@ class InboxApiTest {
         api.runs()
         assertNull(body(sent.last())["before"])
     }
+
+    @Test
+    fun listedAndReadRunsCarryTheirChatWhenThePluginSaysIt() = runTest {
+        val api = api { arg ->
+            if (arg.startsWith("inbox")) {
+                """{"ok":true,"runs":[{"job":"a","run":"2026-10-12_08-00-00","session":"20261012_080000_abc"},""" +
+                    """{"job":"b","run":"2026-10-12_08-00-00"},{"job":"c","run":"2026-10-12_08-00-00","session":"no such/id"}]}"""
+            } else {
+                """{"ok":true,"run":{"job":"a","run":"2026-10-12_08-00-00","text":"All of it","session":"20261012_080000_abc"}}"""
+            }
+        }
+        assertEquals(listOf("20261012_080000_abc", null, null), api.runs().map { it.session })
+        assertEquals("20261012_080000_abc", api.read(InboxRun(job = "a", run = "2026-10-12_08-00-00"))!!.session)
+    }
 }

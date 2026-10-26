@@ -40,6 +40,9 @@ enum class DraftStart {
 
     /** A voice conversation (`hermes://voice-chat`). */
     VoiceChat,
+
+    /** The keyboard, in the composer: the chat opened for the user to type, such as a question about a report. */
+    Typing,
 }
 
 /**

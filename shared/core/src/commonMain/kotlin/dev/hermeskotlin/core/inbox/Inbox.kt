@@ -48,11 +48,22 @@ data class InboxRun(
     /** When the run finished, unix seconds. */
     val at: Long = 0,
     val text: String = "",
+    /**
+     * The stored session the run's agent wrote in (its compression tip), for continuing that chat. Sent by plugins
+     * that know it; null from older ones, and for a run with no chat of its own.
+     */
+    val session: String? = null,
 ) {
     val key: String get() = "$bot/$job/$run"
     val failed: Boolean get() = status == FAILED
     /** The job's name as the gateway has it, without a Bot Mode routine's `[bot:…]` tag. */
     val title: String get() = Routines.title(label).trim().ifBlank { job }
+
+    /** This run without a [session] that isn't a plausible stored session id: one the app would open as a chat. */
+    fun withCheckedSession(): InboxRun = if (session == null || SESSION_ID.matches(session)) this else copy(session = null)
+
+    /** This run as it came anew (a list, a push, a read), keeping what [old], its earlier copy, knew of its chat. */
+    fun keeping(old: InboxRun?): InboxRun = if (session != null || old?.session == null) this else copy(session = old.session)
 
     companion object {
         const val OK = "ok"
@@ -71,6 +82,7 @@ data class InboxRun(
                 status = if (message.status == FAILED) FAILED else OK,
                 at = message.at ?: message.ts,
                 text = message.text.orEmpty(),
+                session = message.session?.takeIf { SESSION_ID.matches(it) },
             )
         }
 
@@ -78,6 +90,16 @@ data class InboxRun(
         private val JOB_ID = Regex("^[A-Za-z0-9_.-]{1,64}$")
         private val PROFILE = Regex("^[A-Za-z0-9_.-]{1,64}$")
         private val RUN_ID = Regex("^\\d{4}-\\d{2}-\\d{2}_\\d{2}-\\d{2}-\\d{2}$")
+
+        /** A stored session id as the gateway makes them, and as bot pushes are checked. */
+        private val SESSION_ID = Regex("^[A-Za-z0-9_.:-]{1,128}$")
+
+        /** The job a run's [key] names, as `bot/job`, or null when it isn't a run's key. */
+        fun jobOf(key: String): String? {
+            val parts = key.split('/')
+            if (parts.size != 3 || !PROFILE.matches(parts[0]) || !JOB_ID.matches(parts[1]) || !RUN_ID.matches(parts[2])) return null
+            return "${parts[0]}/${parts[1]}"
+        }
     }
 }
 
@@ -210,7 +232,7 @@ class InboxApi(private val push: PushApi, private val keys: PushKeys) {
         }
         val reply = decode(InboxReply.serializer(), push.cron("inbox $body")) { it.ok to it.error }
         if (!reply.ok) throw RpcException(0, reply.error ?: "The gateway couldn't list the runs.")
-        return reply.runs
+        return reply.runs.map { it.withCheckedSession() }
     }
 
     /** One run in full, or null when the gateway no longer has it. */
@@ -221,7 +243,7 @@ class InboxApi(private val push: PushApi, private val keys: PushKeys) {
             put("run", run.run)
         }
         val reply = decode(ReadReply.serializer(), push.cron("read $body")) { it.ok to it.error }
-        if (reply.ok) return reply.run
+        if (reply.ok) return reply.run?.withCheckedSession()
         if (reply.error == NO_SUCH_RUN) return null
         throw RpcException(0, reply.error ?: "The gateway couldn't read the run.")
     }
@@ -297,6 +319,9 @@ class InboxStore(private val store: KeyValueStore, private val work: CoroutineCo
     ) {
         fun isUnread(run: InboxRun): Boolean = run.key !in read && run.at > since
         val unread: Int get() = runs.count(::isUnread)
+
+        /** Whether [run] can be marked unread: it came after the Inbox started, so the read set is what says. */
+        fun canMarkUnread(run: InboxRun): Boolean = run.at > since
     }
 
     private val lock = Mutex()
@@ -324,13 +349,13 @@ class InboxStore(private val store: KeyValueStore, private val work: CoroutineCo
      */
     suspend fun receive(gatewayUrl: String, run: InboxRun): InboxGroups = lock.withLock {
         if (gateway == gatewayUrl) {
-            val next = _state.value.let { s -> s.copy(runs = merge(listOf(run) + s.runs.filter { it.key != run.key })) }
+            val next = _state.value.let { s -> s.copy(runs = mergeIn(run, s.runs)) }
             _state.value = next
             save(gatewayUrl, Saved(next.runs, next.read, next.since, next.groups))
             next.groups
         } else {
             val saved = loadOrStart(gatewayUrl, run.at - 1)
-            save(gatewayUrl, saved.copy(runs = merge(listOf(run) + saved.runs.filter { it.key != run.key })))
+            save(gatewayUrl, saved.copy(runs = mergeIn(run, saved.runs)))
             saved.groups
         }
     }
@@ -352,11 +377,34 @@ class InboxStore(private val store: KeyValueStore, private val work: CoroutineCo
     }
 
     /** A run that came by push, or was read in full: added, or put in place of its shorter copy. */
-    suspend fun add(gatewayUrl: String, run: InboxRun) = edit(gatewayUrl) { s ->
-        s.copy(runs = merge(listOf(run) + s.runs.filter { it.key != run.key }))
-    }
+    suspend fun add(gatewayUrl: String, run: InboxRun) = edit(gatewayUrl) { s -> s.copy(runs = mergeIn(run, s.runs)) }
 
-    suspend fun markRead(gatewayUrl: String, run: InboxRun) = edit(gatewayUrl) { s -> s.copy(read = trimRead(s.read + run.key)) }
+    suspend fun markRead(gatewayUrl: String, run: InboxRun) = markRead(gatewayUrl, listOf(run))
+
+    /** [runs] count as read: a folder's, say, with those paged in from further back. */
+    suspend fun markRead(gatewayUrl: String, runs: List<InboxRun>) = edit(gatewayUrl) { s -> s.copy(read = trimRead(s.read + runs.map { it.key })) }
+
+    /**
+     * [run] counts as unread again. Only a run newer than the Inbox's start can be: one before it counts as read
+     * whatever the read set says ([Snapshot.canMarkUnread]).
+     */
+    suspend fun markUnread(gatewayUrl: String, run: InboxRun) = edit(gatewayUrl) { s -> s.copy(read = s.read - run.key) }
+
+    /**
+     * The runs [keys] names ([InboxRun.key]) count as read in [gatewayUrl]'s Inbox, whether or not it is the one
+     * shown: a notification's Mark read can come for any gateway, and after Herald's process was gone, before
+     * anything bound the store. An Inbox never started on this phone is left alone.
+     */
+    suspend fun markReadByKey(gatewayUrl: String, keys: Collection<String>) = lock.withLock {
+        if (gateway == gatewayUrl) {
+            val next = _state.value.let { s -> s.copy(read = trimRead(s.read + keys)) }
+            _state.value = next
+            save(gatewayUrl, Saved(next.runs, next.read, next.since, next.groups))
+        } else {
+            val saved = load(gatewayUrl) ?: return@withLock
+            save(gatewayUrl, saved.copy(read = trimRead(saved.read + keys)))
+        }
+    }
 
     /** Every run kept, and [also] (runs paged in from further back), counts as read. */
     suspend fun markAllRead(gatewayUrl: String, also: List<InboxRun> = emptyList()) = edit(gatewayUrl) { s ->
@@ -384,6 +432,10 @@ class InboxStore(private val store: KeyValueStore, private val work: CoroutineCo
 
     private fun merge(runs: List<InboxRun>): List<InboxRun> =
         runs.distinctBy { it.key }.sortedByDescending { it.at }.take(MAX_KEPT)
+
+    /** [runs] with [run] in place of its earlier copy, which may have known its chat when [run] doesn't. */
+    private fun mergeIn(run: InboxRun, runs: List<InboxRun>): List<InboxRun> =
+        merge(listOf(run.keeping(runs.firstOrNull { it.key == run.key })) + runs.filter { it.key != run.key })
 
     /**
      * What was saved for [url], or null when nothing was. A part that no longer reads (an older or damaged
@@ -446,7 +498,8 @@ class InboxStore(private val store: KeyValueStore, private val work: CoroutineCo
             val keptByKey = kept.associateBy { it.key }
             val fresh = listed.distinctBy { it.key }.map { run ->
                 val old = keptByKey[run.key]
-                if (old != null && old.text.length > run.text.length) run.copy(text = old.text) else run
+                val kept = run.keeping(old)
+                if (old != null && old.text.length > run.text.length) kept.copy(text = old.text) else kept
             }
             val listedKeys = fresh.map { it.key }.toSet()
             val newest = fresh.maxOfOrNull { it.at }
@@ -559,6 +612,48 @@ data class InboxGroups(
 
         private val RESERVED = listOf(OTHER, "null")
     }
+}
+
+/** An Inbox notification on show: its tag, the gateway whose run it is, and the run's [InboxRun.key]. */
+data class InboxNotice(val tag: String, val gatewayUrl: String?, val key: String)
+
+/**
+ * Takes Inbox notifications down once their runs are read in the app, by whatever way (opened, marked, a folder or
+ * everything at once). Android's lives with its notifications; elsewhere there are none to take down.
+ */
+interface InboxNotices {
+    /** [keys] of [gatewayUrl]'s Inbox ([InboxRun.key]) were just marked read. */
+    fun runsRead(gatewayUrl: String, keys: Collection<String>)
+
+    companion object {
+        /** The tag of [bot]'s [job]'s notification: a job's next run replaces its last. */
+        fun tag(bot: String, job: String) = "cron:$bot/$job"
+
+        /**
+         * The tags of the notices in [shown] to take down once [keys] of [gatewayUrl] are read: those showing one of
+         * those runs. A notice of the same job that shows a newer run stays, as does one of another gateway's run;
+         * one posted before notices said their gateway goes by the run alone.
+         */
+        fun toCancel(shown: List<InboxNotice>, gatewayUrl: String, keys: Collection<String>): List<String> {
+            val read = keys.toSet()
+            return shown.filter { it.key in read && (it.gatewayUrl == null || it.gatewayUrl == gatewayUrl) }.map { it.tag }
+        }
+    }
+}
+
+/** No notifications to take down. */
+object NoInboxNotices : InboxNotices {
+    override fun runsRead(gatewayUrl: String, keys: Collection<String>) = Unit
+}
+
+/**
+ * A notification's Mark read, without opening the app: the run [key] names ([InboxRun.key]) counts as read in
+ * [gatewayUrl]'s Inbox. False, changing nothing, when the two don't name a run.
+ */
+suspend fun InboxStore.markNoticeRead(gatewayUrl: String?, key: String?): Boolean {
+    if (gatewayUrl.isNullOrBlank() || key == null || InboxRun.jobOf(key) == null) return false
+    markReadByKey(gatewayUrl, listOf(key))
+    return true
 }
 
 /**

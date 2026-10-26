@@ -95,6 +95,7 @@ import com.composables.icons.lucide.Inbox
 import dev.hermeskotlin.core.inbox.InboxLink
 import dev.hermeskotlin.core.inbox.InboxStore
 import dev.hermeskotlin.ui.inbox.InboxPage
+import dev.hermeskotlin.ui.inbox.ReportChat
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -265,6 +266,8 @@ fun SessionsSidebar(
     /** A tapped Inbox notification the app passed on: the Inbox opens, at its run; [onInboxLinkTaken] once it has. */
     inboxLink: InboxLink? = null,
     onInboxLinkTaken: (InboxLink) -> Unit = {},
+    /** Opens a chat about an Inbox report: the run's own, or a new one in its profile with the report attached. */
+    onOpenReportChat: (ReportChat) -> Unit = {},
     viewModel: SessionsViewModel = koinViewModel(),
     bots: BotsViewModel = koinViewModel(),
     rooms: RoomsViewModel = koinViewModel(),
@@ -430,6 +433,7 @@ fun SessionsSidebar(
                 onOpenSettings = onOpenSettings,
                 openKey = inboxOpenKey,
                 onOpenedKey = { inboxOpenKey = null },
+                onOpenChat = onOpenReportChat,
             )
         } else if (scheduledOpen && !searchOpen) {
             ScheduledPage(
