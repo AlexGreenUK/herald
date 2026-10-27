@@ -1,5 +1,7 @@
 package dev.hermeskotlin.core.chat
 
+import dev.hermeskotlin.core.media.MediaType
+import dev.hermeskotlin.core.media.mediaTypeOf
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
 
@@ -37,7 +39,15 @@ class OutgoingAttachment(
     /** Whether it can go inside a WebSocket message, base64, rather than over HTTP first. */
     val inline: Boolean get() = source == null && bytes.size <= MAX_INLINE_BYTES
 
-    fun toShown() = ShownAttachment(id, name, kind, thumbnail, original = bytes.takeIf { kind == AttachmentKind.Image })
+    /**
+     * Pictures keep their bytes for opening full size, and audio and video small enough to go inline keep theirs
+     * for playing from the sent message. A larger clip isn't held here: it plays from where the gateway put it.
+     */
+    fun toShown() = ShownAttachment(
+        id, name, kind, thumbnail,
+        original = bytes.takeIf { kind == AttachmentKind.Image || inline && mediaTypeOf(name, mimeType) != null },
+        mimeType = mimeType,
+    )
 
     @OptIn(ExperimentalEncodingApi::class)
     internal fun base64(): String = Base64.encode(bytes)
@@ -91,9 +101,17 @@ class ShownAttachment(
     val kind: AttachmentKind,
     val thumbnail: ByteArray? = null,
     val gatewayPath: String? = null,
-    /** The uploaded image itself, for opening it full size; only for images sent from here. */
+    /** The uploaded file itself: an image to open full size, or audio or video to play; only when sent from here. */
     val original: ByteArray? = null,
-)
+    /** The type the file was picked with, when sent from here. */
+    val mimeType: String? = null,
+) {
+    /** Audio or video the message can play: from [original] when sent from here, else from [gatewayPath]. */
+    val mediaType: MediaType? get() = if (kind == AttachmentKind.File) mediaTypeOf(name, mimeType) else null
+
+    /** This attachment, now kept on the gateway at [path]. */
+    internal fun storedAt(path: String) = ShownAttachment(key, name, kind, thumbnail, gatewayPath = path, original = original, mimeType = mimeType)
+}
 
 /** Desktop's prompt when only images go out (`use-prompt-actions/submit.ts`). */
 internal const val IMAGE_ONLY_PROMPT = "What do you see in this image?"
@@ -101,11 +119,20 @@ internal const val IMAGE_ONLY_PROMPT = "What do you see in this image?"
 /** Where the expanded context starts: warnings first when there are any, then the attached blocks. */
 private val CONTEXT_FOOTER = Regex("""(?:^|\n)--- (?:Context Warnings|Attached Context) ---\s*\n""")
 
-/** An `@file:` reference anywhere in a line, as the attached-context block lists them. */
-private val INLINE_FILE_REF = Regex("""@file:(?:"([^"\n]+)"|(\S+))""")
+/**
+ * A path as a reference holds it: bare, or quoted when it has spaces or brackets. The gateway quotes with the first
+ * of a backtick, `"` or `'` the path doesn't contain (`_format_ref_value`, tui_gateway/prompt_attachments.py).
+ */
+private const val REF_VALUE = """(?:`([^`\n]+)`|"([^"\n]+)"|'([^'\n]+)'|(\S+))"""
 
-/** A whole line `@file:<path>` or `@image:<path>`; paths with spaces are quoted. */
-private val REF_LINE = Regex("""^@(file|image):(?:"([^"]+)"|(\S+))\s*$""")
+/** An `@file:` reference anywhere in a line, as the attached-context block lists them. */
+private val INLINE_FILE_REF = Regex("""@file:$REF_VALUE""")
+
+/** A whole line `@file:<path>` or `@image:<path>`. */
+private val REF_LINE = Regex("""^@(file|image):$REF_VALUE\s*$""")
+
+/** The path a [REF_VALUE] matched from group [first] on, whichever way it was quoted. */
+private fun MatchResult.refPath(first: Int): String = (first..first + 3).map { groupValues[it] }.firstOrNull { it.isNotEmpty() }.orEmpty()
 
 /**
  * Pulls the attachment reference lines out of a stored prompt: `@file:` lines that clients put in
@@ -120,7 +147,7 @@ internal fun splitAttachmentRefs(text: String, keyPrefix: String): Pair<List<Sho
     val body = if (footer == null) text else text.substring(0, footer.range.first)
     footer?.let { match ->
         INLINE_FILE_REF.findAll(text.substring(match.range.first)).forEach { ref ->
-            val path = ref.groupValues[1].ifEmpty { ref.groupValues[2] }
+            val path = ref.refPath(1)
             val name = path.substringAfterLast('/')
             if (attachments.none { it.name == name }) {
                 val kind = if (name.endsWith(".pdf", ignoreCase = true)) AttachmentKind.Pdf else AttachmentKind.File
@@ -130,13 +157,14 @@ internal fun splitAttachmentRefs(text: String, keyPrefix: String): Pair<List<Sho
     }
     val kept = body.lines().filter { line ->
         val match = REF_LINE.matchEntire(line.trim()) ?: return@filter true
-        val path = match.groupValues[2].ifEmpty { match.groupValues[3] }
+        val path = match.refPath(2)
         val name = path.substringAfterLast('/')
         if (attachments.any { it.name == name && it.kind != AttachmentKind.Image }) return@filter false
         attachments += when {
             match.groupValues[1] == "image" -> ShownAttachment("$keyPrefix-r${attachments.size}", name, AttachmentKind.Image, gatewayPath = path)
             name.endsWith(".pdf", ignoreCase = true) -> ShownAttachment("$keyPrefix-r${attachments.size}", name, AttachmentKind.Pdf)
-            else -> ShownAttachment("$keyPrefix-r${attachments.size}", name, AttachmentKind.File)
+            // An absolute path can be played from the gateway; a workspace-relative one can't be found from here.
+            else -> ShownAttachment("$keyPrefix-r${attachments.size}", name, AttachmentKind.File, gatewayPath = path.takeIf { it.startsWith("/") })
         }
         false
     }
@@ -145,7 +173,7 @@ internal fun splitAttachmentRefs(text: String, keyPrefix: String): Pair<List<Sho
     if (footer != null) {
         text.lines().asReversed().map { it.trim() }.takeWhile { it.isEmpty() || REF_LINE.matches(it) }.asReversed().forEach { line ->
             val match = REF_LINE.matchEntire(line)?.takeIf { it.groupValues[1] == "image" } ?: return@forEach
-            val path = match.groupValues[2].ifEmpty { match.groupValues[3] }
+            val path = match.refPath(2)
             attachments += ShownAttachment("$keyPrefix-i${attachments.size}", path.substringAfterLast('/'), AttachmentKind.Image, gatewayPath = path)
         }
     }
