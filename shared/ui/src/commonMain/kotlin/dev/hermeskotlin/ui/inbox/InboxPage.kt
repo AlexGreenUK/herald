@@ -30,7 +30,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
+import dev.hermeskotlin.designsystem.components.verticalScrollWithBar
 import androidx.compose.runtime.Composable
 import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.runtime.getValue
@@ -117,6 +117,8 @@ import dev.hermeskotlin.designsystem.textSecondary
 import dev.hermeskotlin.designsystem.textTertiary
 import dev.hermeskotlin.designsystem.typography
 import dev.hermeskotlin.ui.PlatformBackHandler
+import dev.hermeskotlin.ui.deviceNoun
+import dev.hermeskotlin.ui.isDesktop
 import dev.hermeskotlin.ui.components.EmptyState
 import dev.hermeskotlin.ui.components.ListSkeleton
 import dev.hermeskotlin.ui.components.dayHeading
@@ -696,7 +698,7 @@ internal fun RunView(
     Column(
         Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
+            .verticalScrollWithBar()
             .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
@@ -724,9 +726,9 @@ internal fun RunView(
         if (note != null) {
             Text(
                 when (note) {
-                    RunNote.Offline -> "Only the start of this report is on the phone. Connect to the gateway to read the rest."
-                    RunNote.Gone -> "Only the start of this report is on the phone: the gateway no longer has it."
-                    RunNote.Failed -> "Only the start of this report is on the phone: the gateway couldn't send the rest."
+                    RunNote.Offline -> "Only the start of this report is on the $deviceNoun. Connect to the gateway to read the rest."
+                    RunNote.Gone -> "Only the start of this report is on the $deviceNoun: the gateway no longer has it."
+                    RunNote.Failed -> "Only the start of this report is on the $deviceNoun: the gateway couldn't send the rest."
                 },
                 style = Theme[typography][bodySmall],
                 color = Theme[colors][textTertiary],
@@ -746,7 +748,7 @@ internal fun GroupsView(state: InboxUiState, viewModel: InboxActions) {
     var naming by remember { mutableStateOf<GroupNaming?>(null) }
     var picking by remember { mutableStateOf<InboxFilter.Job?>(null) }
     var renamingJob by remember { mutableStateOf<JobChip?>(null) }
-    SubpageHeader("Folders and groups", onBack = viewModel::closeGroups, subtitle = "Kept on this phone") {
+    SubpageHeader("Folders and groups", onBack = viewModel::closeGroups, subtitle = "Kept on this $deviceNoun") {
         IconButton(Lucide.FolderPlus, contentDescription = "New group", onClick = { naming = GroupNaming(null) })
     }
     LazyColumn(
@@ -799,7 +801,8 @@ internal fun GroupsView(state: InboxUiState, viewModel: InboxActions) {
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 DayLabel("Jobs")
                 Text(
-                    "The pencil renames a job on this phone, for its chip and cards. A long press on its chip does too.",
+                    "The pencil renames a job on this $deviceNoun, for its chip and cards. " +
+                        "${if (isDesktop) "A right-click" else "A long press"} on its chip does too.",
                     style = Theme[typography][bodySmall].copy(fontSize = 12.5.sp),
                     color = Theme[colors][textTertiary],
                     modifier = Modifier.padding(start = 6.dp, bottom = 4.dp),
@@ -858,7 +861,7 @@ private fun RenameJobDialog(chip: JobChip?, onDismiss: () -> Unit, onSave: (JobC
         visible = chip != null,
         onDismissRequest = onDismiss,
         title = "Rename job",
-        message = "Only on this phone: on the gateway it stays ${c.own}.",
+        message = "Only on this $deviceNoun: on the gateway it stays ${c.own}.",
         actions = {
             if (c.renamed) Button("Reset", onClick = { onSave(c, "") }, variant = ButtonVariant.Ghost, size = ButtonSize.Small)
             Button("Cancel", onClick = onDismiss, variant = ButtonVariant.Ghost, size = ButtonSize.Small)
@@ -995,7 +998,7 @@ private fun <T> DropdownSheet(
 /** Every job, each set to not follow, follow quietly, or notify; and one switch for failures. */
 @Composable
 internal fun FollowView(state: InboxUiState, viewModel: InboxActions) {
-    SubpageHeader("Jobs in the Inbox", onBack = viewModel::closeJobs, subtitle = "What each job's reports do on this phone")
+    SubpageHeader("Jobs in the Inbox", onBack = viewModel::closeJobs, subtitle = "What each job's reports do on this $deviceNoun")
     if (state.jobsLoading && state.jobs.isEmpty()) {
         ListSkeleton()
         return
