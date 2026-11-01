@@ -156,6 +156,7 @@ uses. The protocol itself is described in [hermes-protocol-research.md](hermes-p
 - [x] Ranked model search: name starts first, then words, then anywhere; "op55" finds Opus 5.5; the start of a provider's name lists its models after the name matches
 - [x] Thinking level and fast mode per chat (`config.set reasoning` / `fast`), offered when the model supports them
 - [x] Profile picker (account sheet → Profile; `GET /api/profiles`, chats and sessions scoped with `profile`)
+- [x] Profile switch at the top of the Chats side of the sidebar (#238): the active profile by name, opening the profile picker; shown when the gateway has more than one profile, so nothing changes for one with a single profile or none listed
 - [x] Settings screen, opened from the account sheet
 - [x] Theme: system, light, dark, plus pure black; window and system bars follow it
 - [x] Text size on top of the system font scale
