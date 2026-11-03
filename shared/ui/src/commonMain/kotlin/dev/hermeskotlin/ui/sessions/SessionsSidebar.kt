@@ -96,6 +96,11 @@ import androidx.compose.foundation.text.input.selectAll
 import androidx.compose.ui.input.InputMode
 import androidx.compose.ui.input.InputModeManager
 import androidx.compose.ui.platform.LocalInputModeManager
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -588,6 +593,26 @@ fun SessionsSidebar(
         accountOpen = true
         viewModel.refreshProfiles()
     }
+    // The profile switch's picker: the list is read again, as the account sheet does (one may have been added on the
+    // host). Before the list has come the picker shows that it's on its way; it opens only from a tap, and is put
+    // away with the drawer, the gateway and the Chats side, so it can't pop up later, unasked.
+    val profilesRead by viewModel.profilesRead.collectAsStateWithLifecycle()
+    val openProfiles = {
+        profilesOpen = true
+        // Waited on only while there's no list to show yet: a failed refresh leaves an open picker on the one it has.
+        viewModel.refreshProfiles(waiting = roster == null)
+    }
+    val closeProfiles = {
+        profilesOpen = false
+        viewModel.stopWaitingForProfiles()
+    }
+    // Also on first showing, as after a rotation: the view model may still be waiting for a picker that's gone.
+    LaunchedEffect(gateway.gatewayUrl) { closeProfiles() }
+    LaunchedEffect(visible) { if (!visible) closeProfiles() }
+    LaunchedEffect(mode) { if (mode != SidebarMode.Chats) closeProfiles() }
+    // Why it failed is the list's message, set by the view model.
+    LaunchedEffect(profilesRead) { if (profilesRead is ProfilesRead.Failed) closeProfiles() }
+    val profileSwitch = remember(roster, profile) { profileSwitch(roster, profile) }
     // A right-click on a chat, on the desktop: its actions in a menu at the pointer, as the long-press sheet has them.
     val rowMenu: ((SessionSummary) -> List<RowMenuItem>)? = if (!isDesktop) null else { s ->
         listOfNotNull(
@@ -729,6 +754,17 @@ fun SessionsSidebar(
                     optionLabel = { if (it == SidebarMode.Bots && needsYou.isNotEmpty()) "${it.name} · ${needsYou.size}" else it.name },
                     modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp),
                 )
+                // Whose chats these are, and the way to another profile's, on the Chats side: the bots are every profile.
+                AnimatedVisibility(
+                    visible = mode == SidebarMode.Chats && profileSwitch != null,
+                    enter = fadeIn() + expandVertically(),
+                    exit = fadeOut() + shrinkVertically(),
+                ) {
+                    // The last one shown, while it animates out.
+                    var shown by remember { mutableStateOf(profileSwitch) }
+                    if (profileSwitch != null) shown = profileSwitch
+                    shown?.let { ProfileSwitchRow(it, onClick = openProfiles, modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 4.dp)) }
+                }
                 RenameBanner(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp))
                 UpdateBanner(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp))
                 // A desktop starts a chat from the top of its sidebar, as desktop chat apps do; the footer
@@ -1047,18 +1083,19 @@ fun SessionsSidebar(
             onDeleted(it)
         },
     )
-    // The picked profile, else the one the gateway runs as.
+    // The picked profile, else the one the gateway runs as. The picker ticks it even when the gateway didn't say
+    // which it runs as (then "default", a guess), as before the switch; its name is said as the switch says it.
     val activeProfile = roster?.let { r -> r.profiles.find { it.name == (profile ?: r.launch) } }
     AccountSheet(
         visible = accountOpen,
         anchor = accountAnchor.takeIf { isDesktop },
         gateway = gateway,
         userLabel = user?.label,
-        profileLabel = activeProfile?.label ?: profile,
+        profileLabel = remember(roster, profile) { profileLabel(roster, profile) },
         connection = connection,
         refreshing = state.refreshing,
         onDismiss = { accountOpen = false },
-        onOpenProfiles = { profilesOpen = true },
+        onOpenProfiles = openProfiles,
         onRefresh = viewModel::refresh,
         onRetry = viewModel::retryConnection,
         onSignOut = onSignOut,
@@ -1066,12 +1103,13 @@ fun SessionsSidebar(
         onOpenSettings = onOpenSettings,
     )
     ProfileSheet(
-        visible = profilesOpen && roster != null,
+        visible = profilesOpen && (roster != null || profilesRead == ProfilesRead.Loading),
         profiles = roster?.profiles.orEmpty(),
         selected = activeProfile?.name,
-        onDismiss = { profilesOpen = false },
+        loading = roster == null,
+        onDismiss = closeProfiles,
         onSelect = { picked ->
-            profilesOpen = false
+            closeProfiles()
             // The launch profile is stored as "none picked", so calls stay exactly as before profiles.
             onSwitchProfile(picked.name.takeIf { it != roster?.launch })
         },
@@ -1098,6 +1136,8 @@ internal fun SessionsSidebarSample(
     projectsAsDropdown: Boolean = false,
     /** The Threads section's threads, whose chats are among [sessions]. */
     threads: List<ChatThread> = emptyList(),
+    /** The profile switch over the list; null, the gateway has one profile. */
+    profile: ProfileSwitch? = null,
 ) {
     // Folds for real in the gallery, kept only while the preview shows.
     var pinnedCollapsed by remember { mutableStateOf(false) }
@@ -1110,6 +1150,7 @@ internal fun SessionsSidebarSample(
     ) {
         Column(Modifier.fillMaxSize()) {
             MainHeader(gatewayLabel = "homelab", connection = null, onAccount = {}, onSettings = {}, onSearch = {})
+            profile?.let { ProfileSwitchRow(it, onClick = {}, modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 4.dp)) }
             RenameBanner(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp))
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 val index = remember(projects) { ProjectIndex(projects) }
@@ -3016,6 +3057,8 @@ internal fun ProfileSheet(
     selected: String?,
     onDismiss: () -> Unit,
     onSelect: (Profile) -> Unit,
+    /** The list is still on its way: a spinner in its place. */
+    loading: Boolean = false,
 ) {
     BottomSheet(visible = visible, onDismiss = onDismiss) {
         SheetHeader("Profiles", "Each profile is its own agent, with its own chats, memory and model.")
@@ -3029,7 +3072,9 @@ internal fun ProfileSheet(
             withFrameNanos {}
             runCatching { activeRow.bringIntoView() }
         }
-        Column(Modifier.weight(1f, fill = false).verticalScrollWithBar()) {
+        if (loading) {
+            Box(Modifier.fillMaxWidth().padding(vertical = 24.dp), contentAlignment = Alignment.Center) { Spinner() }
+        } else Column(Modifier.weight(1f, fill = false).verticalScrollWithBar()) {
             profiles.forEach { profile ->
                 val checked = profile.name == selected
                 ProfileRow(
@@ -3040,7 +3085,7 @@ internal fun ProfileSheet(
                 )
             }
         }
-        if (profiles.size < 2) {
+        if (!loading && profiles.size < 2) {
             Text(
                 "Add profiles on the gateway host with “hermes profile create”.",
                 style = Theme[typography][bodySmall],
@@ -3064,16 +3109,7 @@ private fun ProfileRow(profile: Profile, checked: Boolean, onClick: () -> Unit, 
         horizontalArrangement = Arrangement.spacedBy(16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
-            Modifier.size(28.dp).clip(CircleShape).background(Theme[colors][if (checked) accent else surface]),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                profile.label.take(1).uppercase(),
-                style = Theme[typography][caption].copy(fontWeight = FontWeight.SemiBold),
-                color = Theme[colors][if (checked) onAccent else textSecondary],
-            )
-        }
+        ProfileInitial(profile.label, checked)
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(profile.label, style = Theme[typography][body], color = Theme[colors][text], maxLines = 1, overflow = TextOverflow.Ellipsis)
             val sub = listOfNotNull("Default".takeIf { profile.isDefault }, detail).joinToString(" · ")
